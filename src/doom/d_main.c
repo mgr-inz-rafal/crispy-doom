@@ -1545,6 +1545,81 @@ static void LoadNerveWad(void)
     }
 }
 
+struct {
+	const char *wad_name;
+	int pc_slot;
+	int psn_slot;
+	char *file_path;
+} masterlevels_wads [] = {
+	{"ATTACK.WAD",    1,  1},
+	{"CANYON.WAD",    1,  2},
+	{"CATWALK.WAD",   1,  3},
+	{"COMBINE.WAD",   1,  4},
+	{"FISTULA.WAD",   1,  5},
+	{"GARRISON.WAD",  1,  6},
+	{"MANOR.WAD",     1,  7},
+	{"PARADOX.WAD",   1,  8},
+	{"SUBSPACE.WAD",  1,  9},
+	{"SUBTERRA.WAD",  1, 10},
+	{"TTRAP.WAD",     1, 11},
+	{"VIRGIL.WAD",    3, 12},
+	{"MINOS.WAD",     5, 13},
+	{"BLOODSEA.WAD",  7, 14},
+	{"MEPHISTO.WAD",  7, 15},
+	{"NESSUS.WAD",    7, 16},
+	{"GERYON.WAD",    8, 17},
+	{"VESPERAS.WAD",  9, 18},
+	{"BLACKTWR.WAD", 25, 19},
+	{"TEETH.WAD",    31, 20},
+	{NULL,           32, 21}, // [crispy] TEETH.WAD
+};
+
+static boolean CheckMasterlevelsWads (void)
+{
+	int i;
+	char *dir;
+
+	dir = M_DirName(iwadfile);
+
+	for (i = 0; masterlevels_wads[i].wad_name; i++)
+	{
+		char *havemaster;
+
+		if (strrchr(iwadfile, DIR_SEPARATOR) != NULL)
+		{
+			havemaster = M_StringJoin(dir, DIR_SEPARATOR_S, masterlevels_wads[i].wad_name, NULL);
+		}
+		else
+		{
+			havemaster = M_StringDuplicate(masterlevels_wads[i].wad_name);
+		}
+
+		if (!M_FileExists(havemaster))
+		{
+			free(havemaster);
+			havemaster = D_FindWADByName(masterlevels_wads[i].wad_name);
+		}
+
+		if (havemaster == NULL)
+		{
+			int j;
+
+			for (j = 0; j < i; j++)
+			{
+				free(masterlevels_wads[i].file_path);
+			}
+
+			free(dir);
+			return false;
+		}
+
+		masterlevels_wads[i].file_path = havemaster;
+	}
+
+	free(dir);
+	return true;
+}
+
 // [crispy] support loading MASTERLEVELS.WAD alongside DOOM2.WAD
 static void LoadMasterlevelsWad(void)
 {
@@ -1559,6 +1634,33 @@ static void LoadMasterlevelsWad(void)
         !strcasecmp(W_WadNameForLump(lumpinfo[j]), "masterlevels.wad"))
     {
 	gamemission = pack_master;
+    }
+    else
+    if (CheckMasterlevelsWads())
+    {
+        char lumpname[9];
+
+        for (i = 0; i < arrlen(masterlevels_wads); i++)
+        {
+            // [crispy] add TEETH.WAD only once
+            if (masterlevels_wads[i].wad_name)
+            {
+                printf(" [expansion]");
+                D_AddFile(masterlevels_wads[i].file_path);
+            }
+
+            M_snprintf(lumpname, 9, "MAP%02d", masterlevels_wads[i].pc_slot);
+            j = W_GetNumForName(lumpname);
+            lumpinfo[j]->name[3] = '0' + (masterlevels_wads[i].psn_slot) / 10;
+            lumpinfo[j]->name[4] = '0' + (masterlevels_wads[i].psn_slot) % 10;
+            lumpinfo[j]->name[5] = 'M';
+        }
+
+        // [crispy] indicate this is not the single MASTERLEVELS.WAD
+        crispy->havemaster = (char *)-1;
+
+        // [crispy] regenerate the hashtable
+        W_GenerateHashTable();
     }
     else
     {
