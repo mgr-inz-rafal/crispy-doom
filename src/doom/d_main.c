@@ -1634,35 +1634,9 @@ static void LoadMasterlevelsWad(void)
         !strcasecmp(W_WadNameForLump(lumpinfo[j]), "masterlevels.wad"))
     {
 	gamemission = pack_master;
+	return;
     }
-    else
-    if (CheckMasterlevelsWads())
-    {
-        char lumpname[9];
 
-        for (i = 0; i < arrlen(masterlevels_wads); i++)
-        {
-            // [crispy] add TEETH.WAD only once
-            if (masterlevels_wads[i].wad_name)
-            {
-                printf(" [expansion]");
-                D_AddFile(masterlevels_wads[i].file_path);
-            }
-
-            M_snprintf(lumpname, 9, "MAP%02d", masterlevels_wads[i].pc_slot);
-            j = W_GetNumForName(lumpname);
-            lumpinfo[j]->name[3] = '0' + (masterlevels_wads[i].psn_slot) / 10;
-            lumpinfo[j]->name[4] = '0' + (masterlevels_wads[i].psn_slot) % 10;
-            lumpinfo[j]->name[5] = 'M';
-        }
-
-        // [crispy] indicate this is not the single MASTERLEVELS.WAD
-        crispy->havemaster = (char *)-1;
-
-        // [crispy] regenerate the hashtable
-        W_GenerateHashTable();
-    }
-    else
     {
         if (strrchr(iwadfile, DIR_SEPARATOR) != NULL)
         {
@@ -1682,30 +1656,58 @@ static void LoadMasterlevelsWad(void)
             crispy->havemaster = D_FindWADByName("masterlevels.wad");
         }
 
-        if (crispy->havemaster == NULL)
+        if (crispy->havemaster != NULL)
         {
+            printf(" [expansion]");
+            D_AddFile(crispy->havemaster);
+
+            // [crispy] add indicators to level and level name patch lump names
+            for (i = 0; i < 21; i++)
+            {
+                char lumpname[9];
+
+                M_snprintf(lumpname, 9, "CWILV%2.2d", i);
+                j = W_GetNumForName(lumpname);
+                lumpinfo[j]->name[0] = 'M';
+
+                M_snprintf(lumpname, 9, "MAP%02d", i + 1);
+                j = W_GetNumForName(lumpname);
+                strcat(lumpinfo[j]->name, "M");
+            }
+
+            // [crispy] regenerate the hashtable
+            W_GenerateHashTable();
             return;
         }
+    }
 
-        printf(" [expansion]");
-        D_AddFile(crispy->havemaster);
+    if (CheckMasterlevelsWads())
+    {
+        char lumpname[9];
 
-        // [crispy] add indicators to level and level name patch lump names
-        for (i = 0; i < 21; i++)
+        for (i = 0; i < arrlen(masterlevels_wads); i++)
         {
-            char lumpname[9];
+            // [crispy] add TEETH.WAD only once
+            if (masterlevels_wads[i].wad_name)
+            {
+                printf(" [expansion]");
+                D_AddFile(masterlevels_wads[i].file_path);
+                free(masterlevels_wads[i].file_path);
+            }
 
-            M_snprintf(lumpname, 9, "CWILV%2.2d", i);
+            M_snprintf(lumpname, 9, "MAP%02d", masterlevels_wads[i].pc_slot);
             j = W_GetNumForName(lumpname);
-            lumpinfo[j]->name[0] = 'M';
-
-            M_snprintf(lumpname, 9, "MAP%02d", i + 1);
-            j = W_GetNumForName(lumpname);
-            strcat(lumpinfo[j]->name, "M");
+            lumpinfo[j]->name[3] = '0' + (masterlevels_wads[i].psn_slot) / 10;
+            lumpinfo[j]->name[4] = '0' + (masterlevels_wads[i].psn_slot) % 10;
+            lumpinfo[j]->name[5] = 'M';
         }
+
+        // [crispy] indicate this is not the single MASTERLEVELS.WAD
+        crispy->havemaster = (char *)-1;
 
         // [crispy] regenerate the hashtable
         W_GenerateHashTable();
+        return;
     }
 }
 
