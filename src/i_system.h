@@ -20,6 +20,8 @@
 #ifndef __I_SYSTEM__
 #define __I_SYSTEM__
 
+#include "../rust/headers.h"
+
 #include "d_ticcmd.h"
 #include "d_event.h"
 
@@ -81,6 +83,10 @@ void I_PrintBanner(const char *text);
 // Print a dividing line for startup banners.
 
 void I_PrintDivider(void);
+
+// Init Rust module.
+
+void I_SetupRustModule();
 
 #endif
 

@@ -168,6 +168,14 @@ byte *I_ZoneBase (int *size)
     return zonemem;
 }
 
+void I_SetupRustModule() {
+    printf("I_SetupRustModule: Test call into Rust...\n");
+
+    if (rs_init()) {
+        I_Error("Unable to init Rust module");
+    }
+}
+
 void I_PrintBanner(const char *msg)
 {
     int i;
