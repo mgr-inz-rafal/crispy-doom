@@ -57,3 +57,10 @@ GPATH
 GRTAGS
 GTAGS
 /HTML/
+
+# IDE
+.vscode
+
+# Rust build artifacts
+rust/target
+rust/Cargo.lock
