@@ -79,5 +79,7 @@ add_library(doom STATIC
             st_stuff.c      st_stuff.h
             wi_stuff.c      wi_stuff.h)
 
-target_include_directories(doom PRIVATE "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
-target_link_libraries(doom SDL2::SDL2 SDL2::mixer SDL2::net)
+add_dependencies(doom rustdoom)
+get_target_property(RUSTDOOM_INCLUDE_DIR rustdoom INCLUDE_DIRECTORIES)
+target_include_directories(doom PRIVATE "${RUSTDOOM_INCLUDE_DIR}/../" "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
+target_link_libraries(doom SDL2::SDL2 SDL2::mixer SDL2::net ZLIB::ZLIB)

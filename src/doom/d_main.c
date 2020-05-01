@@ -2180,7 +2180,9 @@ void D_DoomMain (void)
     I_PrintStartupBanner(gamedescription);
     PrintDehackedBanners();
 
+
     DEH_printf("I_Init: Setting up machine state.\n");
+    I_SetupRustModule();
     I_CheckIsScreensaver();
     I_InitTimer();
     I_InitJoystick();

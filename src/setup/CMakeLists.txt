@@ -14,5 +14,7 @@ add_library(setup STATIC
             txt_keyinput.c      txt_keyinput.h
             txt_mouseinput.c    txt_mouseinput.h)
 
-target_include_directories(setup PRIVATE "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
+add_dependencies(setup rustdoom)
+get_target_property(RUSTDOOM_INCLUDE_DIR rustdoom INCLUDE_DIRECTORIES)
+target_include_directories(setup PRIVATE "${RUSTDOOM_INCLUDE_DIR}/../" "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
 target_link_libraries(setup textscreen SDL2::SDL2 SDL2::mixer)
