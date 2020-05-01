@@ -14,6 +14,7 @@ add_custom_target(rustdoom ALL
     COMMAND cp ${RUST_DOOM_SO} ${CMAKE_CURRENT_BINARY_DIR}
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(rustdoom PROPERTIES LOCATION ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(rustdoom PROPERTIES INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_test(NAME rustdoom_test 
     COMMAND cargo test

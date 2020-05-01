@@ -54,5 +54,7 @@ add_library(hexen STATIC
                                 textdefs.h
                                 xddefs.h)
 
-target_include_directories(hexen PRIVATE "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
+add_dependencies(hexen rustdoom)
+get_target_property(RUSTDOOM_INCLUDE_DIR rustdoom INCLUDE_DIRECTORIES)
+target_include_directories(hexen PRIVATE "${RUSTDOOM_INCLUDE_DIR}/../" "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
 target_link_libraries(hexen SDL2::SDL2 SDL2::mixer SDL2::net)

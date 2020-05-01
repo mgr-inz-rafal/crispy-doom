@@ -20,7 +20,7 @@
 #ifndef __I_SYSTEM__
 #define __I_SYSTEM__
 
-#include "../rust/headers.h"
+#include "rust/headers.h"
 
 #include "d_ticcmd.h"
 #include "d_event.h"

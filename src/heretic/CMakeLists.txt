@@ -53,5 +53,7 @@ add_library(heretic STATIC
             sounds.c            sounds.h
             s_sound.c           s_sound.h)
 
-target_include_directories(heretic PRIVATE "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
+add_dependencies(heretic rustdoom)
+get_target_property(RUSTDOOM_INCLUDE_DIR rustdoom INCLUDE_DIRECTORIES)
+target_include_directories(heretic PRIVATE "${RUSTDOOM_INCLUDE_DIR}/../" "../" "${CMAKE_CURRENT_BINARY_DIR}/../../")
 target_link_libraries(heretic textscreen SDL2::SDL2 SDL2::mixer SDL2::net)
