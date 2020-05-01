@@ -2,6 +2,8 @@ foreach(SUBDIR doom heretic hexen strife setup)
     add_subdirectory("${SUBDIR}")
 endforeach()
 
+get_target_property(RUSTDOOM_DIR rustdoom LOCATION)
+
 # Common source files used by absolutely everything:
 
 set(COMMON_SOURCE_FILES
@@ -31,9 +33,10 @@ set(DEDSERV_FILES
     z_native.c          z_zone.h)
 
 add_executable("${PROGRAM_PREFIX}server" WIN32 ${COMMON_SOURCE_FILES} ${DEDSERV_FILES})
+add_dependencies("${PROGRAM_PREFIX}server" rustdoom)
 target_include_directories("${PROGRAM_PREFIX}server"
                            PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/../")
-target_link_libraries("${PROGRAM_PREFIX}server" SDL2::SDL2main SDL2::net ${CMAKE_BINARY_DIR}/rust/release/librust.so)
+target_link_libraries("${PROGRAM_PREFIX}server" SDL2::SDL2main SDL2::net ${RUSTDOOM_DIR}/librustdoom.so)
 
 # Source files used by the game binaries (chocolate-doom, etc.)
 
@@ -123,7 +126,7 @@ set(DEHACKED_SOURCE_FILES
 set(SOURCE_FILES ${COMMON_SOURCE_FILES} ${GAME_SOURCE_FILES})
 set(SOURCE_FILES_WITH_DEH ${SOURCE_FILES} ${DEHACKED_SOURCE_FILES})
 
-set(EXTRA_LIBS SDL2::SDL2main SDL2::SDL2 SDL2::mixer SDL2::net textscreen pcsound opl ${CMAKE_BINARY_DIR}/rust/release/librust.so)
+set(EXTRA_LIBS SDL2::SDL2main SDL2::SDL2 SDL2::mixer SDL2::net textscreen pcsound opl ${RUSTDOOM_DIR}/librustdoom.so)
 if(SAMPLERATE_FOUND)
     list(APPEND EXTRA_LIBS samplerate::samplerate)
 endif()
@@ -136,6 +139,7 @@ if(WIN32)
 else()
     add_executable("${PROGRAM_PREFIX}doom" ${SOURCE_FILES_WITH_DEH})
 endif()
+add_dependencies("${PROGRAM_PREFIX}doom" rustdoom)
 
 target_include_directories("${PROGRAM_PREFIX}doom" PRIVATE ${GAME_INCLUDE_DIRS})
 target_link_libraries("${PROGRAM_PREFIX}doom" doom ${EXTRA_LIBS})
@@ -150,6 +154,7 @@ if(WIN32)
 else()
     add_executable("${PROGRAM_PREFIX}heretic" ${SOURCE_FILES_WITH_DEH})
 endif()
+add_dependencies("${PROGRAM_PREFIX}doom" rustdoom)
 
 target_include_directories("${PROGRAM_PREFIX}heretic" PRIVATE ${GAME_INCLUDE_DIRS})
 target_link_libraries("${PROGRAM_PREFIX}heretic" heretic ${EXTRA_LIBS})
@@ -210,9 +215,10 @@ else()
     add_executable("${PROGRAM_PREFIX}setup" ${SETUP_FILES} ${COMMON_SOURCE_FILES})
 endif()
 
+add_dependencies("${PROGRAM_PREFIX}setup" rustdoom)
 target_include_directories("${PROGRAM_PREFIX}setup"
                            PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/../")
-target_link_libraries("${PROGRAM_PREFIX}setup" SDL2::SDL2main SDL2::SDL2 SDL2::mixer SDL2::net setup textscreen ${CMAKE_BINARY_DIR}/rust/release/librust.so)
+target_link_libraries("${PROGRAM_PREFIX}setup" SDL2::SDL2main SDL2::SDL2 SDL2::mixer SDL2::net setup textscreen ${RUSTDOOM_DIR}/librustdoom.so)
 
 if(MSVC)
     set_target_properties("${PROGRAM_PREFIX}setup" PROPERTIES
@@ -220,12 +226,15 @@ if(MSVC)
 endif()
 
 add_executable(midiread midifile.c z_native.c i_system.c m_argv.c m_misc.c d_iwad.c deh_str.c m_config.c)
+add_dependencies(midiread rustdoom)
 target_compile_definitions(midiread PRIVATE "-DTEST")
 target_include_directories(midiread PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/../")
-target_link_libraries(midiread SDL2::SDL2main SDL2::SDL2 ${CMAKE_BINARY_DIR}/rust/release/librust.so)
+target_link_libraries(midiread SDL2::SDL2main SDL2::SDL2 ${RUSTDOOM_DIR}/librustdoom.so)
 
 add_executable(mus2mid mus2mid.c memio.c z_native.c i_system.c m_argv.c m_misc.c d_iwad.c deh_str.c m_config.c)
+add_dependencies(mus2mid rustdoom)
 target_compile_definitions(mus2mid PRIVATE "-DSTANDALONE")
 target_include_directories(mus2mid PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/../")
-target_link_libraries(mus2mid SDL2::SDL2main SDL2::SDL2 ${CMAKE_BINARY_DIR}/rust/release/librust.so)
+target_link_libraries(mus2mid SDL2::SDL2main SDL2::SDL2 ${RUSTDOOM_DIR}/librustdoom.so)
+
 

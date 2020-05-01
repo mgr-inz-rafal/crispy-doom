@@ -6,7 +6,7 @@ else ()
     set(TARGET_DIR "release")
 endif ()
 
-set(RUST_DOOM_SO "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_DIR}/librust.so")
+set(RUST_DOOM_SO "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_DIR}/librustdoom.so")
 
 add_custom_target(rustdoom ALL
     COMMENT "Compiling Rusty part of Crispy-Doom"
