@@ -3,7 +3,7 @@ use std::i32;
 
 type fixed_t = i32;
 
-const FRACBITS: i32 = 16;
+const FRACBITS: fixed_t = 16;
 
 #[no_mangle]
 pub extern "C" fn FixedMul(a: fixed_t, b: fixed_t) -> fixed_t {
