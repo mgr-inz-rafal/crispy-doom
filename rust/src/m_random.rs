@@ -2,9 +2,11 @@ use ::function_name::named;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
-const rndindex: usize = 0;
-const prndindex: usize = 1;
-const crndindex: usize = 2;
+enum RandomIndices {
+    rndindex = 0,
+    prndindex = 1,
+    crndindex = 2,
+}
 
 struct m_random_state {
     indices: [usize; 3],
@@ -46,19 +48,19 @@ fn X_Random(index: usize) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn P_Random() -> i32 {
-    X_Random(prndindex)
+    X_Random(RandomIndices::prndindex as usize)
 }
 
 #[named]
 #[no_mangle]
 pub extern "C" fn M_Random() -> i32 {
-    X_Random(rndindex)
+    X_Random(RandomIndices::rndindex as usize)
 }
 
 #[named]
 #[no_mangle]
 pub extern "C" fn Crispy_Random() -> i32 {
-    X_Random(crndindex)
+    X_Random(RandomIndices::crndindex as usize)
 }
 
 #[named]
@@ -90,7 +92,7 @@ pub extern "C" fn Crispy_SubRandom() -> i32 {
 #[no_mangle]
 pub extern "C" fn GetRndIndex() -> usize {
     match global_state.lock() {
-        Ok(guard) => (*guard).indices[rndindex],
+        Ok(guard) => (*guard).indices[RandomIndices::rndindex as usize],
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
             0
