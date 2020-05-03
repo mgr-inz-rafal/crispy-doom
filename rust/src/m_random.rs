@@ -2,10 +2,12 @@ use ::function_name::named;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
+const rndindex: usize = 0;
+const prndindex: usize = 1;
+const crndindex: usize = 2;
+
 struct m_random_state {
-    rndindex: usize,
-    prndindex: usize,
-    crndindex: usize,
+    indices: [usize; 3],
 }
 
 static rndtable: &'static [i32; 256] = &[
@@ -25,56 +27,38 @@ static rndtable: &'static [i32; 256] = &[
 ];
 
 lazy_static! {
-    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state {
-        rndindex: 0,
-        prndindex: 0,
-        crndindex: 0
-    });
+    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state { indices: [0; 3] });
 }
 
 #[named]
-#[no_mangle]
-pub extern "C" fn P_Random() -> i32 {
+fn X_Random(index: usize) -> i32 {
     match global_state.lock() {
         Ok(mut guard) => {
-            (*guard).prndindex = ((*guard).prndindex + 1) & 0xff;
-            rndtable[(*guard).prndindex]
+            (*guard).indices[index] = ((*guard).indices[index] + 1) & 0xff;
+            rndtable[(*guard).indices[index]]
         }
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
             0
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn P_Random() -> i32 {
+    X_Random(prndindex)
 }
 
 #[named]
 #[no_mangle]
 pub extern "C" fn M_Random() -> i32 {
-    match global_state.lock() {
-        Ok(mut guard) => {
-            (*guard).rndindex = ((*guard).rndindex + 1) & 0xff;
-            rndtable[(*guard).rndindex]
-        }
-        Err(_) => {
-            println!("Rust: lock is poisoned in {}", function_name!());
-            0
-        }
-    }
+    X_Random(rndindex)
 }
 
 #[named]
 #[no_mangle]
 pub extern "C" fn Crispy_Random() -> i32 {
-    match global_state.lock() {
-        Ok(mut guard) => {
-            (*guard).rndindex = ((*guard).crndindex + 1) & 0xff;
-            rndtable[(*guard).crndindex]
-        }
-        Err(_) => {
-            println!("Rust: lock is poisoned in {}", function_name!());
-            0
-        }
-    }
+    X_Random(crndindex)
 }
 
 #[named]
@@ -82,9 +66,7 @@ pub extern "C" fn Crispy_Random() -> i32 {
 pub extern "C" fn M_ClearRandom() {
     match global_state.lock() {
         Ok(mut guard) => {
-            (*guard).rndindex = 0;
-            (*guard).prndindex = 0;
-            (*guard).crndindex = 0;
+            (*guard).indices = [0; 3];
         }
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
@@ -108,7 +90,7 @@ pub extern "C" fn Crispy_SubRandom() -> i32 {
 #[no_mangle]
 pub extern "C" fn GetRndIndex() -> usize {
     match global_state.lock() {
-        Ok(guard) => (*guard).rndindex,
+        Ok(guard) => (*guard).indices[rndindex],
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
             0
