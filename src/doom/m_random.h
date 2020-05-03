@@ -41,4 +41,6 @@ void M_ClearRandom (void);
 int P_SubRandom (void);
 int Crispy_SubRandom (void);
 
+int GetRndIndex();
+
 #endif
