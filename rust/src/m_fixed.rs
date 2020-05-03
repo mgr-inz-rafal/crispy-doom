@@ -27,6 +27,12 @@ pub extern "C" fn FixedDiv(a: fixed_t, b: fixed_t) -> fixed_t {
         };
     }
 
-    let result = ((a as i64) << FRACBITS) / b as i64;
-    result.try_into().unwrap()
+    let value = ((a as i64) << FRACBITS) / b as i64;
+    match value.try_into() {
+        Ok(value) => value,
+        Err(_) => {
+            println!("Rust: FixedDiv would panic!");
+            value as fixed_t
+        }
+    }
 }
