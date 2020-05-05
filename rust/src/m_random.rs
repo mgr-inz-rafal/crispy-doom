@@ -1,6 +1,11 @@
 use ::function_name::named;
 use lazy_static::lazy_static;
+use std::ops::{Index, IndexMut};
 use std::sync::Mutex;
+
+const PRNDINDEX: usize = 0;
+const RNDINDEX: usize = 1;
+const CRNDINDEX: usize = 2;
 
 #[derive(Copy, Clone)]
 enum RandomIndices {
@@ -9,14 +14,39 @@ enum RandomIndices {
     prndindex,
 }
 
-impl From<RandomIndices> for usize {
-    fn from(i: RandomIndices) -> Self {
-        i as usize
+struct RandomIndexArray {
+    indices: [usize; 3],
+}
+
+impl RandomIndexArray {
+    fn new() -> Self {
+        Self { indices: [0; 3] }
+    }
+}
+
+impl Index<RandomIndices> for RandomIndexArray {
+    type Output = usize;
+    fn index(&self, i: RandomIndices) -> &Self::Output {
+        match i {
+            RandomIndices::prndindex => &self.indices[PRNDINDEX],
+            RandomIndices::rndindex => &self.indices[RNDINDEX],
+            RandomIndices::crndindex => &self.indices[CRNDINDEX],
+        }
+    }
+}
+
+impl IndexMut<RandomIndices> for RandomIndexArray {
+    fn index_mut(&mut self, i: RandomIndices) -> &mut Self::Output {
+        match i {
+            RandomIndices::prndindex => &mut self.indices[PRNDINDEX],
+            RandomIndices::rndindex => &mut self.indices[RNDINDEX],
+            RandomIndices::crndindex => &mut self.indices[CRNDINDEX],
+        }
     }
 }
 
 struct m_random_state {
-    indices: [usize; 3],
+    indices: RandomIndexArray,
 }
 
 static rndtable: &'static [i32; 256] = &[
@@ -50,10 +80,12 @@ where
 }
 
 lazy_static! {
-    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state { indices: [0; 3] });
+    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state {
+        indices: RandomIndexArray::new()
+    });
 }
 
-fn get_indexed_random(state: &mut m_random_state, i: usize) -> i32 {
+fn get_indexed_random(state: &mut m_random_state, i: RandomIndices) -> i32 {
     state.indices[i] = (state.indices[i] + 1) & 0xff;
     rndtable[state.indices[i]]
 }
@@ -78,7 +110,7 @@ pub extern "C" fn Crispy_Random() -> i32 {
 pub extern "C" fn M_ClearRandom() {
     match global_state.lock() {
         Ok(mut guard) => {
-            (*guard).indices = [0; 3];
+            (*guard).indices = RandomIndexArray::new();
         }
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
@@ -100,12 +132,6 @@ pub extern "C" fn Crispy_SubRandom() -> i32 {
 
 #[named]
 #[no_mangle]
-pub extern "C" fn GetRndIndex() -> usize {
-    match global_state.lock() {
-        Ok(guard) => (*guard).indices[RandomIndices::rndindex as usize],
-        Err(_) => {
-            println!("Rust: lock is poisoned in {}", function_name!());
-            0
-        }
-    }
+pub extern "C" fn GetRndIndex() -> i32 {
+    with_global_state(|state| state.indices.indices[RNDINDEX] as i32)
 }
