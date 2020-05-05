@@ -2,10 +2,17 @@ use ::function_name::named;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
+#[derive(Copy, Clone)]
 enum RandomIndices {
-    rndindex = 0,
-    prndindex = 1,
-    crndindex = 2,
+    crndindex,
+    rndindex,
+    prndindex,
+}
+
+impl From<RandomIndices> for usize {
+    fn from(i: RandomIndices) -> Self {
+        i as usize
+    }
 }
 
 struct m_random_state {
@@ -28,39 +35,42 @@ static rndtable: &'static [i32; 256] = &[
     84, 118, 222, 187, 136, 120, 163, 236, 249,
 ];
 
-lazy_static! {
-    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state { indices: [0; 3] });
-}
-
 #[named]
-fn X_Random(index: usize) -> i32 {
+fn with_global_state<F>(f: F) -> i32
+where
+    F: FnOnce(&mut m_random_state) -> i32,
+{
     match global_state.lock() {
-        Ok(mut guard) => {
-            (*guard).indices[index] = ((*guard).indices[index] + 1) & 0xff;
-            rndtable[(*guard).indices[index]]
-        }
+        Ok(mut guard) => f(&mut guard),
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
-            0
+            return 0;
         }
     }
 }
 
+lazy_static! {
+    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state { indices: [0; 3] });
+}
+
+fn get_indexed_random(state: &mut m_random_state, i: usize) -> i32 {
+    state.indices[i] = (state.indices[i] + 1) & 0xff;
+    rndtable[state.indices[i]]
+}
+
 #[no_mangle]
 pub extern "C" fn P_Random() -> i32 {
-    X_Random(RandomIndices::prndindex as usize)
+    with_global_state(|state| get_indexed_random(state, RandomIndices::prndindex.into()))
 }
 
-#[named]
 #[no_mangle]
 pub extern "C" fn M_Random() -> i32 {
-    X_Random(RandomIndices::rndindex as usize)
+    with_global_state(|state| get_indexed_random(state, RandomIndices::rndindex.into()))
 }
 
-#[named]
 #[no_mangle]
 pub extern "C" fn Crispy_Random() -> i32 {
-    X_Random(RandomIndices::crndindex as usize)
+    with_global_state(|state| get_indexed_random(state, RandomIndices::crndindex.into()))
 }
 
 #[named]
