@@ -1,15 +1,56 @@
 use ::function_name::named;
 use lazy_static::lazy_static;
+use std::ops::{Index, IndexMut};
 use std::sync::Mutex;
 
+// TODO: The "Random" family of routines is called very frequently
+// by the Doom engine, therefore having the mutex overhead
+// is not recommended, escpecially since the Doom engine
+// is single-threaded. Consider further refactoring.
+
+#[derive(Clone, Copy)]
 enum RandomIndices {
-    rndindex = 0,
-    prndindex = 1,
-    crndindex = 2,
+    crndindex = 0,
+    rndindex = 1,
+    prndindex = 2,
+}
+
+enum GlobalStateCallResult {
+    Int(i32),
+    Void,
+}
+
+struct RandomIndexArray {
+    indices: [usize; 3],
+}
+
+impl RandomIndexArray {
+    fn new() -> Self {
+        Self { indices: [0; 3] }
+    }
+}
+
+impl Index<RandomIndices> for RandomIndexArray {
+    type Output = usize;
+    fn index(&self, i: RandomIndices) -> &Self::Output {
+        &self.indices[i as usize]
+    }
+}
+
+impl IndexMut<RandomIndices> for RandomIndexArray {
+    fn index_mut(&mut self, i: RandomIndices) -> &mut Self::Output {
+        &mut self.indices[i as usize]
+    }
 }
 
 struct m_random_state {
-    indices: [usize; 3],
+    indices: RandomIndexArray,
+}
+
+impl m_random_state {
+    fn get_rndindex() -> i32 {
+        7
+    }
 }
 
 static rndtable: &'static [i32; 256] = &[
@@ -28,52 +69,60 @@ static rndtable: &'static [i32; 256] = &[
     84, 118, 222, 187, 136, 120, 163, 236, 249,
 ];
 
-lazy_static! {
-    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state { indices: [0; 3] });
-}
-
 #[named]
-fn X_Random(index: usize) -> i32 {
+fn with_global_state<F>(f: F) -> GlobalStateCallResult
+where
+    F: FnOnce(&mut m_random_state) -> GlobalStateCallResult,
+{
     match global_state.lock() {
-        Ok(mut guard) => {
-            (*guard).indices[index] = ((*guard).indices[index] + 1) & 0xff;
-            rndtable[(*guard).indices[index]]
-        }
+        Ok(mut guard) => f(&mut guard),
         Err(_) => {
             println!("Rust: lock is poisoned in {}", function_name!());
-            0
+            return GlobalStateCallResult::Void;
         }
     }
+}
+
+lazy_static! {
+    static ref global_state: Mutex<m_random_state> = Mutex::new(m_random_state {
+        indices: RandomIndexArray::new()
+    });
+}
+
+fn get_random(state: &mut m_random_state, i: RandomIndices) -> GlobalStateCallResult {
+    state.indices[i] = (state.indices[i] + 1) & 0xff;
+    GlobalStateCallResult::Int(rndtable[state.indices[i]])
+}
+
+fn get_random_by_index(which: RandomIndices) -> i32 {
+    if let GlobalStateCallResult::Int(i) = with_global_state(|state| get_random(state, which)) {
+        return i;
+    }
+    println!("Rust: unable to get random number, will return 0");
+    0
 }
 
 #[no_mangle]
 pub extern "C" fn P_Random() -> i32 {
-    X_Random(RandomIndices::prndindex as usize)
+    get_random_by_index(RandomIndices::prndindex)
 }
 
-#[named]
 #[no_mangle]
 pub extern "C" fn M_Random() -> i32 {
-    X_Random(RandomIndices::rndindex as usize)
+    get_random_by_index(RandomIndices::rndindex)
 }
 
-#[named]
 #[no_mangle]
 pub extern "C" fn Crispy_Random() -> i32 {
-    X_Random(RandomIndices::crndindex as usize)
+    get_random_by_index(RandomIndices::crndindex)
 }
 
-#[named]
 #[no_mangle]
 pub extern "C" fn M_ClearRandom() {
-    match global_state.lock() {
-        Ok(mut guard) => {
-            (*guard).indices = [0; 3];
-        }
-        Err(_) => {
-            println!("Rust: lock is poisoned in {}", function_name!());
-        }
-    }
+    let _ = with_global_state(|state| {
+        state.indices = RandomIndexArray::new();
+        GlobalStateCallResult::Void
+    });
 }
 
 #[no_mangle]
@@ -88,14 +137,17 @@ pub extern "C" fn Crispy_SubRandom() -> i32 {
     r - Crispy_Random()
 }
 
-#[named]
 #[no_mangle]
-pub extern "C" fn GetRndIndex() -> usize {
-    match global_state.lock() {
-        Ok(guard) => (*guard).indices[RandomIndices::rndindex as usize],
-        Err(_) => {
-            println!("Rust: lock is poisoned in {}", function_name!());
-            0
-        }
+pub extern "C" fn GetRndIndex() -> i32 {
+    // Hacky, hacky... Doesn't fit into design, but I'll keep it
+    // especially since GetRndIndex() is going to be completely
+    // refactored out.
+    if let GlobalStateCallResult::Int(i) = with_global_state(|state| {
+        GlobalStateCallResult::Int(state.indices.indices[RandomIndices::rndindex as usize] as i32)
+    }) {
+        return i;
     }
+
+    println!("Rust: unable to read 'rndindex', will return 0");
+    0
 }
