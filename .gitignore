@@ -31,7 +31,7 @@ STRIFE*.pcx
 
 # CMake-specific ignores
 /.vs
-/build*
+/build/*
 /CMakeSettings.json
 /out
 
@@ -65,3 +65,4 @@ GTAGS
 # clangd settings
 /.cache/clangd
 compile_commands.json
+DOOM2.WAD

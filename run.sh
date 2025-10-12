@@ -1,0 +1,1 @@
+./build/src/crispy-doom -iwad DOOM2.WAD -nomonsters -warp 01
