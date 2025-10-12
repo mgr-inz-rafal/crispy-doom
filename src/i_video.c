@@ -31,6 +31,7 @@
 #endif
 
 #include "crispy.h"
+#include "resolver.h"
 
 #include "config.h"
 #include "d_loop.h"
@@ -486,9 +487,17 @@ void I_GetEvent(void)
             case SDL_MOUSEBUTTONDOWN:
             case SDL_MOUSEBUTTONUP:
             case SDL_MOUSEWHEEL:
-                if (usemouse && !nomouse && window_focused)
+                if (resolver_opened)
                 {
-                    I_HandleMouseEvent(&sdlevent);
+                    ResolverMouseEvent(&sdlevent);
+                    break;
+                }
+                else
+                {
+                    if (usemouse && !nomouse && window_focused)
+                    {
+                        I_HandleMouseEvent(&sdlevent);
+                    }
                 }
                 break;
 
