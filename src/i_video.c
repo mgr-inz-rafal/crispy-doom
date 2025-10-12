@@ -77,8 +77,6 @@ static SDL_Surface *screenbuffer = NULL;
 static SDL_Surface *argbbuffer = NULL;
 static SDL_Texture *texture = NULL;
 static SDL_Texture *texture_upscaled = NULL;
-static SDL_Window *debug_window;
-static SDL_Renderer *debug_renderer;
 
 #ifndef CRISPY_TRUECOLOR
 static SDL_Rect blit_rect = {0, 0, MAXWIDTH, MAXHEIGHT};
@@ -1777,21 +1775,6 @@ void I_GetScreenDimensions(void)
     WIDESCREENDELTA = ((SCREENWIDTH - NONWIDEWIDTH) >> crispy->hires) / 2;
 }
 
-void OpenDebugWindow()
-{
-    debug_window =
-        SDL_CreateWindow("Resolver", SDL_WINDOWPOS_CENTERED,
-                         SDL_WINDOWPOS_CENTERED, 1024, 768, SDL_WINDOW_SHOWN);
-
-    debug_renderer =
-        SDL_CreateRenderer(debug_window, -1, SDL_RENDERER_ACCELERATED);
-
-    // Render to first window
-    SDL_SetRenderDrawColor(debug_renderer, 0, 0, 0, 255); // Red
-    SDL_RenderClear(debug_renderer);
-    SDL_RenderPresent(debug_renderer);
-}
-
 
 // [crispy] calls native SDL vsync toggle
 void I_ToggleVsync(void)
@@ -1866,8 +1849,6 @@ void I_InitGraphics(void)
     // on configuration.
     AdjustWindowSize();
     SetVideoMode();
-
-    OpenDebugWindow();
 
 #ifndef CRISPY_TRUECOLOR
     // Start with a clear black screen

@@ -251,6 +251,23 @@ static int GetTypedChar(SDL_Keysym *sym)
     }
 }
 
+void PostToDoomOrResolver(event_t *event)
+{
+    // If the resolver is active, pass all events to it first.
+    if (resolver_opened)
+    {
+        // // If the resolver eats the event, we're done.
+        // if (Resolver_HandleEvent(event))
+        // {
+        //     return;
+        // }
+        return;
+    }
+
+    // Otherwise, post to Doom.
+    D_PostEvent(event);
+}
+
 void I_HandleKeyboardEvent(SDL_Event *sdlevent)
 {
     // XXX: passing pointers to event for access after this function
@@ -263,19 +280,22 @@ void I_HandleKeyboardEvent(SDL_Event *sdlevent)
             if (sdlevent->key.keysym.scancode == SDL_SCANCODE_F12)
             {
                 EnableResolver();
+                break;
             }
-            else
+            if (sdlevent->key.keysym.scancode == SDL_SCANCODE_F11)
             {
+                DisableResolver();
+                break;
+            }
 
-                event.type = ev_keydown;
-                event.data1 = TranslateKey(&sdlevent->key.keysym);
-                event.data2 = GetLocalizedKey(&sdlevent->key.keysym);
-                event.data3 = GetTypedChar(&sdlevent->key.keysym);
+            event.type = ev_keydown;
+            event.data1 = TranslateKey(&sdlevent->key.keysym);
+            event.data2 = GetLocalizedKey(&sdlevent->key.keysym);
+            event.data3 = GetTypedChar(&sdlevent->key.keysym);
 
-                if (event.data1 != 0)
-                {
-                    D_PostEvent(&event);
-                }
+            if (event.data1 != 0)
+            {
+                PostToDoomOrResolver(&event);
             }
             break;
 

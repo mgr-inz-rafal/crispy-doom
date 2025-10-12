@@ -1,7 +1,45 @@
 #include "resolver.h"
 
+#include "SDL.h"
+
 #include <stdio.h>
 
-void EnableResolver() {
-    printf("SDL_KEYDOWN: F12\n");
+static SDL_Window *debug_window;
+static SDL_Renderer *debug_renderer;
+
+int resolver_opened = 0;
+
+void OpenDebugWindow()
+{
+    debug_window =
+        SDL_CreateWindow("Resolver", SDL_WINDOWPOS_CENTERED,
+                         SDL_WINDOWPOS_CENTERED, 1024, 768, SDL_WINDOW_SHOWN);
+
+    debug_renderer =
+        SDL_CreateRenderer(debug_window, -1, SDL_RENDERER_ACCELERATED);
+
+    // Render to first window
+    SDL_SetRenderDrawColor(debug_renderer, 0, 0, 0, 255); // Red
+    SDL_RenderClear(debug_renderer);
+    SDL_RenderPresent(debug_renderer);
+}
+
+
+void EnableResolver()
+{
+    if (resolver_opened == 1)
+        return;
+    printf("[RESOLVER] Opening debug window");
+    resolver_opened = 1;
+    OpenDebugWindow();
+}
+
+void DisableResolver()
+{
+    if (resolver_opened == 0)
+        return;
+    printf("[RESOLVER] Closing debug window");
+    resolver_opened = 0;
+    SDL_DestroyRenderer(debug_renderer);
+    SDL_DestroyWindow(debug_window);
 }
