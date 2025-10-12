@@ -15,6 +15,8 @@ void OpenDebugWindow()
         SDL_CreateWindow("Resolver", SDL_WINDOWPOS_CENTERED,
                          SDL_WINDOWPOS_CENTERED, 1024, 768, SDL_WINDOW_SHOWN);
 
+    SDL_SetWindowPosition(debug_window, 4000, 0);
+
     debug_renderer =
         SDL_CreateRenderer(debug_window, -1, SDL_RENDERER_ACCELERATED);
 
