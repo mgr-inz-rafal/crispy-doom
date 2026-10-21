@@ -7,6 +7,7 @@
 //	Talks only to Karp's public headers, never to engine headers.
 //
 
+#include <math.h>
 #include <stdio.h>
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@
 #include "k_brain.h"
 #include "k_console.h"
 #include "k_log.h"
+#include "k_map.h"
 #include "k_settings.h"
 
 #define FRAME_INTERVAL_MS       16      // redraw at most ~60 times a second
@@ -48,6 +50,12 @@ static unsigned int log_rows_serial;
 static bool log_rows_valid;
 static bool log_at_bottom = true;
 static bool log_scroll_to_bottom;
+
+static unsigned int view_generation;    // map the view was last fitted to
+static double view_x, view_y;           // map point at the canvas centre
+static double view_scale;               // pixels per map unit
+static bool view_follow;
+static bool view_plain_lines = true;
 
 static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
 {
@@ -395,19 +403,216 @@ static void DrawLogPane(float height)
 }
 
 //
-// Layout
+// Map view
 //
 
-static void DrawCenteredText(const char *text)
+// Automap colours (am_map.c): red walls, brown floor steps, yellow ceiling
+// steps, grey for lines the automap only shows with the map cheat.
+static ImU32 LineColor(k_lineclass_t line_class)
 {
-    ImVec2 size = ImGui::CalcTextSize(text);
-    ImVec2 available = ImGui::GetContentRegionAvail();
-    ImVec2 cursor = ImGui::GetCursorPos();
+    switch (line_class)
+    {
+        case K_LINE_ONE_SIDED:
+            return IM_COL32(220, 50, 50, 255);
 
-    ImGui::SetCursorPos(ImVec2(cursor.x + (available.x - size.x) * 0.5f,
-                               cursor.y + (available.y - size.y) * 0.5f));
-    ImGui::TextDisabled("%s", text);
+        case K_LINE_FLOOR_STEP:
+            return IM_COL32(190, 130, 80, 255);
+
+        case K_LINE_CEILING_STEP:
+            return IM_COL32(230, 210, 60, 255);
+
+        default:
+            return IM_COL32(95, 95, 95, 255);
+    }
 }
+
+// Y is flipped: map y points north, screen y points down.
+static ImVec2 MapToScreen(const ImVec2 &center, double x, double y)
+{
+    return ImVec2((float) (center.x + (x - view_x) * view_scale),
+                  (float) (center.y - (y - view_y) * view_scale));
+}
+
+static void ScreenToMap(const ImVec2 &center, const ImVec2 &pos,
+                        double *x, double *y)
+{
+    *x = view_x + (pos.x - center.x) / view_scale;
+    *y = view_y - (pos.y - center.y) / view_scale;
+}
+
+static void FitView(const k_map_t *map, const ImVec2 &size)
+{
+    double width = SDL_max(map->max.x - map->min.x, 1.0);
+    double height = SDL_max(map->max.y - map->min.y, 1.0);
+
+    view_x = (map->min.x + map->max.x) * 0.5;
+    view_y = (map->min.y + map->max.y) * 0.5;
+    view_scale = SDL_min(size.x / width, size.y / height) * 0.95;
+}
+
+static void DrawPlayerArrow(ImDrawList *draw, const ImVec2 &center,
+                            const k_pose_t &player)
+{
+    // Twice the player's width, but never too small to see.
+    float length = SDL_max(16.0f * ui_scale, (float) (64.0 * view_scale));
+    float c = (float) cos(player.angle) * length;
+    float s = (float) sin(player.angle) * length;
+    ImVec2 at = MapToScreen(center, player.x, player.y);
+
+    // Arrow shape pointing along +x, rotated to the player's facing; screen
+    // y is flipped.
+    auto point = [&](float fx, float fy)
+    {
+        return ImVec2(at.x + fx * c - fy * s, at.y - (fx * s + fy * c));
+    };
+
+    ImVec2 tip = point(0.5f, 0.0f);
+    ImVec2 left = point(-0.5f, 0.35f);
+    ImVec2 notch = point(-0.25f, 0.0f);
+    ImVec2 right = point(-0.5f, -0.35f);
+    ImU32 color = IM_COL32(255, 255, 255, 255);
+
+    draw->AddTriangleFilled(tip, left, notch, color);
+    draw->AddTriangleFilled(tip, notch, right, color);
+}
+
+static void DrawMapView(void)
+{
+    const k_map_t *map = K_Map_Get();
+    ImGuiIO &io = ImGui::GetIO();
+    k_pose_t player;
+    bool have_player = K_Map_GetPlayer(&player) != 0;
+    bool fit;
+
+    if (map->loaded)
+    {
+        ImGui::TextUnformatted(map->name);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d lines", map->num_lines);
+        ImGui::SameLine();
+    }
+
+    fit = ImGui::Button("Fit");
+    ImGui::SameLine();
+    ImGui::Checkbox("Follow player", &view_follow);
+    ImGui::SameLine();
+    ImGui::Checkbox("Plain lines", &view_plain_lines);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Two-sided lines with no height change. The automap "
+                          "only shows these with the map cheat.");
+    }
+
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImVec2 size = ImGui::GetContentRegionAvail();
+
+    if (size.x < 1.0f || size.y < 1.0f)
+    {
+        return;
+    }
+
+    // Left button reserved for picking targets (M5).
+    ImGui::InvisibleButton("canvas", size, ImGuiButtonFlags_MouseButtonLeft
+                                         | ImGuiButtonFlags_MouseButtonRight
+                                         | ImGuiButtonFlags_MouseButtonMiddle);
+
+    bool hovered = ImGui::IsItemHovered();
+    bool active = ImGui::IsItemActive();
+    ImVec2 center(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f);
+    ImDrawList *draw = ImGui::GetWindowDrawList();
+
+    if (!map->loaded)
+    {
+        const char *text = "No level loaded";
+        ImVec2 text_size = ImGui::CalcTextSize(text);
+
+        draw->AddText(ImVec2(center.x - text_size.x * 0.5f,
+                             center.y - text_size.y * 0.5f),
+                      ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
+        return;
+    }
+
+    if (fit || view_generation != map->generation)
+    {
+        FitView(map, size);
+        view_generation = map->generation;
+    }
+
+    if (active && (ImGui::IsMouseDragging(ImGuiMouseButton_Right)
+                || ImGui::IsMouseDragging(ImGuiMouseButton_Middle)))
+    {
+        view_x -= io.MouseDelta.x / view_scale;
+        view_y += io.MouseDelta.y / view_scale;
+        view_follow = false;
+    }
+
+    // Zoom around the point under the cursor.
+    if (hovered && io.MouseWheel != 0.0f)
+    {
+        double x, y;
+
+        ScreenToMap(center, io.MousePos, &x, &y);
+        view_scale = SDL_max(0.005, SDL_min(view_scale * pow(1.2, io.MouseWheel),
+                                            50.0));
+        view_x = x - (io.MousePos.x - center.x) / view_scale;
+        view_y = y + (io.MousePos.y - center.y) / view_scale;
+    }
+
+    if (view_follow && have_player)
+    {
+        view_x = player.x;
+        view_y = player.y;
+    }
+
+    draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+
+    // Plain lines first, so walls and steps are drawn on top of them.
+    float thickness = SDL_max(1.0f, ui_scale);
+
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        for (int i = 0; i < map->num_lines; ++i)
+        {
+            const k_line_t *line = &map->lines[i];
+            k_lineclass_t line_class = K_Map_LineClass(i);
+            bool plain = line_class == K_LINE_TWO_SIDED;
+
+            if (plain != (pass == 0) || (plain && !view_plain_lines))
+            {
+                continue;
+            }
+
+            draw->AddLine(MapToScreen(center, line->v1.x, line->v1.y),
+                          MapToScreen(center, line->v2.x, line->v2.y),
+                          LineColor(line_class), thickness);
+        }
+    }
+
+    if (have_player)
+    {
+        DrawPlayerArrow(draw, center, player);
+    }
+
+    if (hovered)
+    {
+        char text[64];
+        double x, y;
+
+        ScreenToMap(center, io.MousePos, &x, &y);
+        snprintf(text, sizeof(text), "%.0f, %.0f", x, y);
+        draw->AddText(ImVec2(origin.x + 6.0f * ui_scale,
+                             origin.y + size.y - ImGui::GetTextLineHeight()
+                             - 4.0f * ui_scale),
+                      ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
+    }
+
+    draw->PopClipRect();
+}
+
+//
+// Layout
+//
 
 static void DrawStatusLine(void)
 {
@@ -421,10 +626,13 @@ static void DrawTopArea(float height)
     float width = ImGui::GetContentRegionAvail().x;
     float side_width = SDL_min(300.0f * ui_scale, width * 0.45f);
 
+    // The mouse wheel zooms the map, so the child must not scroll.
     ImGui::BeginChild("map", ImVec2(width - side_width
                                     - ImGui::GetStyle().ItemSpacing.x, height),
-                      ImGuiChildFlags_Borders);
-    DrawCenteredText("Map view - arrives in M2");
+                      ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar
+                    | ImGuiWindowFlags_NoScrollWithMouse);
+    DrawMapView();
     ImGui::EndChild();
 
     ImGui::SameLine();

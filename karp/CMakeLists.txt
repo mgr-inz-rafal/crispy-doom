@@ -15,6 +15,7 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_brain.c"         "${KARP_DIR}/src/k_brain.h"
     "${KARP_DIR}/src/k_console.cpp"     "${KARP_DIR}/src/k_console.h"
     "${KARP_DIR}/src/k_log.c"           "${KARP_DIR}/src/k_log.h"
+    "${KARP_DIR}/src/k_map.c"           "${KARP_DIR}/src/k_map.h"
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h")
 
 set(IMGUI_SOURCE_FILES

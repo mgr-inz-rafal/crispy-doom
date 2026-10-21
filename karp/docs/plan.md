@@ -218,8 +218,10 @@ Coordinates are converted from `fixed_t` to `double` map units.
 - A subsector's sector is `subsector_t.sector`, never a seg's `frontsector`.
 
 Output (`k_map_t`, plain C types):
-- `lines[]`: endpoints, flags, special, front/back sector index, draw class (one-sided, floor
-  change, ceiling change, plain two-sided) for automap-style colors.
+- `lines[]`: endpoints, flags, special, front/back sector index. `K_Map_LineClass()` gives the
+  automap-style draw class (one-sided, floor change, ceiling change, plain two-sided) from live
+  sector heights, so a door or lift changes colour as it moves.
+- `K_Map_GetPlayer()`: the local player's live position and facing (read-only).
 - `sectors[]`: index into engine `sectors[]`. Heights are read **live**: floors will move in later
   stages, and loading a savegame changes heights after `P_SetupLevel`.
 - `subsectors[]`: sector index, closed convex polygon, area-weighted centroid, bbox, edge list.
@@ -425,7 +427,10 @@ the config; Karp simply ignores it while it owns the controls.
   ```
 - **Map canvas** (ImDrawList):
   - Map-to-screen transform with zoom (mouse wheel, around the cursor), pan (right or middle
-    drag), a "Fit" button, and Y flipped like the automap.
+    drag), a "Fit" button, and Y flipped like the automap. The view fits the map automatically
+    whenever a new level loads.
+  - "Follow player" toggle keeps the player centred; panning turns it off.
+  - Map coordinates under the cursor, shown in the bottom-left corner.
   - Walls colored like the automap (`am_map.c:1736-1859`): one-sided red, floor-height change
     brown, ceiling-height change yellow, plain two-sided dim gray (toggle).
   - Overlays (checkboxes): subsector polygons (hashed fill colors), centroids, nav graph (green

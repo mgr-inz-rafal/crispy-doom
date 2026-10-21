@@ -46,6 +46,8 @@
 
 #include "p_mapformat.h" // [crispy] support extended node formats
 
+#include "karp.h" // [Karp]
+
 void	P_SpawnMapThing (mapthing_t*	mthing);
 
 
@@ -1399,6 +1401,7 @@ P_SetupLevel
 
     //printf ("free memory: 0x%x\n", Z_FreeMemory());
 
+    K_LevelLoaded(); // [Karp]
 }
 
 

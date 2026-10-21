@@ -14,6 +14,7 @@
 #include "karp.h"
 #include "k_console.h"
 #include "k_log.h"
+#include "k_map.h"
 #include "k_settings.h"
 
 static boolean autoplay_enabled;
@@ -128,4 +129,16 @@ void K_Frame(void)
     {
         K_Console_Frame();
     }
+}
+
+// With -warp this first runs inside D_DoomMain, before any window exists,
+// so nothing here may depend on the console.
+void K_LevelLoaded(void)
+{
+    if (!autoplay_enabled && !console_enabled)
+    {
+        return;
+    }
+
+    K_Map_Build();
 }
