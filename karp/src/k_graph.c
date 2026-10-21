@@ -99,11 +99,6 @@ static double Dot(k_vec2_t a, k_vec2_t b)
     return a.x * b.x + a.y * b.y;
 }
 
-static double Cross(k_vec2_t a, k_vec2_t b)
-{
-    return a.x * b.y - a.y * b.x;
-}
-
 static double Length(k_vec2_t v)
 {
     return sqrt(v.x * v.x + v.y * v.y);
@@ -117,12 +112,6 @@ static k_vec2_t PointAlong(k_vec2_t a, k_vec2_t b, double t)
     result.x = a.x + (b.x - a.x) * t / length;
     result.y = a.y + (b.y - a.y) * t / length;
     return result;
-}
-
-// Distance of point p from the infinite line through a and b.
-static double LineDistance(k_vec2_t a, k_vec2_t b, k_vec2_t p)
-{
-    return fabs(Cross(Sub(b, a), Sub(p, a))) / Length(Sub(b, a));
 }
 
 // Distance of point p from the segment a-b.
@@ -143,14 +132,19 @@ static double SegmentDistance(k_vec2_t a, k_vec2_t b, k_vec2_t p)
 // lines: vanilla nodebuilders round split vertices to whole map units, so
 // a seg (and a cell edge built from it) can be slightly off its linedef's
 // angle, which adds up over a long line.
+//
+// The stretch must lie along the segment p-q itself, not just its line,
+// and be MIN_OVERLAP long measured along both: two edges meeting at a
+// corner, or nearly at right angles, share no stretch.
 static boolean Overlap(k_vec2_t a, k_vec2_t b, k_vec2_t p, k_vec2_t q,
                        double *t0, double *t1)
 {
     double length = Length(Sub(b, a));
+    double other_length = Length(Sub(q, p));
     k_vec2_t dir;
     double tp, tq;
 
-    if (length < MIN_OVERLAP || Length(Sub(q, p)) < MIN_OVERLAP)
+    if (length < MIN_OVERLAP || other_length < MIN_OVERLAP)
     {
         return false;
     }
@@ -162,10 +156,10 @@ static boolean Overlap(k_vec2_t a, k_vec2_t b, k_vec2_t p, k_vec2_t q,
     *t0 = SDL_max(0.0, SDL_min(tp, tq));
     *t1 = SDL_min(length, SDL_max(tp, tq));
 
-    return *t1 - *t0 >= MIN_OVERLAP
-        && LineDistance(p, q, PointAlong(a, b, *t0)) <= 2.0 * MATCH_TOLERANCE
-        && LineDistance(p, q, PointAlong(a, b, *t1)) <= 2.0 * MATCH_TOLERANCE
-        && LineDistance(p, q, PointAlong(a, b, (*t0 + *t1) * 0.5))
+    return (*t1 - *t0) * fabs(tq - tp) / other_length >= MIN_OVERLAP
+        && SegmentDistance(p, q, PointAlong(a, b, *t0)) <= 2.0 * MATCH_TOLERANCE
+        && SegmentDistance(p, q, PointAlong(a, b, *t1)) <= 2.0 * MATCH_TOLERANCE
+        && SegmentDistance(p, q, PointAlong(a, b, (*t0 + *t1) * 0.5))
                <= MATCH_TOLERANCE;
 }
 

@@ -24,6 +24,8 @@
 #include "k_graph.h"
 #include "k_log.h"
 #include "k_map.h"
+#include "k_nav.h"
+#include "k_path.h"
 #include "k_settings.h"
 
 #define FRAME_INTERVAL_MS       16      // redraw at most ~60 times a second
@@ -680,6 +682,75 @@ static void DrawPlayerArrow(ImDrawList *draw, const ImVec2 &center,
     draw->AddTriangleFilled(tip, notch, right, color);
 }
 
+// Blue for a route the player can take, orange for one that is blocked.
+static ImU32 RouteColor(const k_path_t *path, int alpha)
+{
+    return path->result == K_PATH_FOUND ? IM_COL32(60, 200, 255, alpha)
+                                        : IM_COL32(255, 140, 50, alpha);
+}
+
+static void DrawRouteCells(ImDrawList *draw, const k_map_t *map,
+                           const k_path_t *path, const ImVec2 &center)
+{
+    for (int i = 0; i < path->num_cells; ++i)
+    {
+        const k_cell_t *cell = &map->cells[path->cells[i]];
+
+        ProjectCell(map, cell, center);
+        draw->AddConvexPolyFilled(screen_points.data(), cell->num_points,
+                                  RouteColor(path, 45));
+    }
+}
+
+// The line to follow, its waypoints, and on a blocked route the crossing
+// that blocks it, in red.
+static void DrawRoute(ImDrawList *draw, const k_path_t *path,
+                      const ImVec2 &center)
+{
+    float thickness = SDL_max(1.0f, ui_scale);
+    ImU32 color = RouteColor(path, 255);
+
+    screen_points.clear();
+
+    for (int i = 0; i < path->num_points; ++i)
+    {
+        screen_points.push_back(MapToScreen(center, path->points[i].x,
+                                            path->points[i].y));
+    }
+
+    if (path->num_points >= 2)
+    {
+        draw->AddPolyline(screen_points.data(), path->num_points, color,
+                          ImDrawFlags_None, 2.0f * thickness);
+    }
+
+    for (int i = 1; i < path->num_points - 1; ++i)
+    {
+        draw->AddCircleFilled(screen_points[i], 2.5f * ui_scale, color);
+    }
+
+    if (path->result == K_PATH_BLOCKED)
+    {
+        const k_portal_t *portal = &K_Graph_Get()->portals[path->blocked_portal];
+
+        draw->AddLine(MapToScreen(center, portal->a.x, portal->a.y),
+                      MapToScreen(center, portal->b.x, portal->b.y),
+                      IM_COL32(255, 40, 40, 255), 4.0f * thickness);
+    }
+}
+
+// Green when a route leads there, red otherwise.
+static void DrawGoal(ImDrawList *draw, const k_path_t *path,
+                     const ImVec2 &center)
+{
+    ImVec2 at = MapToScreen(center, path->goal.x, path->goal.y);
+    ImU32 color = path->result == K_PATH_FOUND ? IM_COL32(80, 230, 100, 255)
+                                               : IM_COL32(255, 60, 60, 255);
+
+    draw->AddCircle(at, 7.0f * ui_scale, color, 0, 2.0f * SDL_max(1.0f, ui_scale));
+    draw->AddCircleFilled(at, 2.0f * ui_scale, color);
+}
+
 static void DrawMapView(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -751,13 +822,14 @@ static void DrawMapView(void)
         return;
     }
 
-    // Left button reserved for picking targets (M5).
+    // Left click sends the bot somewhere; right or middle drag pans.
     ImGui::InvisibleButton("canvas", size, ImGuiButtonFlags_MouseButtonLeft
                                          | ImGuiButtonFlags_MouseButtonRight
                                          | ImGuiButtonFlags_MouseButtonMiddle);
 
     bool hovered = ImGui::IsItemHovered();
     bool active = ImGui::IsItemActive();
+    bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
     ImVec2 center(origin.x + size.x * 0.5f, origin.y + size.y * 0.5f);
     ImDrawList *draw = ImGui::GetWindowDrawList();
 
@@ -815,11 +887,26 @@ static void DrawMapView(void)
         hovered_cell = K_Map_CellAt(x, y);
     }
 
+    if (clicked)
+    {
+        double x, y;
+
+        ScreenToMap(center, io.MousePos, &x, &y);
+        K_Brain_RequestGoto(x, y);
+    }
+
+    const k_path_t *path = K_Nav_GetPath();
+
     draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
 
     if (view_cells)
     {
         DrawCells(draw, map, center, origin, size);
+    }
+
+    if (path != NULL)
+    {
+        DrawRouteCells(draw, map, path, center);
     }
 
     // Plain lines first, so walls and steps are drawn on top of them.
@@ -854,6 +941,12 @@ static void DrawMapView(void)
     if (view_centroids)
     {
         DrawCentroids(draw, map, center);
+    }
+
+    if (path != NULL)
+    {
+        DrawRoute(draw, path, center);
+        DrawGoal(draw, path, center);
     }
 
     if (hovered_cell >= 0)
@@ -1025,6 +1118,72 @@ static void DrawMapTab(void)
     }
 }
 
+static void DrawBotTab(void)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_path_t *path = K_Nav_GetPath();
+    k_pose_t player;
+
+    if (!map->loaded || !K_Map_GetPlayer(&player))
+    {
+        ImGui::TextDisabled("Not in a level");
+        return;
+    }
+
+    int cell = K_Map_CellAt(player.x, player.y);
+
+    if (ImGui::BeginTable("player", 2, ImGuiTableFlags_RowBg))
+    {
+        StatRow("Position", "%.0f, %.0f", player.x, player.y);
+        StatRow("Facing", "%.0f degrees", player.angle * (180.0 / 3.14159265358979323846));
+
+        if (cell >= 0)
+        {
+            StatRow("Cell", "%d (subsector %d)", cell, map->cells[cell].subsector);
+        }
+        else
+        {
+            StatRow("Cell", "none");
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText("Route");
+
+    if (path == NULL)
+    {
+        ImGui::TextDisabled("No goal - click the map");
+        return;
+    }
+
+    if (ImGui::BeginTable("route", 2, ImGuiTableFlags_RowBg))
+    {
+        StatRow("Goal", "%.0f, %.0f", path->goal.x, path->goal.y);
+        StatRow("Result", "%s", K_Path_ResultName(path->result));
+
+        if (path->num_cells > 0)
+        {
+            StatRow("Cells", "%d", path->num_cells);
+            StatRow("Waypoints", "%d", path->num_points - 1);
+            StatRow("Length", "%.0f units", path->length);
+        }
+
+        StatRow("Search", "%d nodes, %.2f ms", path->searched, path->search_ms);
+        ImGui::EndTable();
+    }
+
+    if (path->result != K_PATH_FOUND)
+    {
+        char text[K_LOG_LINE_LEN];
+
+        K_Path_Describe(path, text, sizeof(text));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(warning_color, "%s", text);
+        ImGui::PopTextWrapPos();
+    }
+}
+
 //
 // Layout
 //
@@ -1064,7 +1223,7 @@ static void DrawTopArea(float height)
 
         if (ImGui::BeginTabItem("Bot"))
         {
-            ImGui::TextDisabled("Bot state - arrives in M6");
+            DrawBotTab();
             ImGui::EndTabItem();
         }
 

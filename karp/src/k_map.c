@@ -871,7 +871,75 @@ int K_Map_CellAt(double x, double y)
         }
     }
 
-    return -1;
+    // The engine can place a point in a hairline sliver without floor, or
+    // just across a partition line from a cell it is within tolerance of.
+    return K_Map_NearestCell(x, y, INSIDE_TOLERANCE);
+}
+
+// 0 inside the cell, otherwise the distance to its nearest edge.
+static double CellDistance(const k_cell_t *cell, k_vec2_t point)
+{
+    const k_vec2_t *poly = &map.points[cell->first_point];
+    boolean inside = true;
+    double best = 1e30;
+    int i;
+
+    for (i = 0; i < cell->num_points; ++i)
+    {
+        k_vec2_t a = poly[i];
+        k_vec2_t b = poly[(i + 1) % cell->num_points];
+        k_vec2_t ab = { b.x - a.x, b.y - a.y };
+        double t = ((point.x - a.x) * ab.x + (point.y - a.y) * ab.y)
+                 / SDL_max(ab.x * ab.x + ab.y * ab.y, 1e-12);
+        double dx, dy;
+
+        if (LineSide(a, ab, point) < 0.0)
+        {
+            inside = false;
+        }
+
+        t = SDL_max(0.0, SDL_min(1.0, t));
+        dx = point.x - (a.x + ab.x * t);
+        dy = point.y - (a.y + ab.y * t);
+        best = SDL_min(best, sqrt(dx * dx + dy * dy));
+    }
+
+    return inside ? 0.0 : best;
+}
+
+int K_Map_NearestCell(double x, double y, double max_distance)
+{
+    k_vec2_t point = { x, y };
+    double best_distance = max_distance;
+    int best = -1;
+    int i;
+
+    for (i = 0; i < map.num_cells; ++i)
+    {
+        const k_cell_t *cell = &map.cells[i];
+        double distance;
+
+        if (x < cell->min.x - best_distance || x > cell->max.x + best_distance
+         || y < cell->min.y - best_distance || y > cell->max.y + best_distance)
+        {
+            continue;
+        }
+
+        distance = CellDistance(cell, point);
+
+        if (distance <= best_distance)
+        {
+            best_distance = distance;
+            best = i;
+
+            if (distance == 0.0)
+            {
+                break;
+            }
+        }
+    }
+
+    return best;
 }
 
 int K_Map_SubsectorAt(double x, double y)

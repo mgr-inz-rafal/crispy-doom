@@ -1,6 +1,6 @@
 # Karp - Stage 1 Plan: "Go To Location"
 
-> Status: approved, not yet implemented. Work proceeds milestone by milestone (section 4).
+> Status: approved; M0-M5 implemented. Work proceeds milestone by milestone (section 4).
 > All Karp code lives under `karp/`; engine edits are single-line hooks tagged `// [Karp]`.
 
 ## 1. Context
@@ -16,7 +16,8 @@ Stage 1 builds the skeleton every later stage stands on:
 2. New param `-karpconsole` opens a separate **Karp Console** window.
 3. The console decodes the loaded map and draws it top-down (automap style).
 4. Clicking a spot in the console sets the bot priority to **GO TO LOCATION**.
-5. The bot plans a path over subsectors and drives the player there.
+5. The bot plans a path over the map's floor (convex cells derived from subsectors) and drives
+   the player there.
 
 Stage 1 assumptions: no monsters (`-nomonsters`), no doors/lifts/switches on the route, no
 strafe-jumps, no narrow-corridor/player-radius handling. Static geometry only.
@@ -48,7 +49,7 @@ Decisions taken with the user:
   | D_DoomLoop  after gfx ----+--video---->|             SDL event filter             |
   | P_SetupLevel end ---------+--level---->| k_map.c     geometry snapshot, subsector |
   | RunTic after G_Ticker ----+--think---->|             polygons, nav graph          |
-  | G_BuildTiccmd end --------+--command-->| k_path.c    A* over subsector graph      |
+  | G_BuildTiccmd end --------+--command-->| k_path.c    A* over the cell graph       |
   | D_RunFrame ---------------+--frame---->| k_nav.c     path follow + steering       |
   | I_GetEvent (fn pointer) --+--filter--->| k_brain.c   priorities (IDLE, GOTO)      |
   +---------------------------+            | k_log.c     rolling log                   |
@@ -286,7 +287,11 @@ problems of each kind are logged individually with their location.
 
 `K_Map_CellAt(x, y)` finds a point's subsector via `R_PointInSubsector` (a pure lookup), then the
 cell of that subsector containing the point (within 1 unit), or -1 when the point is in the void.
-`K_Map_SubsectorAt` wraps it. The console's hover info and click validation use them.
+If that subsector has no such cell (a hairline sliver without floor, or a point just across a
+partition line), it falls back to any cell within 1 unit. `K_Map_NearestCell(x, y, max)` scans
+all cells for the nearest one within a distance; the pathfinder uses it when the player stands on
+one of the few holes in the mesh. `K_Map_SubsectorAt` wraps `K_Map_CellAt`. The console's hover
+info and click validation use them.
 
 #### 3.2.1 `k_graph.c` - navigation graph
 
@@ -294,9 +299,13 @@ cell of that subsector containing the point (within 1 unit), or -1 when the poin
 directions (all cells are counter-clockwise) and overlap by at least 1 unit; each overlap is a
 portal segment, which path smoothing will need later. Vanilla nodebuilders round split vertices
 to whole units, so a seg (and an edge built from it) can sit at a very slightly different angle
-from its linedef. So only the **shared stretch** has to lie on both lines: within 1 unit at its
-middle and 2 units at its ends. Requiring the whole of a long line to be within tolerance failed
-on long lines; a thin wall still never matches, as it is off by its full thickness everywhere.
+from its linedef. So only the **shared stretch** has to lie on both edges: within 1 unit of the
+other edge at its middle and 2 units at its ends. Requiring the whole of a long line to be within
+tolerance failed on long lines; a thin wall still never matches, as it is off by its full
+thickness everywhere. The distance is to the other edge **segment**, not its infinite line, and
+the stretch must be at least 1 unit long measured along both edges. Without that, two edges
+meeting nearly at right angles could share a short bogus stretch beyond the end of one of them;
+the M5 pathfinder test found such portals, with their middles outside one of their cells.
 Edges and linedefs are bucketed in a uniform 128-unit grid. Each portal records the two-sided
 linedef it runs along, or -1 when both cells are in the same sector.
 
@@ -317,30 +326,63 @@ along a wall are hairline slivers of void). The graph also counts isolated cells
 components (groups joined by portals, open or not; areas reached only by teleporter form their own
 groups).
 
-Measured on the same 100 maps: ~100,000 portals; **41 holes left in total** (from ~1,600 in the
-first version), most of them under 30 units: sectors with broken outlines that both tests read as
-void, narrow strips, and a few neighbouring cells whose edges did not match. Graph builds take
-under 6 ms per map. E1M1: 427 portals, 0 holes, one component.
+Measured on the same 100 maps: 99,940 portals; **41 holes left in total** (1,033 units of
+border; from ~1,600 holes in the first version), most of them under 30 units: sectors with broken
+outlines that both tests read as void, narrow strips, and a few neighbouring cells whose edges did
+not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one component.
 
 ### 3.3 `k_path.c` - pathfinder
 
-- A* over floor cells. Start = the cell containing the player; goal = the cell containing the
-  clicked point (both via `K_Map_CellAt`).
-- Edge cost = `|centroid(A) - portal_mid| + |portal_mid - centroid(B)|`. The heuristic is the
-  straight-line distance between centroids, which is admissible by the triangle inequality.
-- Binary-heap open set; per-node arrays sized to the number of cells, reset with a generation
-  counter.
-- Output waypoints: `portal_mid(1), centroid(2), portal_mid(2), ..., portal_mid(k), goal_point`.
-  This keeps the barycenter-to-barycenter idea, but adds the portal midpoint between each pair.
-  Every leg then stays inside one convex cell, so no leg can cut through a wall corner.
-  (Without the midpoints, the straight line between the centroids of two adjacent cells can leave
-  both cells.)
-- Also returns the list of path cells, used for progress tracking.
-- An unreachable goal returns `K_PATH_NONE`; the priority is marked FAILED with a reason in the log.
-- Later: funnel/string-pulling over the portal list, with portals shrunk by the player radius, for
-  smooth runs.
+`K_Path_Find(path, start, goal)` plans from a start point to a goal point:
+- **Start and goal cells** via `K_Map_CellAt`. A player standing on a hole in the mesh starts from
+  the nearest cell within 64 units (`K_Map_NearestCell`).
+- **A\* over portal crossings, not cells.** A search node is "crossed portal p into the cell on
+  side s" (two nodes per portal), plus the start and the goal. A route runs from the start point
+  through the **middle of each portal** it crosses to the goal point, and crossing a cell costs the
+  straight line from the portal it came in by to the one it leaves by. Both lie on the border of
+  the convex cell, so that leg stays inside it and cannot cut through a wall corner.
+
+  The first version of this plan went through each cell's centroid instead (`portal_mid(1),
+  centroid(2), portal_mid(2), ...`). That is just as safe, but it detours deep into long cells
+  and back: a corridor cell entered and left near one end sent the route to its middle. Portal
+  middles alone are shorter, and the search optimises exactly the line that is drawn and driven.
+- The heuristic is the straight line to the goal, which no route can beat (consistent, so an
+  expanded node is final). Binary-heap open set; per-node arrays sized to the portal count, reset
+  with a search stamp.
+- **Blocked crossings are not skipped but cost a large penalty** (10^7 each, more than any open
+  route). One search then gives the shortest open route if there is one, and otherwise the route
+  with the fewest blocked crossings, whose first blocked crossing tells why the goal cannot be
+  reached. Crossings are judged live (`K_Graph_CanCross`).
+- **Legs along a wall.** When a route enters and leaves a cell by two portals on the same edge,
+  the leg between them runs along that edge. That is common and harmless along a partition line,
+  where the edge is all portals, but between two doorways in one wall it would scrape the wall. A
+  leg that runs along a stretch of border that is not a portal (sampled at 1/4, 1/2 and 3/4) goes
+  through the cell's centroid instead.
+- **Output** (`k_path_t`): the result, the route's cells and the portals between them (for
+  progress tracking in M6), the points to follow (start, portal middles, the occasional centroid,
+  goal), the length, the first blocked crossing with its kind and height, nodes searched and time.
+- **Results:** `FOUND`; `BLOCKED` (every route crosses something the player cannot cross now: a
+  step too high, a closed door, a blocking line); `UNCONNECTED` (nothing connects them, e.g. an
+  area reached only by teleporter); `NO_START` / `NO_GOAL` (not on any floor).
+  `K_Path_Describe` turns a result into one line for the log and the status line, e.g. `a step
+  64 units high at line 312 (1024,-320) - the player climbs at most 24` or `only 0 units of
+  headroom at line 151 (1520,-3264) - the player needs 56`.
+
+Measured with a temporary self-test (300 random start/goal pairs per map, 30,000 routes over the
+100 maps): 0 errors. It checked every result against an independent reachability search (open
+crossings only, and all portals), that every route is continuous and every leg stays inside its
+cell, and that every open route is exactly as short as a plain Dijkstra search finds. Searches
+average 0.005-0.36 ms per map, 1 ms at worst. About 10% of routes go through a centroid somewhere,
+in cells that are entered and left through two openings in one wall.
+
+Later: funnel/string-pulling over the portal list, with portals shrunk by the player radius, for
+smooth runs.
 
 ### 3.4 `k_nav.c` - path following and steering
+
+So far (M5) nav only plans: `K_Nav_SetGoal(x, y)` runs `K_Path_Find` from the player's position,
+logs the outcome and keeps the route for the console (`K_Nav_GetPath`); `K_Nav_Reset` drops it on
+every level load. M6 adds the rest of this section.
 
 Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`):
 - thrust per tic = `move * 2048 / 65536` units, so forwardmove 50 gives 1.5625;
@@ -393,13 +435,18 @@ Every state change is logged (section 3.8).
 - The interface is designed for later stages: each priority type has `evaluate()` (a score from the
   world state, e.g. low health -> medkit) and `update()` (tells nav where to go). The highest score
   wins.
-- `K_Brain_RequestGoto(x, y)` is called from the console. It finds the subsector with
-  `R_PointInSubsector`, then rejects void clicks with a point-in-polygon test (~1 unit tolerance).
-  Rejections are logged. Without `-autoplay` (viewer mode) the GOTO is planned and drawn, but no
-  command is ever written.
+- `K_Brain_RequestGoto(x, y)` is called from the console. It rejects clicks outside a level or
+  off the floor (`K_Map_CellAt` returns -1), with a log line. Otherwise the click becomes the
+  GOTO and nav plans it; if there is no route, the GOTO fails at once (back to IDLE) and the reason
+  goes to the log and the status line. Without `-autoplay` (viewer mode) the GOTO is planned and
+  drawn, but no command is ever written.
+- `K_Brain_Reset()` drops any GOTO on every level load (logged).
 - `K_Brain_Status()` returns a one-line description of the current intent for the console status
-  line, e.g. `GO TO (1024, -320) - 14 waypoints left, 812 units`.
+  line, e.g. `GO TO (1024, -320) - 14 waypoints, 812 units`, `IDLE - GO TO (1024, -320) failed:
+  <reason>`, prefixed `VIEWER - ` without `-autoplay`.
 - IDLE means zero movement (the bot owns controls).
+- So far (M5) the brain holds just the current GOTO and the last failure; the priority list,
+  statuses, history and scores arrive with the Priorities tab (M7).
 
 ### 3.6 `K_BuildTiccmd` - command injection (H6)
 
@@ -471,15 +518,15 @@ the config; Karp simply ignores it while it owns the controls.
 - **Layout:**
   ```
   +----------------------------------------------------------+
-  | GO TO (1024, -320) - 14 waypoints left, 812 units        |  status line (K_Brain_Status)
+  | GO TO (1024, -320) - 14 waypoints, 812 units             |  status line (K_Brain_Status)
   +--------------------------------------+-------------------+
   |                                      | [Priorities][Bot] |
   |            map canvas                | [Map]             |
   |                                      |                   |
   +--------------------------------------+-------------------+
   | 00:41.2 BRAIN  new priority GOTO (1024,-320) - user click |  rolling log pane
-  | 00:41.2 NAV    path found: 23 subsectors, 1840 units      |  (always visible,
-  | 00:43.9 NAV    off path in ss 211 - replanning            |   resizable splitter)
+  | 00:41.2 NAV    path found: 23 cells, 1840 units, ...      |  (always visible,
+  | 00:43.9 NAV    off path in cell 211 - replanning          |   resizable splitter)
   +----------------------------------------------------------+
   ```
 - **Map canvas** (ImDrawList):
@@ -492,14 +539,21 @@ the config; Karp simply ignores it while it owns the controls.
     brown, ceiling-height change yellow, plain two-sided dim gray (toggle).
   - Overlays (checkboxes): floor cells (filled, coloured by subsector), centroids (red where the
     engine disagrees), the navigation graph (portals and links: green open both ways, yellow one
-    way with an arrow, red blocked), and the path polyline with the current waypoint highlighted.
-  - Player arrow (live position and heading) and goal marker.
+    way with an arrow, red blocked).
+  - The route, whenever there is a goal: its cells faintly filled, the line to follow with a dot
+    per waypoint, and a goal ring. Blue line and green ring when the route is open; orange line,
+    the blocking crossing as a thick red line, and a red ring when it is blocked. M6 highlights
+    the current waypoint.
+  - Player arrow (live position and heading).
   - Hover tooltip: subsector # (and which of its cells), sector #, live floor/ceiling, area,
     neighbours by crossing ("4 neighbours: 3 open, 1 step too high").
-  - **Left click -> `K_Brain_RequestGoto(x, y)`.**
+  - **Left click -> `K_Brain_RequestGoto(x, y)`**; right or middle drag pans. The click that
+    focuses the console also counts.
 - **Side tabs:**
   - `Priorities`: active priority, status, history, Cancel button.
-  - `Bot`: position, speed, current cell, path length, waypoint index, controller tunables.
+  - `Bot`: position, facing, current cell; the route's goal, result, cells, waypoints, length and
+    search time, with the reason when it is blocked. M6 adds speed, waypoint index and controller
+    tunables.
   - `Map`: load stats and sanity-check results.
 - **Rolling log pane** (bottom, always visible; data from 3.8):
   - newest lines at the bottom; auto-scrolls unless the user has scrolled up (then shows a
@@ -522,12 +576,14 @@ The log is the bot's "thought stream": what it decided and why, not a per-tic du
 - Stage 1 messages, for example:
   - `BRAIN new priority GOTO (1024,-320) - user click`
   - `BRAIN priority GOTO done - arrived in 142 tics`
-  - `BRAIN priority GOTO failed - no path (target ledge 64 units above)`
-  - `NAV path found: 23 subsectors, 1840 units, 0.3 ms`
-  - `NAV off path (in ss 211) - replanning`
+  - `BRAIN priority GOTO failed - no path: a step 64 units high at line 312 (1024,-320) - the
+    player climbs at most 24`
+  - `NAV path found: 23 cells, 1840 units, 25 waypoints - 0.05 ms, 112 nodes searched`
+  - `NAV off path (in cell 211) - replanning`
   - `NAV stuck at (512,-96) for 35 tics - replanning (2/3)`
-  - `MAP E1M1: 482 subsectors, 1210 portals, 0 degenerate, 0 centroid mismatches, 4.1 ms`
-  - `SYS click at (3000,4000) rejected - outside the map`
+  - `MAP E1M1 graph: 425 portals, 0 holes (0 units), 0 isolated, 1 components (largest 238 of
+    238 cells), 0.8 ms`
+  - `BRAIN click at (3000,4000) ignored - not on any floor`
 - Sinks: the console pane, stdout, and `karp.log` in crispy's config directory (`configdir`, the
   exe folder on Windows; truncated each run), so a session can be reviewed after the game exits.
 
@@ -574,7 +630,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 3. **M2 Map view** - H4, `k_map` line snapshot, automap-style drawing, zoom/pan, live player arrow.
 4. **M3 Subsector polygons** - polygons, centroids, sanity checks (logged), overlay, hover info.
 5. **M4 Nav graph** - portals, live passability, graph overlay.
-6. **M5 Pathfinder** - A*; a click draws the planned path and logs it (no movement yet).
+6. **M5 Pathfinder** - A*, `k_nav` planning, GOTO from a click; the console draws the route and
+   the Bot tab shows it, the log says why when there is none (no movement yet).
 7. **M6 Driving** - H2, H5, H6, H7, prediction, controller, arrival, replanning, stuck detection.
 8. **M7 Priorities tab** - IDLE/GOTO lifecycle, history, cancel; polish.
 

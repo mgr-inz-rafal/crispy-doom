@@ -118,9 +118,13 @@ const k_map_t *K_Map_Get(void);
 
 k_lineclass_t K_Map_LineClass(int line);
 
-// The cell containing the point, or -1 when the point is on no floor (in
-// the void).
+// The cell containing the point (within 1 unit), or -1 when the point is
+// on no floor (in the void).
 int K_Map_CellAt(double x, double y);
+
+// The cell nearest to the point, if one is within max_distance (0 when the
+// point is inside it); -1 otherwise. Scans every cell.
+int K_Map_NearestCell(double x, double y, double max_distance);
 
 // The subsector containing the point, or -1 when it is on no floor.
 int K_Map_SubsectorAt(double x, double y);

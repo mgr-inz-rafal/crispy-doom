@@ -12,6 +12,13 @@
 extern "C" {
 #endif
 
+// Back to IDLE; called on every level load.
+void K_Brain_Reset(void);
+
+// A click on the console's map: go to (x, y). Clicks that are not on any
+// floor are ignored, with a log line.
+void K_Brain_RequestGoto(double x, double y);
+
 // One line describing what the bot is doing now, for the console's status
 // line.
 const char *K_Brain_Status(void);

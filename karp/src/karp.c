@@ -12,10 +12,12 @@
 #include "m_argv.h"
 
 #include "karp.h"
+#include "k_brain.h"
 #include "k_console.h"
 #include "k_graph.h"
 #include "k_log.h"
 #include "k_map.h"
+#include "k_nav.h"
 #include "k_settings.h"
 
 static boolean autoplay_enabled;
@@ -143,4 +145,6 @@ void K_LevelLoaded(void)
 
     K_Map_Build();
     K_Graph_Build();
+    K_Brain_Reset();
+    K_Nav_Reset();
 }

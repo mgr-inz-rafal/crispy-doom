@@ -17,6 +17,8 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_graph.c"         "${KARP_DIR}/src/k_graph.h"
     "${KARP_DIR}/src/k_log.c"           "${KARP_DIR}/src/k_log.h"
     "${KARP_DIR}/src/k_map.c"           "${KARP_DIR}/src/k_map.h"
+    "${KARP_DIR}/src/k_nav.c"           "${KARP_DIR}/src/k_nav.h"
+    "${KARP_DIR}/src/k_path.c"          "${KARP_DIR}/src/k_path.h"
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h")
 
 set(IMGUI_SOURCE_FILES
