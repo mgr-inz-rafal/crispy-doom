@@ -39,6 +39,26 @@ typedef enum
 
 typedef struct
 {
+    int sector;
+    int first_point;        // into k_map_t.points
+    int num_points;         // closed convex polygon, counter-clockwise
+    k_vec2_t centroid;      // area-weighted
+    double area;
+    k_vec2_t min, max;      // bounding box of the polygon
+    // Leaves without floor have no polygon (num_points is 0). Harmless:
+    int no_area;            // the BSP gives it no area, or a hairline sliver
+    int behind_wall;        // its BSP region is solid space behind its own
+                            // one-sided walls, e.g. inside a pillar
+    // A real anomaly:
+    int degenerate;         // its floor lies behind one of its two-sided
+                            // segs (buggy nodes); the polygon is its BSP
+                            // region minus what lies behind its walls
+    int centroid_mismatch;  // the engine puts the centroid in another
+                            // subsector
+} k_subsector_t;
+
+typedef struct
+{
     int loaded;             // false until the first level loads
     unsigned int generation;    // bumped on every level load
     char name[9];           // map lump name, e.g. "E1M1"
@@ -47,7 +67,21 @@ typedef struct
     k_line_t *lines;
     int num_sectors;
 
+    int num_subsectors;
+    k_subsector_t *subsectors;
+    int num_points;
+    k_vec2_t *points;       // all subsector polygons, back to back
+
     k_vec2_t min, max;      // bounding box of all lines
+
+    // Load-time sanity checks.
+    int num_nodes;
+    int no_area_subsectors;
+    int behind_wall_subsectors;
+    int degenerate_subsectors;
+    int unreached_subsectors;   // not reachable through the BSP tree
+    int centroid_mismatches;
+    double build_ms;
 } k_map_t;
 
 typedef struct
@@ -62,6 +96,13 @@ void K_Map_Build(void);
 const k_map_t *K_Map_Get(void);
 
 k_lineclass_t K_Map_LineClass(int line);
+
+// The subsector containing the point, or -1 when the point is outside
+// every subsector polygon (in the void).
+int K_Map_SubsectorAt(double x, double y);
+
+// Live floor and ceiling heights of a sector.
+void K_Map_SectorHeights(int sector, double *floor, double *ceiling);
 
 // The local player's position and facing. Returns 0 when not in a level.
 int K_Map_GetPlayer(k_pose_t *pose);

@@ -242,9 +242,24 @@ One algorithm handles every node format:
    clipping leaves behind one-sided walls. Two-sided segs lie on partitions, so clipping by them
    changes nothing. Skip zero-length segs.
 4. Compute area and centroid (shoelace). Use a small epsilon in clipping (~1/256 unit).
-5. Fallbacks: if seg clipping produces a degenerate polygon (buggy nodes), keep the partition-only
-   polygon and log a warning. A map with `numnodes == 0` (a single subsector) uses the bbox clipped
-   by its segs.
+5. A map with `numnodes == 0` (a single subsector) uses the bbox clipped by its segs.
+
+**Leaves without floor.** Real nodebuilders leave BSP leaves that have segs but no usable floor.
+A polygon has "no usable floor" when its area is below 0.01 or its average width (area over half
+the perimeter) is under 1 map unit; nothing fits there, since the player is 32 units wide. Each
+leaf is classified:
+- **No area** (harmless, no polygon): the BSP region itself has no usable floor. These are leaves
+  from splitting twice along the same line, and hairline slivers from vertex rounding.
+- **Behind walls** (harmless, no polygon): the region has floor, but the leaf's one-sided segs
+  alone remove all of it. The leaf is solid space inside a pillar or behind a thin wall.
+- **Degenerate** (warning): the floor lies behind one of the leaf's *two-sided* segs (buggy
+  nodes). The engine still assigns that floor to this subsector, so the polygon is the BSP region
+  clipped by the one-sided segs only, which keeps the void out.
+
+Measured on 100 maps (Doom, Doom II, Plutonia; ~54,000 subsectors): 2,129 leaves have no area,
+229 are behind walls, and Plutonia MAP08 has 2 degenerate subsectors. All 100 maps have 0
+unreached subsectors and 0 centroid mismatches. Builds take under 1 ms per map. Maps with
+extended node formats (DeePBSP, XNOD, XGL) are not tested yet: no local WAD uses them.
 
 **Portals and adjacency.** Two subsectors are neighbours where their polygon edges are collinear
 (tolerance 0.5-1 unit, because vanilla split vertices are rounded to whole units), opposite in
@@ -262,9 +277,15 @@ makes doors and lifts work naturally in later stages. It mirrors `P_TryMove`/`PI
   fine, because players have `MF_DROPOFF`;
 - blocked if `min(ceil A, ceil B) - max(floor A, floor B) < 56` or `ceil(B) - floor(B) < 56`.
 
-**Load-time sanity checks** (shown in the console's Map tab and logged): polygon count vs
-`numsubsectors`, degenerate polygons, `R_PointInSubsector(centroid) != ss` mismatches, portal count,
-isolated subsectors, build time in ms.
+**Load-time sanity checks** (shown in the console's Map tab and logged): leaves without area,
+leaves behind walls, degenerate subsectors, subsectors not reachable through the BSP tree,
+`R_PointInSubsector(centroid) != ss` mismatches, build time in ms; from M4 also portal count and
+isolated subsectors. The first few problems of each kind are logged individually with their
+location.
+
+`K_Map_SubsectorAt(x, y)` finds a point's subsector via `R_PointInSubsector` (a pure lookup),
+then returns -1 if the point lies outside that subsector's polygon (more than 1 unit away), i.e.
+in the void. The console's hover info and click validation use it.
 
 ### 3.3 `k_path.c` - pathfinder
 

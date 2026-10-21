@@ -8,6 +8,7 @@
 //
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string>
 #include <vector>
@@ -56,6 +57,9 @@ static double view_x, view_y;           // map point at the canvas centre
 static double view_scale;               // pixels per map unit
 static bool view_follow;
 static bool view_plain_lines = true;
+static bool view_subsectors;
+static bool view_centroids;
+static std::vector<ImVec2> screen_points;   // scratch for polygon drawing
 
 static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
 {
@@ -450,6 +454,112 @@ static void FitView(const k_map_t *map, const ImVec2 &size)
     view_scale = SDL_min(size.x / width, size.y / height) * 0.95;
 }
 
+// Golden-ratio hue steps keep neighbouring subsectors apart in colour.
+static ImU32 SubsectorColor(int index, float alpha)
+{
+    float r, g, b;
+
+    ImGui::ColorConvertHSVtoRGB(fmodf(index * 0.618034f, 1.0f), 0.6f, 0.9f,
+                                r, g, b);
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, alpha));
+}
+
+static bool SubsectorOnScreen(const k_subsector_t *ss, const ImVec2 &center,
+                              const ImVec2 &origin, const ImVec2 &size)
+{
+    ImVec2 top_left = MapToScreen(center, ss->min.x, ss->max.y);
+    ImVec2 bottom_right = MapToScreen(center, ss->max.x, ss->min.y);
+
+    return bottom_right.x >= origin.x && top_left.x <= origin.x + size.x
+        && bottom_right.y >= origin.y && top_left.y <= origin.y + size.y;
+}
+
+// Leaves the polygon's screen points in screen_points. The y flip turns
+// the map's counter-clockwise order into the clockwise order ImGui's
+// anti-aliased fill expects.
+static void ProjectSubsector(const k_map_t *map, const k_subsector_t *ss,
+                             const ImVec2 &center)
+{
+    screen_points.clear();
+
+    for (int i = 0; i < ss->num_points; ++i)
+    {
+        const k_vec2_t &point = map->points[ss->first_point + i];
+
+        screen_points.push_back(MapToScreen(center, point.x, point.y));
+    }
+}
+
+static void DrawSubsectors(ImDrawList *draw, const k_map_t *map,
+                           const ImVec2 &center, const ImVec2 &origin,
+                           const ImVec2 &size)
+{
+    for (int i = 0; i < map->num_subsectors; ++i)
+    {
+        const k_subsector_t *ss = &map->subsectors[i];
+
+        if (ss->num_points < 3 || !SubsectorOnScreen(ss, center, origin, size))
+        {
+            continue;
+        }
+
+        ProjectSubsector(map, ss, center);
+        draw->AddConvexPolyFilled(screen_points.data(), ss->num_points,
+                                  SubsectorColor(i, 0.30f));
+        draw->AddPolyline(screen_points.data(), ss->num_points,
+                          ss->degenerate ? IM_COL32(255, 0, 255, 255)
+                                         : IM_COL32(255, 255, 255, 40),
+                          ImDrawFlags_Closed, SDL_max(1.0f, ui_scale));
+    }
+}
+
+static void DrawCentroids(ImDrawList *draw, const k_map_t *map,
+                          const ImVec2 &center)
+{
+    for (int i = 0; i < map->num_subsectors; ++i)
+    {
+        const k_subsector_t *ss = &map->subsectors[i];
+        ImVec2 at = MapToScreen(center, ss->centroid.x, ss->centroid.y);
+
+        if (ss->num_points == 0)
+        {
+            continue;
+        }
+
+        if (ss->centroid_mismatch)
+        {
+            draw->AddCircleFilled(at, 4.0f * ui_scale, IM_COL32(255, 60, 60, 255));
+        }
+        else
+        {
+            draw->AddCircleFilled(at, 1.5f * ui_scale, IM_COL32(230, 230, 230, 200));
+        }
+    }
+}
+
+static void DrawHoveredSubsector(ImDrawList *draw, const k_map_t *map,
+                                 int index, const ImVec2 &center)
+{
+    const k_subsector_t *ss = &map->subsectors[index];
+    double floor, ceiling;
+
+    if (ss->num_points >= 3)
+    {
+        ProjectSubsector(map, ss, center);
+        draw->AddConvexPolyFilled(screen_points.data(), ss->num_points,
+                                  IM_COL32(255, 255, 255, 40));
+        draw->AddPolyline(screen_points.data(), ss->num_points,
+                          IM_COL32(255, 255, 255, 220), ImDrawFlags_Closed,
+                          SDL_max(1.0f, ui_scale));
+    }
+
+    K_Map_SectorHeights(ss->sector, &floor, &ceiling);
+    ImGui::SetTooltip("Subsector %d%s\nSector %d\nFloor %.0f, ceiling %.0f\n"
+                      "%d vertices, area %.0f", index,
+                      ss->degenerate ? " (degenerate)" : "", ss->sector,
+                      floor, ceiling, ss->num_points, ss->area);
+}
+
 static void DrawPlayerArrow(ImDrawList *draw, const ImVec2 &center,
                             const k_pose_t &player)
 {
@@ -502,6 +612,17 @@ static void DrawMapView(void)
     {
         ImGui::SetTooltip("Two-sided lines with no height change. The automap "
                           "only shows these with the map cheat.");
+    }
+
+    ImGui::SameLine();
+    ImGui::Checkbox("Subsectors", &view_subsectors);
+    ImGui::SameLine();
+    ImGui::Checkbox("Centroids", &view_centroids);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Red: the engine places this centroid in a "
+                          "different subsector.");
     }
 
     ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -565,7 +686,23 @@ static void DrawMapView(void)
         view_y = player.y;
     }
 
+    int hovered_subsector = -1;
+
+    if (hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Right)
+                && !ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+    {
+        double x, y;
+
+        ScreenToMap(center, io.MousePos, &x, &y);
+        hovered_subsector = K_Map_SubsectorAt(x, y);
+    }
+
     draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+
+    if (view_subsectors)
+    {
+        DrawSubsectors(draw, map, center, origin, size);
+    }
 
     // Plain lines first, so walls and steps are drawn on top of them.
     float thickness = SDL_max(1.0f, ui_scale);
@@ -589,6 +726,16 @@ static void DrawMapView(void)
         }
     }
 
+    if (view_centroids)
+    {
+        DrawCentroids(draw, map, center);
+    }
+
+    if (hovered_subsector >= 0)
+    {
+        DrawHoveredSubsector(draw, map, hovered_subsector, center);
+    }
+
     if (have_player)
     {
         DrawPlayerArrow(draw, center, player);
@@ -608,6 +755,87 @@ static void DrawMapView(void)
     }
 
     draw->PopClipRect();
+}
+
+static void StatRow(const char *label, const char *fmt, ...)
+{
+    va_list args;
+
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+    va_start(args, fmt);
+    ImGui::TextV(fmt, args);
+    va_end(args);
+}
+
+// A sanity-check count: highlighted when it is not zero.
+static void ProblemRow(const char *label, int count)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+
+    if (count > 0)
+    {
+        ImGui::TextColored(warning_color, "%d", count);
+    }
+    else
+    {
+        ImGui::Text("%d", count);
+    }
+}
+
+static void DrawMapTab(void)
+{
+    const k_map_t *map = K_Map_Get();
+
+    if (!map->loaded)
+    {
+        ImGui::TextDisabled("No level loaded");
+        return;
+    }
+
+    if (ImGui::BeginTable("map_stats", 2, ImGuiTableFlags_RowBg))
+    {
+        StatRow("Map", "%s", map->name);
+        StatRow("Lines", "%d", map->num_lines);
+        StatRow("Sectors", "%d", map->num_sectors);
+        StatRow("Subsectors", "%d", map->num_subsectors);
+        StatRow("Nodes", "%d", map->num_nodes);
+        StatRow("Polygon points", "%d", map->num_points);
+        StatRow("Without area", "%d", map->no_area_subsectors);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("BSP leaves with no usable floor: no area at all, "
+                              "or hairline slivers left by vertex rounding. "
+                              "Harmless.");
+        }
+
+        StatRow("Behind walls", "%d", map->behind_wall_subsectors);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("BSP leaves that are solid space behind their own "
+                              "one-sided walls, e.g. inside a pillar. Harmless.");
+        }
+
+        ProblemRow("Degenerate", map->degenerate_subsectors);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Subsectors whose floor lies behind one of their "
+                              "two-sided segs (buggy nodes); their BSP region "
+                              "is used. Shown with a magenta outline.");
+        }
+        ProblemRow("Unreached", map->unreached_subsectors);
+        ProblemRow("Centroid mismatches", map->centroid_mismatches);
+        StatRow("Build time", "%.1f ms", map->build_ms);
+        ImGui::EndTable();
+    }
 }
 
 //
@@ -655,7 +883,7 @@ static void DrawTopArea(float height)
 
         if (ImGui::BeginTabItem("Map"))
         {
-            ImGui::TextDisabled("Map statistics - arrives in M3");
+            DrawMapTab();
             ImGui::EndTabItem();
         }
 
