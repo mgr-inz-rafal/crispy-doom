@@ -101,6 +101,12 @@ configure_file(src/setup-res.rc.in src/setup-res.rc)
 configure_file(src/setup/setup-manifest.xml.in src/setup/setup-manifest.xml)
 configure_file(src/strife-res.rc.in src/strife-res.rc)
 
+# [Karp] the Karp console uses Dear ImGui, which is C++
+enable_language(CXX)
+
 foreach(SUBDIR textscreen opl pcsound src)
     add_subdirectory("${SUBDIR}")
 endforeach()
+
+# [Karp] autonomous bot, built into crispy-doom only
+add_subdirectory(karp)

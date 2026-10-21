@@ -190,7 +190,10 @@ redesign.
   - whenever Karp is on: register `I_AtExit(K_Shutdown, true)`. It runs before
     `I_ShutdownGraphics`, which would otherwise destroy every SDL window via `SDL_QuitSubSystem`.
 - `K_Shutdown()`: save `karp.cfg` if anything changed, clear the event filter, shut down ImGui,
-  destroy the console renderer and window, close `karp.log`.
+  destroy the console renderer and window.
+- The log has its own exit handler (`K_Log_Shutdown`), registered as soon as either switch is
+  enabled. Because it is registered earliest it runs last, so `karp.log` captures everything said
+  while shutting down.
 - **Activity gate**, exposed as `K_OwnsControls()` (used by H2, H5, H6, H7):
   `karp_autoplay && !netgame && gamestate == GS_LEVEL && gameaction == ga_nothing && !paused
    && !menuactive && !demoplayback && players[consoleplayer].mo && playerstate == PST_LIVE`.
@@ -459,8 +462,8 @@ The log is the bot's "thought stream": what it decided and why, not a per-tic du
   - `NAV stuck at (512,-96) for 35 tics - replanning (2/3)`
   - `MAP E1M1: 482 subsectors, 1210 portals, 0 degenerate, 0 centroid mismatches, 4.1 ms`
   - `SYS click at (3000,4000) rejected - outside the map`
-- Sinks: the console pane, stdout, and `karp.log` in the working directory (truncated each run),
-  so a session can be reviewed after the game exits.
+- Sinks: the console pane, stdout, and `karp.log` in crispy's config directory (`configdir`, the
+  exe folder on Windows; truncated each run), so a session can be reviewed after the game exits.
 
 Later stages will write their decisions into the same stream, e.g. "looking for blue key",
 "avoiding missile", "low health - going for medkit".

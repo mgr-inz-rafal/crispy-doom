@@ -79,6 +79,8 @@
 
 #include "d_main.h"
 
+#include "karp.h" // [Karp]
+
 #include "doom_icon.c"
 
 //
@@ -2323,6 +2325,29 @@ void D_DoomMain (void)
         autostart = true;
         // [crispy] if used with -playdemo, fast-forward demo up to the desired map
         crispy->demowarp = startmap;
+    }
+
+    //!
+    // @category game
+    //
+    // [Karp] Let the Karp bot play. Use together with -warp.
+    //
+
+    if (M_CheckParm("-autoplay"))
+    {
+        K_EnableAutoplay(); // [Karp]
+    }
+
+    //!
+    // @category game
+    //
+    // [Karp] Open the Karp Console, a separate window showing the bot's
+    // view of the map.
+    //
+
+    if (M_CheckParm("-karpconsole"))
+    {
+        K_EnableConsole(); // [Karp]
     }
 
     // Undocumented:

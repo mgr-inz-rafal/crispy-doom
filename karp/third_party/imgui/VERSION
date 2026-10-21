@@ -1,0 +1,16 @@
+Dear ImGui v1.93.0
+https://github.com/ocornut/imgui
+tag v1.93.0, commit c1aaac65e896a45f81f47a4d68f9959e0f86c859
+License: MIT (LICENSE.txt)
+
+Vendored unmodified. Only the files Karp needs are copied:
+  core:     imconfig.h imgui.cpp imgui.h imgui_demo.cpp imgui_draw.cpp
+            imgui_internal.h imgui_tables.cpp imgui_widgets.cpp
+            imstb_rectpack.h imstb_textedit.h imstb_truetype.h
+  backends: imgui_impl_sdl2.cpp/.h imgui_impl_sdlrenderer2.cpp/.h
+
+Why vendored: the vcpkg imgui port (1.92.9) only ships SDL3 backends, and
+crispy-doom is built on SDL2.
+
+To update: copy the same files from a newer release tag over these and update
+this file. imgui_impl_sdlrenderer2 needs SDL 2.0.17 or newer.
