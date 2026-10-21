@@ -21,6 +21,7 @@
 
 #include "k_brain.h"
 #include "k_console.h"
+#include "k_graph.h"
 #include "k_log.h"
 #include "k_map.h"
 #include "k_settings.h"
@@ -57,8 +58,9 @@ static double view_x, view_y;           // map point at the canvas centre
 static double view_scale;               // pixels per map unit
 static bool view_follow;
 static bool view_plain_lines = true;
-static bool view_subsectors;
+static bool view_cells;
 static bool view_centroids;
+static bool view_graph;
 static std::vector<ImVec2> screen_points;   // scratch for polygon drawing
 
 static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
@@ -464,51 +466,54 @@ static ImU32 SubsectorColor(int index, float alpha)
     return ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, alpha));
 }
 
-static bool SubsectorOnScreen(const k_subsector_t *ss, const ImVec2 &center,
-                              const ImVec2 &origin, const ImVec2 &size)
+static bool CellOnScreen(const k_cell_t *cell, const ImVec2 &center,
+                         const ImVec2 &origin, const ImVec2 &size)
 {
-    ImVec2 top_left = MapToScreen(center, ss->min.x, ss->max.y);
-    ImVec2 bottom_right = MapToScreen(center, ss->max.x, ss->min.y);
+    ImVec2 top_left = MapToScreen(center, cell->min.x, cell->max.y);
+    ImVec2 bottom_right = MapToScreen(center, cell->max.x, cell->min.y);
 
     return bottom_right.x >= origin.x && top_left.x <= origin.x + size.x
         && bottom_right.y >= origin.y && top_left.y <= origin.y + size.y;
 }
 
-// Leaves the polygon's screen points in screen_points. The y flip turns
-// the map's counter-clockwise order into the clockwise order ImGui's
+// Leaves the cell's screen points in screen_points. The y flip turns the
+// map's counter-clockwise order into the clockwise order ImGui's
 // anti-aliased fill expects.
-static void ProjectSubsector(const k_map_t *map, const k_subsector_t *ss,
-                             const ImVec2 &center)
+static void ProjectCell(const k_map_t *map, const k_cell_t *cell,
+                        const ImVec2 &center)
 {
     screen_points.clear();
 
-    for (int i = 0; i < ss->num_points; ++i)
+    for (int i = 0; i < cell->num_points; ++i)
     {
-        const k_vec2_t &point = map->points[ss->first_point + i];
+        const k_vec2_t &point = map->points[cell->first_point + i];
 
         screen_points.push_back(MapToScreen(center, point.x, point.y));
     }
 }
 
-static void DrawSubsectors(ImDrawList *draw, const k_map_t *map,
-                           const ImVec2 &center, const ImVec2 &origin,
-                           const ImVec2 &size)
+// Cells of the same subsector share its colour; their outlines show where
+// a subsector's floor had to be split.
+static void DrawCells(ImDrawList *draw, const k_map_t *map,
+                      const ImVec2 &center, const ImVec2 &origin,
+                      const ImVec2 &size)
 {
-    for (int i = 0; i < map->num_subsectors; ++i)
+    for (int i = 0; i < map->num_cells; ++i)
     {
-        const k_subsector_t *ss = &map->subsectors[i];
+        const k_cell_t *cell = &map->cells[i];
 
-        if (ss->num_points < 3 || !SubsectorOnScreen(ss, center, origin, size))
+        if (!CellOnScreen(cell, center, origin, size))
         {
             continue;
         }
 
-        ProjectSubsector(map, ss, center);
-        draw->AddConvexPolyFilled(screen_points.data(), ss->num_points,
-                                  SubsectorColor(i, 0.30f));
-        draw->AddPolyline(screen_points.data(), ss->num_points,
-                          ss->degenerate ? IM_COL32(255, 0, 255, 255)
-                                         : IM_COL32(255, 255, 255, 40),
+        ProjectCell(map, cell, center);
+        draw->AddConvexPolyFilled(screen_points.data(), cell->num_points,
+                                  SubsectorColor(cell->subsector, 0.30f));
+        draw->AddPolyline(screen_points.data(), cell->num_points,
+                          map->subsectors[cell->subsector].foreign_floor
+                              ? IM_COL32(255, 0, 255, 255)
+                              : IM_COL32(255, 255, 255, 40),
                           ImDrawFlags_Closed, SDL_max(1.0f, ui_scale));
     }
 }
@@ -516,17 +521,12 @@ static void DrawSubsectors(ImDrawList *draw, const k_map_t *map,
 static void DrawCentroids(ImDrawList *draw, const k_map_t *map,
                           const ImVec2 &center)
 {
-    for (int i = 0; i < map->num_subsectors; ++i)
+    for (int i = 0; i < map->num_cells; ++i)
     {
-        const k_subsector_t *ss = &map->subsectors[i];
-        ImVec2 at = MapToScreen(center, ss->centroid.x, ss->centroid.y);
+        const k_cell_t *cell = &map->cells[i];
+        ImVec2 at = MapToScreen(center, cell->centroid.x, cell->centroid.y);
 
-        if (ss->num_points == 0)
-        {
-            continue;
-        }
-
-        if (ss->centroid_mismatch)
+        if (cell->centroid_mismatch)
         {
             draw->AddCircleFilled(at, 4.0f * ui_scale, IM_COL32(255, 60, 60, 255));
         }
@@ -537,27 +537,121 @@ static void DrawCentroids(ImDrawList *draw, const k_map_t *map,
     }
 }
 
-static void DrawHoveredSubsector(ImDrawList *draw, const k_map_t *map,
-                                 int index, const ImVec2 &center)
+static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
+                         const k_graph_t *graph, const ImVec2 &center)
 {
-    const k_subsector_t *ss = &map->subsectors[index];
-    double floor, ceiling;
+    float thickness = SDL_max(1.0f, ui_scale);
 
-    if (ss->num_points >= 3)
+    for (int i = 0; i < graph->num_portals; ++i)
     {
-        ProjectSubsector(map, ss, center);
-        draw->AddConvexPolyFilled(screen_points.data(), ss->num_points,
-                                  IM_COL32(255, 255, 255, 40));
-        draw->AddPolyline(screen_points.data(), ss->num_points,
-                          IM_COL32(255, 255, 255, 220), ImDrawFlags_Closed,
-                          SDL_max(1.0f, ui_scale));
+        const k_portal_t *portal = &graph->portals[i];
+        bool forward = K_Graph_CanCross(i, portal->cell[0]) == K_CROSS_OPEN;
+        bool backward = K_Graph_CanCross(i, portal->cell[1]) == K_CROSS_OPEN;
+        ImU32 color = forward && backward ? IM_COL32(80, 200, 90, 255)
+                    : forward || backward ? IM_COL32(235, 200, 50, 255)
+                    : IM_COL32(230, 60, 60, 255);
+        ImU32 link_color = (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 110);
+        const k_vec2_t &c0 = map->cells[portal->cell[0]].centroid;
+        const k_vec2_t &c1 = map->cells[portal->cell[1]].centroid;
+        ImVec2 mid = MapToScreen(center, (portal->a.x + portal->b.x) * 0.5,
+                                 (portal->a.y + portal->b.y) * 0.5);
+
+        draw->AddLine(MapToScreen(center, c0.x, c0.y), mid, link_color, thickness);
+        draw->AddLine(mid, MapToScreen(center, c1.x, c1.y), link_color, thickness);
+        draw->AddLine(MapToScreen(center, portal->a.x, portal->a.y),
+                      MapToScreen(center, portal->b.x, portal->b.y),
+                      color, 2.0f * thickness);
+
+        // One way only: an arrowhead at the portal, pointing the way the
+        // player can go.
+        if (forward != backward)
+        {
+            const k_vec2_t &target = forward ? c1 : c0;
+            ImVec2 to = MapToScreen(center, target.x, target.y);
+            float dx = to.x - mid.x, dy = to.y - mid.y;
+            float length = sqrtf(dx * dx + dy * dy);
+            float size = 6.0f * ui_scale;
+
+            if (length > 0.0f)
+            {
+                dx /= length;
+                dy /= length;
+                draw->AddTriangleFilled(
+                    ImVec2(mid.x + dx * size, mid.y + dy * size),
+                    ImVec2(mid.x - dy * size * 0.6f, mid.y + dx * size * 0.6f),
+                    ImVec2(mid.x + dy * size * 0.6f, mid.y - dx * size * 0.6f),
+                    color);
+            }
+        }
+    }
+}
+
+// "4 neighbours: 3 open, 1 step too high"
+static std::string DescribeNeighbours(const k_graph_t *graph, int index)
+{
+    int counts[K_NUM_CROSSINGS] = { 0 };
+    int first = graph->first_link[index];
+    int count = graph->link_count[index];
+    const char *separator = ": ";
+    char part[64];
+    std::string text;
+
+    for (int i = 0; i < count; ++i)
+    {
+        ++counts[K_Graph_CanCross(graph->links[first + i].portal, index)];
     }
 
+    snprintf(part, sizeof(part), "%d neighbours", count);
+    text = part;
+
+    for (int c = 0; c < K_NUM_CROSSINGS; ++c)
+    {
+        if (counts[c] > 0)
+        {
+            snprintf(part, sizeof(part), "%s%d %s", separator, counts[c],
+                     K_Graph_CrossingName((k_crossing_t) c));
+            text += part;
+            separator = ", ";
+        }
+    }
+
+    return text;
+}
+
+static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
+                            const ImVec2 &center)
+{
+    const k_cell_t *cell = &map->cells[index];
+    const k_subsector_t *ss = &map->subsectors[cell->subsector];
+    const k_graph_t *graph = K_Graph_Get();
+    std::string neighbours;
+    char cell_of[32] = "";
+    double floor, ceiling;
+
+    if (graph->generation == map->generation)
+    {
+        neighbours = DescribeNeighbours(graph, index);
+    }
+
+    if (ss->num_cells > 1)
+    {
+        snprintf(cell_of, sizeof(cell_of), ", cell %d of %d",
+                 index - ss->first_cell + 1, ss->num_cells);
+    }
+
+    ProjectCell(map, cell, center);
+    draw->AddConvexPolyFilled(screen_points.data(), cell->num_points,
+                              IM_COL32(255, 255, 255, 40));
+    draw->AddPolyline(screen_points.data(), cell->num_points,
+                      IM_COL32(255, 255, 255, 220), ImDrawFlags_Closed,
+                      SDL_max(1.0f, ui_scale));
+
     K_Map_SectorHeights(ss->sector, &floor, &ceiling);
-    ImGui::SetTooltip("Subsector %d%s\nSector %d\nFloor %.0f, ceiling %.0f\n"
-                      "%d vertices, area %.0f", index,
-                      ss->degenerate ? " (degenerate)" : "", ss->sector,
-                      floor, ceiling, ss->num_points, ss->area);
+    ImGui::SetTooltip("Subsector %d%s%s\nSector %d\nFloor %.0f, ceiling %.0f\n"
+                      "%d vertices, area %.0f\n%s", cell->subsector, cell_of,
+                      ss->foreign_floor ? " (other-sector floor)" : "", ss->sector,
+                      floor, ceiling, cell->num_points, cell->area,
+                      neighbours.c_str());
 }
 
 static void DrawPlayerArrow(ImDrawList *draw, const ImVec2 &center,
@@ -604,7 +698,13 @@ static void DrawMapView(void)
 
     fit = ImGui::Button("Fit");
     ImGui::SameLine();
-    ImGui::Checkbox("Follow player", &view_follow);
+    ImGui::Checkbox("Follow", &view_follow);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Keep the player centred. Panning turns it off.");
+    }
+
     ImGui::SameLine();
     ImGui::Checkbox("Plain lines", &view_plain_lines);
 
@@ -615,7 +715,14 @@ static void DrawMapView(void)
     }
 
     ImGui::SameLine();
-    ImGui::Checkbox("Subsectors", &view_subsectors);
+    ImGui::Checkbox("Cells", &view_cells);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Convex pieces of floor, coloured by subsector: the "
+                          "nodes of the navigation graph.");
+    }
+
     ImGui::SameLine();
     ImGui::Checkbox("Centroids", &view_centroids);
 
@@ -623,6 +730,17 @@ static void DrawMapView(void)
     {
         ImGui::SetTooltip("Red: the engine places this centroid in a "
                           "different subsector.");
+    }
+
+    ImGui::SameLine();
+    ImGui::Checkbox("Graph", &view_graph);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Where neighbouring cells meet, from live sector "
+                          "heights.\nGreen: open both ways. Yellow: one way "
+                          "only (arrow), e.g. a drop.\nRed: blocked, e.g. a "
+                          "closed door or a step too high.");
     }
 
     ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -686,7 +804,7 @@ static void DrawMapView(void)
         view_y = player.y;
     }
 
-    int hovered_subsector = -1;
+    int hovered_cell = -1;
 
     if (hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Right)
                 && !ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
@@ -694,14 +812,14 @@ static void DrawMapView(void)
         double x, y;
 
         ScreenToMap(center, io.MousePos, &x, &y);
-        hovered_subsector = K_Map_SubsectorAt(x, y);
+        hovered_cell = K_Map_CellAt(x, y);
     }
 
     draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
 
-    if (view_subsectors)
+    if (view_cells)
     {
-        DrawSubsectors(draw, map, center, origin, size);
+        DrawCells(draw, map, center, origin, size);
     }
 
     // Plain lines first, so walls and steps are drawn on top of them.
@@ -726,14 +844,21 @@ static void DrawMapView(void)
         }
     }
 
+    const k_graph_t *graph = K_Graph_Get();
+
+    if (view_graph && graph->generation == map->generation)
+    {
+        DrawNavGraph(draw, map, graph, center);
+    }
+
     if (view_centroids)
     {
         DrawCentroids(draw, map, center);
     }
 
-    if (hovered_subsector >= 0)
+    if (hovered_cell >= 0)
     {
-        DrawHoveredSubsector(draw, map, hovered_subsector, center);
+        DrawHoveredCell(draw, map, hovered_cell, center);
     }
 
     if (have_player)
@@ -805,7 +930,23 @@ static void DrawMapTab(void)
         StatRow("Sectors", "%d", map->num_sectors);
         StatRow("Subsectors", "%d", map->num_subsectors);
         StatRow("Nodes", "%d", map->num_nodes);
-        StatRow("Polygon points", "%d", map->num_points);
+        StatRow("Floor cells", "%d", map->num_cells);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Convex pieces of floor: the nodes of the "
+                              "navigation graph.");
+        }
+
+        StatRow("Split subsectors", "%d", map->split_subsectors);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Subsectors whose floor is not convex (e.g. a wall "
+                              "corner inside), so it is split into several "
+                              "cells.");
+        }
+
         StatRow("Without area", "%d", map->no_area_subsectors);
 
         if (ImGui::IsItemHovered())
@@ -819,21 +960,67 @@ static void DrawMapTab(void)
 
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("BSP leaves that are solid space behind their own "
-                              "one-sided walls, e.g. inside a pillar. Harmless.");
+            ImGui::SetTooltip("BSP leaves that are all solid space behind walls, "
+                              "e.g. inside a pillar. Harmless.");
         }
 
-        ProblemRow("Degenerate", map->degenerate_subsectors);
+        StatRow("Other-sector floor", "%d", map->foreign_floor_subsectors);
 
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Subsectors whose floor lies behind one of their "
-                              "two-sided segs (buggy nodes); their BSP region "
-                              "is used. Shown with a magenta outline.");
+            ImGui::SetTooltip("Subsectors with some floor that the surrounding "
+                              "lines put in another sector: sector tricks or "
+                              "buggy nodes. The engine, and so navigation, uses "
+                              "the subsector's own sector there. Shown with a "
+                              "magenta outline.");
         }
+
         ProblemRow("Unreached", map->unreached_subsectors);
         ProblemRow("Centroid mismatches", map->centroid_mismatches);
         StatRow("Build time", "%.1f ms", map->build_ms);
+        ImGui::EndTable();
+    }
+
+    const k_graph_t *graph = K_Graph_Get();
+
+    if (graph->generation != map->generation)
+    {
+        return;
+    }
+
+    ImGui::SeparatorText("Navigation graph");
+
+    if (ImGui::BeginTable("graph_stats", 2, ImGuiTableFlags_RowBg))
+    {
+        StatRow("Portals", "%d", graph->num_portals);
+        ProblemRow("Holes", graph->holes);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Stretches of cell border, away from walls, that "
+                              "border no neighbour: holes in the navigation "
+                              "mesh. %.0f units in total.", graph->hole_length);
+        }
+
+        StatRow("Isolated", "%d", graph->isolated_cells);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Cells without neighbours, e.g. a closet reached "
+                              "only by teleporter.");
+        }
+
+        StatRow("Components", "%d (largest %d)", graph->components,
+                graph->largest_component);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Groups of cells joined by portals, whether open "
+                              "or not. Areas reached only by teleporter form "
+                              "their own groups.");
+        }
+
+        StatRow("Build time", "%.1f ms", graph->build_ms);
         ImGui::EndTable();
     }
 }

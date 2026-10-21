@@ -37,24 +37,41 @@ typedef enum
     K_LINE_TWO_SIDED,       // two-sided, same heights on both sides
 } k_lineclass_t;
 
+// A convex piece of a subsector's floor: the nodes of the navigation
+// graph. A subsector's segs are guaranteed to be convex, but its floor is
+// not: a wall corner inside its BSP region leaves floor on both sides of
+// the wall's line. Most subsectors have exactly one cell.
+typedef struct
+{
+    int subsector;
+    int first_point;        // into k_map_t.points
+    int num_points;         // convex, counter-clockwise
+    k_vec2_t centroid;      // area-weighted
+    double area;
+    k_vec2_t min, max;      // bounding box
+    int centroid_mismatch;  // the engine puts the centroid in another
+                            // subsector
+} k_cell_t;
+
 typedef struct
 {
     int sector;
-    int first_point;        // into k_map_t.points
-    int num_points;         // closed convex polygon, counter-clockwise
-    k_vec2_t centroid;      // area-weighted
-    double area;
-    k_vec2_t min, max;      // bounding box of the polygon
-    // Leaves without floor have no polygon (num_points is 0). Harmless:
+    int first_cell;         // into k_map_t.cells
+    int num_cells;          // 0 for leaves without floor
+    k_vec2_t centroid;      // of all its floor; placed among its segs if
+                            // it has none
+    double area;            // total floor area
+    k_vec2_t min, max;      // bounding box of its cells
+
+    // Leaves without floor have no cells. Harmless:
     int no_area;            // the BSP gives it no area, or a hairline sliver
-    int behind_wall;        // its BSP region is solid space behind its own
-                            // one-sided walls, e.g. inside a pillar
-    // A real anomaly:
-    int degenerate;         // its floor lies behind one of its two-sided
-                            // segs (buggy nodes); the polygon is its BSP
-                            // region minus what lies behind its walls
-    int centroid_mismatch;  // the engine puts the centroid in another
-                            // subsector
+    int behind_wall;        // its whole BSP region is solid space behind
+                            // walls, e.g. inside a pillar
+
+    // Some of its floor lies, judged by the surrounding lines, in another
+    // sector: sector tricks or buggy nodes. Informational: the engine (and
+    // so the navigation graph) still uses the subsector's own sector there.
+    int foreign_floor;
 } k_subsector_t;
 
 typedef struct
@@ -69,18 +86,22 @@ typedef struct
 
     int num_subsectors;
     k_subsector_t *subsectors;
+    int num_cells;
+    k_cell_t *cells;
     int num_points;
-    k_vec2_t *points;       // all subsector polygons, back to back
+    k_vec2_t *points;       // all cell polygons, back to back
 
     k_vec2_t min, max;      // bounding box of all lines
 
     // Load-time sanity checks.
     int num_nodes;
+    int split_subsectors;       // subsectors whose floor needs several cells
     int no_area_subsectors;
     int behind_wall_subsectors;
-    int degenerate_subsectors;
+    int foreign_floor_subsectors;
     int unreached_subsectors;   // not reachable through the BSP tree
-    int centroid_mismatches;
+    int centroid_mismatches;    // cells whose centroid the engine places in
+                                // another subsector
     double build_ms;
 } k_map_t;
 
@@ -97,8 +118,11 @@ const k_map_t *K_Map_Get(void);
 
 k_lineclass_t K_Map_LineClass(int line);
 
-// The subsector containing the point, or -1 when the point is outside
-// every subsector polygon (in the void).
+// The cell containing the point, or -1 when the point is on no floor (in
+// the void).
+int K_Map_CellAt(double x, double y);
+
+// The subsector containing the point, or -1 when it is on no floor.
 int K_Map_SubsectorAt(double x, double y);
 
 // Live floor and ceiling heights of a sector.

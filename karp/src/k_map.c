@@ -7,13 +7,23 @@
 //	Sector heights are always read live from the engine: floors move, and
 //	loading a savegame changes them after P_SetupLevel.
 //
-//	Subsector polygons: in vanilla, DeePBSP and XNOD nodes a subsector's
-//	segs only cover its linedef edges, so its outline is open wherever it
-//	borders another subsector along a partition line. The closed polygon
+//	Floor cells: in vanilla, DeePBSP and XNOD nodes a subsector's segs only
+//	cover its linedef edges, so its outline is open wherever it borders
+//	another subsector along a partition line. Each subsector's BSP region
 //	is rebuilt by clipping the map's bounding box down the BSP tree with
-//	each partition line, then by each of the subsector's own segs, which
-//	trims the void behind one-sided walls. This works the same for every
-//	node format.
+//	each partition line. That region is then split by every linedef that
+//	passes through it into convex pieces, and each piece is kept as a floor
+//	cell if it lies in a sector, or dropped as void. This works the same
+//	for every node format.
+//
+//	A subsector's segs are convex, but its floor need not be, and its
+//	region need not stop at its own walls:
+//	- a wall corner inside the region leaves floor beside the wall, past
+//	  the end of its line;
+//	- void is never visible, so nodebuilders give it to whichever leaf is
+//	  convenient, beyond walls whose segs belong to other leaves.
+//	Splitting by all lines through the region, then judging each piece on
+//	its own, handles both.
 //
 
 #include <math.h>
@@ -53,7 +63,15 @@
 // Per kind of problem, only this many are logged individually.
 #define MAX_REPORTS 5
 
+// A convex polygon being split into cells.
+typedef struct
+{
+    k_vec2_t *points;
+    int count;
+} piece_t;
+
 static k_map_t map;
+static int cells_capacity;
 static int points_capacity;
 static unsigned char *reached;
 
@@ -86,12 +104,12 @@ static int SectorIndex(const sector_t *sector)
     return (int) (sector - sectors);
 }
 
-static void ExtendBounds(const k_vec2_t *point)
+static void ExtendBounds(k_vec2_t *min, k_vec2_t *max, const k_vec2_t *point)
 {
-    map.min.x = SDL_min(map.min.x, point->x);
-    map.min.y = SDL_min(map.min.y, point->y);
-    map.max.x = SDL_max(map.max.x, point->x);
-    map.max.y = SDL_max(map.max.y, point->y);
+    min->x = SDL_min(min->x, point->x);
+    min->y = SDL_min(min->y, point->y);
+    max->x = SDL_max(max->x, point->x);
+    max->y = SDL_max(max->y, point->y);
 }
 
 static void BuildLines(void)
@@ -122,8 +140,8 @@ static void BuildLines(void)
             map.min = map.max = line->v1;
         }
 
-        ExtendBounds(&line->v1);
-        ExtendBounds(&line->v2);
+        ExtendBounds(&map.min, &map.max, &line->v1);
+        ExtendBounds(&map.min, &map.max, &line->v2);
     }
 }
 
@@ -260,58 +278,24 @@ static boolean HasNoArea(const k_vec2_t *poly, int n)
     return area < MIN_AREA || area / (perimeter * 0.5) < MIN_WIDTH;
 }
 
-static void StorePolygon(k_subsector_t *ss, const k_vec2_t *poly, int n)
+static boolean PointInCell(const k_cell_t *cell, double x, double y,
+                           double tolerance)
 {
-    int i;
-
-    if (map.num_points + n > points_capacity)
-    {
-        points_capacity = SDL_max(points_capacity * 2, map.num_points + n + 1024);
-        map.points = realloc(map.points, points_capacity * sizeof(*map.points));
-    }
-
-    ss->first_point = map.num_points;
-    ss->num_points = n;
-    memcpy(&map.points[map.num_points], poly, n * sizeof(*poly));
-    map.num_points += n;
-
-    if (n == 0)
-    {
-        return;
-    }
-
-    ss->min = ss->max = poly[0];
-
-    for (i = 1; i < n; ++i)
-    {
-        ss->min.x = SDL_min(ss->min.x, poly[i].x);
-        ss->min.y = SDL_min(ss->min.y, poly[i].y);
-        ss->max.x = SDL_max(ss->max.x, poly[i].x);
-        ss->max.y = SDL_max(ss->max.y, poly[i].y);
-    }
-
-    ss->area = n >= 3 ? PolygonArea(poly, n, &ss->centroid) : 0.0;
-}
-
-static boolean PointInPolygon(const k_subsector_t *ss, double x, double y,
-                              double tolerance)
-{
-    const k_vec2_t *poly = &map.points[ss->first_point];
+    const k_vec2_t *poly = &map.points[cell->first_point];
     k_vec2_t point = { x, y };
     int i;
 
-    if (ss->num_points < 3
-     || x < ss->min.x - tolerance || x > ss->max.x + tolerance
-     || y < ss->min.y - tolerance || y > ss->max.y + tolerance)
+    if (x < cell->min.x - tolerance || x > cell->max.x + tolerance
+     || y < cell->min.y - tolerance || y > cell->max.y + tolerance)
     {
         return false;
     }
 
     // Counter-clockwise: the inside is on the left of every edge.
-    for (i = 0; i < ss->num_points; ++i)
+    for (i = 0; i < cell->num_points; ++i)
     {
         k_vec2_t a = poly[i];
-        k_vec2_t b = poly[(i + 1) % ss->num_points];
+        k_vec2_t b = poly[(i + 1) % cell->num_points];
         k_vec2_t dir = { b.x - a.x, b.y - a.y };
 
         if (LineSide(a, dir, point) < -tolerance)
@@ -323,11 +307,160 @@ static boolean PointInPolygon(const k_subsector_t *ss, double x, double y,
     return true;
 }
 
+static double Cross(k_vec2_t a, k_vec2_t b)
+{
+    return a.x * b.y - a.y * b.x;
+}
+
+// The sector a point is in, from the first line a ray from it hits: the
+// point is on that line's front side (its right) or back side. -1 for
+// void: a one-sided line seen from behind, or nothing hit at all. This is
+// a local test, so unlike an even-odd test over sector outlines it is not
+// fooled by the unclosed outlines vanilla maps have. Three rays vote, so a
+// single gap between lines cannot fool it either.
+static int SectorAtPoint(k_vec2_t point)
+{
+    // Not axis-aligned, so rays rarely pass exactly through vertices.
+    static const double angles[3] = { 0.7, 2.8, 4.9 };
+    int votes[3];
+    int ray, i;
+
+    for (ray = 0; ray < 3; ++ray)
+    {
+        k_vec2_t dir = { cos(angles[ray]), sin(angles[ray]) };
+        double nearest = 1e30;
+        int hit = -1;
+
+        for (i = 0; i < map.num_lines; ++i)
+        {
+            const k_line_t *line = &map.lines[i];
+            k_vec2_t along = { line->v2.x - line->v1.x, line->v2.y - line->v1.y };
+            k_vec2_t to_line = { line->v1.x - point.x, line->v1.y - point.y };
+            double denom = Cross(dir, along);
+            double t, u;
+
+            if (fabs(denom) < 1e-12)
+            {
+                continue;
+            }
+
+            t = Cross(to_line, along) / denom;     // distance along the ray
+            u = Cross(to_line, dir) / denom;       // position along the line
+
+            if (t > 1e-6 && t < nearest && u >= 0.0 && u <= 1.0)
+            {
+                nearest = t;
+                hit = i;
+            }
+        }
+
+        if (hit < 0)
+        {
+            votes[ray] = -1;
+        }
+        else
+        {
+            const k_line_t *line = &map.lines[hit];
+            k_vec2_t along = { line->v2.x - line->v1.x, line->v2.y - line->v1.y };
+
+            votes[ray] = LineSide(line->v1, along, point) < 0.0
+                       ? line->front_sector : line->back_sector;
+        }
+    }
+
+    if (votes[0] == votes[1] || votes[0] == votes[2])
+    {
+        return votes[0];
+    }
+
+    if (votes[1] == votes[2])
+    {
+        return votes[1];
+    }
+
+    // All three disagree: trust any floor over void.
+    return votes[0] >= 0 ? votes[0] : votes[1] >= 0 ? votes[1] : votes[2];
+}
+
+// True if the segment a-b passes through the interior of a convex,
+// counter-clockwise polygon (not just along its border).
+static boolean SegmentCrossesPolygon(k_vec2_t a, k_vec2_t b,
+                                     const k_vec2_t *poly, int n)
+{
+    k_vec2_t ab = { b.x - a.x, b.y - a.y };
+    double t0 = 0.0, t1 = 1.0;
+    int i;
+
+    for (i = 0; i < n; ++i)
+    {
+        k_vec2_t p = poly[i];
+        k_vec2_t dir = { poly[(i + 1) % n].x - p.x, poly[(i + 1) % n].y - p.y };
+        // Positive inside: the polygon is on the left of its edges.
+        double side_a = LineSide(p, dir, a) - CLIP_EPSILON;
+        double side_b = LineSide(p, dir, b) - CLIP_EPSILON;
+
+        if (side_a <= 0.0 && side_b <= 0.0)
+        {
+            return false;
+        }
+
+        if (side_a < 0.0)
+        {
+            t0 = SDL_max(t0, side_a / (side_a - side_b));
+        }
+        else if (side_b < 0.0)
+        {
+            t1 = SDL_min(t1, side_a / (side_a - side_b));
+        }
+
+        if (t0 >= t1)
+        {
+            return false;
+        }
+    }
+
+    return (t1 - t0) * sqrt(ab.x * ab.x + ab.y * ab.y) > MIN_WIDTH;
+}
+
 //
-// Subsector polygons
+// Floor cells
 //
 
-// For subsectors without a polygon: a centroid among the segs, for display.
+static void AddCell(int subsector, const k_vec2_t *poly, int n)
+{
+    k_cell_t *cell;
+    int i;
+
+    if (map.num_cells == cells_capacity)
+    {
+        cells_capacity = SDL_max(cells_capacity * 2, 1024);
+        map.cells = realloc(map.cells, cells_capacity * sizeof(*map.cells));
+    }
+
+    if (map.num_points + n > points_capacity)
+    {
+        points_capacity = SDL_max(points_capacity * 2, map.num_points + n + 1024);
+        map.points = realloc(map.points, points_capacity * sizeof(*map.points));
+    }
+
+    cell = &map.cells[map.num_cells++];
+    cell->subsector = subsector;
+    cell->first_point = map.num_points;
+    cell->num_points = n;
+    cell->area = PolygonArea(poly, n, &cell->centroid);
+    cell->min = cell->max = poly[0];
+    cell->centroid_mismatch = 0;
+
+    for (i = 1; i < n; ++i)
+    {
+        ExtendBounds(&cell->min, &cell->max, &poly[i]);
+    }
+
+    memcpy(&map.points[map.num_points], poly, n * sizeof(*poly));
+    map.num_points += n;
+}
+
+// For subsectors without floor: a centroid among the segs, for display.
 static void PlaceAmongSegs(k_subsector_t *ss, const subsector_t *source)
 {
     int i;
@@ -343,41 +476,60 @@ static void PlaceAmongSegs(k_subsector_t *ss, const subsector_t *source)
     }
 }
 
-// Clips the polygon in work by the subsector's segs (or only its one-sided
-// ones), keeping the right side of each: the subsector lies there. temp is
-// scratch. Both need room for count + 2 * numlines + 2 points, as each
-// clip adds at most two. Returns the new point count.
-static int ClipBySegs(const subsector_t *source, k_vec2_t *work,
-                      k_vec2_t *temp, int count, boolean one_sided_only)
+// Splits every piece by the line, keeping both sides where they have area.
+// Returns the new piece count.
+static int SplitPieces(piece_t **pieces, int *capacity, int count,
+                       k_vec2_t origin, k_vec2_t dir)
 {
-    int i;
+    int total = count;
+    int i, side;
 
-    for (i = 0; i < source->numlines && count >= 3; ++i)
+    // Each piece splits in two at most.
+    if (2 * count > *capacity)
     {
-        const seg_t *seg = &segs[source->firstline + i];
-        k_vec2_t v1 = VertexToMap(seg->v1);
-        k_vec2_t v2 = VertexToMap(seg->v2);
-        k_vec2_t dir = { v2.x - v1.x, v2.y - v1.y };
+        *capacity = 2 * count;
+        *pieces = realloc(*pieces, *capacity * sizeof(**pieces));
+    }
 
-        if ((one_sided_only && seg->backsector != NULL)
-         || sqrt(dir.x * dir.x + dir.y * dir.y) < CLIP_EPSILON)
+    for (i = 0; i < count; ++i)
+    {
+        piece_t *piece = &(*pieces)[i];
+        piece_t halves[2];
+
+        for (side = 0; side < 2; ++side)
         {
+            halves[side].points = malloc((piece->count + 2)
+                                         * sizeof(*halves[side].points));
+            halves[side].count = CleanPolygon(halves[side].points,
+                ClipPolygon(piece->points, piece->count,
+                            halves[side].points, origin, dir, side == 0));
+        }
+
+        // The line misses the piece, or only grazes it.
+        if (HasNoArea(halves[0].points, halves[0].count)
+         || HasNoArea(halves[1].points, halves[1].count))
+        {
+            free(halves[0].points);
+            free(halves[1].points);
             continue;
         }
 
-        count = ClipPolygon(work, count, temp, v1, dir, true);
-        memcpy(work, temp, count * sizeof(*work));
+        free(piece->points);
+        *piece = halves[0];
+        (*pieces)[total++] = halves[1];
     }
 
-    return CleanPolygon(work, count);
+    return total;
 }
 
 static void BuildLeaf(int index, const k_vec2_t *poly, int n)
 {
     const subsector_t *source;
     k_subsector_t *ss;
-    k_vec2_t *work, *temp;
-    int count;
+    piece_t *pieces;
+    k_vec2_t min, max;
+    int count, capacity, i;
+    double cx = 0.0, cy = 0.0;
 
     if (index < 0 || index >= numsubsectors || reached[index])
     {
@@ -388,55 +540,102 @@ static void BuildLeaf(int index, const k_vec2_t *poly, int n)
     source = &subsectors[index];
     ss = &map.subsectors[index];
     ss->sector = SectorIndex(source->sector);
+    ss->first_cell = map.num_cells;
 
-    // Leaves with no usable floor need no polygon: some nodebuilders split
+    // Leaves with no usable floor need no cells: some nodebuilders split
     // along the same line twice, leaving a leaf with segs but no area, and
     // vertex rounding leaves hairline slivers along lines.
     if (HasNoArea(poly, n))
     {
         ss->no_area = 1;
-        StorePolygon(ss, poly, 0);
         PlaceAmongSegs(ss, source);
         return;
     }
 
-    work = malloc((n + 2 * source->numlines + 2) * sizeof(*work));
-    temp = malloc((n + 2 * source->numlines + 2) * sizeof(*temp));
-    memcpy(work, poly, n * sizeof(*poly));
-    count = ClipBySegs(source, work, temp, n, false);
+    capacity = 4;
+    pieces = malloc(capacity * sizeof(*pieces));
+    pieces[0].points = malloc(n * sizeof(*poly));
+    memcpy(pieces[0].points, poly, n * sizeof(*poly));
+    pieces[0].count = n;
+    count = 1;
 
-    // The segs left no usable floor. Find out which ones remove it:
-    //  - its one-sided walls: the leaf is solid space behind them, e.g.
-    //    inside a pillar. Nodebuilders leave these behind thin walls.
-    //    Harmless, no floor.
-    //  - a two-sided seg (buggy nodes): the floor lies on that seg's far
-    //    side, yet the engine puts it in this subsector. Keep the BSP
-    //    region minus what lies behind the walls.
-    if (HasNoArea(work, count))
+    min = max = poly[0];
+
+    for (i = 1; i < n; ++i)
     {
-        memcpy(work, poly, n * sizeof(*poly));
-        count = ClipBySegs(source, work, temp, n, true);
-
-        if (HasNoArea(work, count))
-        {
-            ss->behind_wall = 1;
-            count = 0;
-        }
-        else
-        {
-            ss->degenerate = 1;
-        }
+        ExtendBounds(&min, &max, &poly[i]);
     }
 
-    StorePolygon(ss, work, count);
-
-    if (count == 0)
+    // Split the region by every linedef passing through it, so that each
+    // piece lies within one sector or wholly in the void. The region's own
+    // segs are not enough: void is never visible, so nodebuilders give it
+    // to whichever leaf is convenient, walls or not. Most lines miss the
+    // region or only run along its edge.
+    for (i = 0; i < map.num_lines; ++i)
     {
+        const k_line_t *line = &map.lines[i];
+        k_vec2_t dir = { line->v2.x - line->v1.x, line->v2.y - line->v1.y };
+
+        if (SDL_max(line->v1.x, line->v2.x) < min.x
+         || SDL_min(line->v1.x, line->v2.x) > max.x
+         || SDL_max(line->v1.y, line->v2.y) < min.y
+         || SDL_min(line->v1.y, line->v2.y) > max.y
+         || !SegmentCrossesPolygon(line->v1, line->v2, poly, n))
+        {
+            continue;
+        }
+
+        count = SplitPieces(&pieces, &capacity, count, line->v1, dir);
+    }
+
+    // Keep the pieces that are floor. A piece the surrounding lines put in
+    // another sector (sector tricks, buggy nodes) still belongs to this
+    // subsector as far as the engine is concerned, so keep it, but note it.
+    for (i = 0; i < count; ++i)
+    {
+        k_vec2_t center;
+        int sector;
+
+        PolygonArea(pieces[i].points, pieces[i].count, &center);
+        sector = SectorAtPoint(center);
+
+        if (sector >= 0)
+        {
+            AddCell(index, pieces[i].points, pieces[i].count);
+            ss->foreign_floor |= sector != ss->sector;
+        }
+
+        free(pieces[i].points);
+    }
+
+    free(pieces);
+
+    ss->num_cells = map.num_cells - ss->first_cell;
+
+    // No floor at all: the whole region is solid space, e.g. inside a
+    // pillar. Nodebuilders leave these behind thin walls.
+    if (ss->num_cells == 0)
+    {
+        ss->behind_wall = 1;
         PlaceAmongSegs(ss, source);
+        return;
     }
 
-    free(work);
-    free(temp);
+    ss->area = 0.0;
+    ss->min = map.cells[ss->first_cell].min;
+    ss->max = map.cells[ss->first_cell].max;
+
+    for (i = ss->first_cell; i < map.num_cells; ++i)
+    {
+        ss->area += map.cells[i].area;
+        cx += map.cells[i].centroid.x * map.cells[i].area;
+        cy += map.cells[i].centroid.y * map.cells[i].area;
+        ExtendBounds(&ss->min, &ss->max, &map.cells[i].min);
+        ExtendBounds(&ss->min, &ss->max, &map.cells[i].max);
+    }
+
+    ss->centroid.x = cx / ss->area;
+    ss->centroid.y = cy / ss->area;
 }
 
 static void BuildNode(int child, const k_vec2_t *poly, int n)
@@ -484,7 +683,7 @@ static void BuildNode(int child, const k_vec2_t *poly, int n)
     free(back);
 }
 
-static void BuildSubsectors(void)
+static void BuildCells(void)
 {
     // Counter-clockwise, which every clipped polygon inherits.
     k_vec2_t box[4] =
@@ -498,6 +697,7 @@ static void BuildSubsectors(void)
     free(map.subsectors);
     map.subsectors = calloc(SDL_max(numsubsectors, 1), sizeof(*map.subsectors));
     map.num_subsectors = numsubsectors;
+    map.num_cells = 0;
     map.num_points = 0;
     map.num_nodes = numnodes;
 
@@ -514,19 +714,20 @@ static void BuildSubsectors(void)
     }
 }
 
-static void CheckSubsectors(void)
+static void CheckCells(void)
 {
     int i;
 
+    map.split_subsectors = 0;
     map.no_area_subsectors = 0;
     map.behind_wall_subsectors = 0;
-    map.degenerate_subsectors = 0;
+    map.foreign_floor_subsectors = 0;
     map.unreached_subsectors = 0;
     map.centroid_mismatches = 0;
 
     for (i = 0; i < map.num_subsectors; ++i)
     {
-        k_subsector_t *ss = &map.subsectors[i];
+        const k_subsector_t *ss = &map.subsectors[i];
 
         if (!reached[i])
         {
@@ -535,48 +736,38 @@ static void CheckSubsectors(void)
                 K_Log(K_LOG_MAP, K_LOG_WARN, "subsector %d is not reachable "
                       "through the BSP tree", i);
             }
-
-            continue;
         }
-
-        if (ss->no_area)
+        else if (ss->no_area)
         {
             ++map.no_area_subsectors;
-            continue;
         }
-
-        if (ss->behind_wall)
+        else if (ss->behind_wall)
         {
             ++map.behind_wall_subsectors;
-            continue;
         }
-
-        if (ss->degenerate)
+        else
         {
-            if (map.degenerate_subsectors++ < MAX_REPORTS)
-            {
-                K_Log(K_LOG_MAP, K_LOG_WARN, "subsector %d at (%.0f,%.0f): its "
-                      "floor lies behind one of its two-sided segs - using "
-                      "its BSP region", i, ss->centroid.x, ss->centroid.y);
-            }
+            map.split_subsectors += ss->num_cells > 1;
+            map.foreign_floor_subsectors += ss->foreign_floor;
         }
+    }
 
-        if (ss->num_points >= 3)
+    for (i = 0; i < map.num_cells; ++i)
+    {
+        k_cell_t *cell = &map.cells[i];
+        int found = (int) (R_PointInSubsector(MapToFixed(cell->centroid.x),
+                                              MapToFixed(cell->centroid.y))
+                           - subsectors);
+
+        if (found != cell->subsector)
         {
-            int found = (int) (R_PointInSubsector(MapToFixed(ss->centroid.x),
-                                                  MapToFixed(ss->centroid.y))
-                               - subsectors);
+            cell->centroid_mismatch = 1;
 
-            if (found != i)
+            if (map.centroid_mismatches++ < MAX_REPORTS)
             {
-                ss->centroid_mismatch = 1;
-
-                if (map.centroid_mismatches++ < MAX_REPORTS)
-                {
-                    K_Log(K_LOG_MAP, K_LOG_WARN, "subsector %d: centroid "
-                          "(%.0f,%.0f) lies in subsector %d", i,
-                          ss->centroid.x, ss->centroid.y, found);
-                }
+                K_Log(K_LOG_MAP, K_LOG_WARN, "cell of subsector %d: centroid "
+                      "(%.0f,%.0f) lies in subsector %d", cell->subsector,
+                      cell->centroid.x, cell->centroid.y, found);
             }
         }
     }
@@ -601,23 +792,23 @@ void K_Map_Build(void)
 
     map.num_sectors = numsectors;
     BuildLines();
-    BuildSubsectors();
-    CheckSubsectors();
+    BuildCells();
+    CheckCells();
 
     map.loaded = 1;
     ++map.generation;
     map.build_ms = (SDL_GetPerformanceCounter() - start) * 1000.0
                  / SDL_GetPerformanceFrequency();
 
-    problems = map.degenerate_subsectors + map.unreached_subsectors
-             + map.centroid_mismatches;
+    problems = map.unreached_subsectors + map.centroid_mismatches;
 
     K_Log(K_LOG_MAP, problems > 0 ? K_LOG_WARN : K_LOG_INFO,
           "%s: %d lines, %d sectors, %d subsectors (%d without area, %d behind "
-          "walls) - %d degenerate, %d unreached, %d centroid mismatches, "
-          "%.1f ms", map.name, map.num_lines, map.num_sectors,
-          map.num_subsectors, map.no_area_subsectors,
-          map.behind_wall_subsectors, map.degenerate_subsectors,
+          "walls, %d split, %d with other-sector floor) in %d cells - "
+          "%d unreached, %d centroid mismatches, %.1f ms", map.name,
+          map.num_lines, map.num_sectors, map.num_subsectors,
+          map.no_area_subsectors, map.behind_wall_subsectors,
+          map.split_subsectors, map.foreign_floor_subsectors, map.num_cells,
           map.unreached_subsectors, map.centroid_mismatches, map.build_ms);
 }
 
@@ -652,9 +843,10 @@ k_lineclass_t K_Map_LineClass(int index)
     return K_LINE_TWO_SIDED;
 }
 
-int K_Map_SubsectorAt(double x, double y)
+int K_Map_CellAt(double x, double y)
 {
-    int index;
+    const k_subsector_t *ss;
+    int index, i;
 
     if (!map.loaded || map.num_subsectors == 0)
     {
@@ -664,13 +856,29 @@ int K_Map_SubsectorAt(double x, double y)
     // The BSP walk always lands in some subsector, even from the void.
     index = (int) (R_PointInSubsector(MapToFixed(x), MapToFixed(y)) - subsectors);
 
-    if (index < 0 || index >= map.num_subsectors
-     || !PointInPolygon(&map.subsectors[index], x, y, INSIDE_TOLERANCE))
+    if (index < 0 || index >= map.num_subsectors)
     {
         return -1;
     }
 
-    return index;
+    ss = &map.subsectors[index];
+
+    for (i = ss->first_cell; i < ss->first_cell + ss->num_cells; ++i)
+    {
+        if (PointInCell(&map.cells[i], x, y, INSIDE_TOLERANCE))
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int K_Map_SubsectorAt(double x, double y)
+{
+    int cell = K_Map_CellAt(x, y);
+
+    return cell >= 0 ? map.cells[cell].subsector : -1;
 }
 
 void K_Map_SectorHeights(int sector, double *floor, double *ceiling)

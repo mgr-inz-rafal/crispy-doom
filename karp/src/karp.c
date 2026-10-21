@@ -13,6 +13,7 @@
 
 #include "karp.h"
 #include "k_console.h"
+#include "k_graph.h"
 #include "k_log.h"
 #include "k_map.h"
 #include "k_settings.h"
@@ -141,4 +142,5 @@ void K_LevelLoaded(void)
     }
 
     K_Map_Build();
+    K_Graph_Build();
 }

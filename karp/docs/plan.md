@@ -84,7 +84,8 @@ karp/
   src/
     karp.h / karp.c           engine-facing API (the only Karp header engine files include);
                               global state, gate, SDL event filter
-    k_map.h / k_map.c         map reader + subsector polygons + nav graph
+    k_map.h / k_map.c         map reader + floor cells (convex pieces of subsector floor)
+    k_graph.h / k_graph.c     navigation graph: portals, adjacency, live passability
     k_path.h / k_path.c       A* pathfinder
     k_nav.h / k_nav.c         path following, steering controller, stuck detection
     k_brain.h / k_brain.c     priority system
@@ -224,82 +225,117 @@ Output (`k_map_t`, plain C types):
 - `K_Map_GetPlayer()`: the local player's live position and facing (read-only).
 - `sectors[]`: index into engine `sectors[]`. Heights are read **live**: floors will move in later
   stages, and loading a savegame changes heights after `P_SetupLevel`.
-- `subsectors[]`: sector index, closed convex polygon, area-weighted centroid, bbox, edge list.
-- `portals[]` and a directed adjacency list (see below).
+- `cells[]`: convex pieces of floor, each with its subsector, polygon, area-weighted centroid and
+  bbox. These are the nodes of the navigation graph (see below).
+- `subsectors[]`: sector index, its range of cells, total floor area and centroid, and flags.
 - Map bounds for the console view.
 
-**Closed subsector polygons.** In vanilla, DeePBSP and XNOD nodes a subsector's segs only cover its
-linedef edges; edges along partition lines are missing, and nothing in the engine rebuilds them.
-One algorithm handles every node format:
+The navigation graph (portals, adjacency, passability) lives in its own module, `k_graph.c`
+(3.2.1).
+
+**Floor cells.** In vanilla nodes a subsector's segs only cover its linedef edges; edges along
+partition lines are missing, and nothing in the engine rebuilds them. One algorithm handles any
+node format:
 1. Start with the map bbox, padded, as a polygon.
 2. Recurse from the root node (`numnodes-1`). At each node, split the polygon by the partition line
    (`x, y, dx, dy`): the right side goes to `children[0]`, the left side to `children[1]`. This
    matches `R_PointOnSide`, which returns 0 for points right of `(dx,dy)`. Stop at
-   `children & NF_SUBSECTOR` (`0x80000000`).
-3. Clip the leaf polygon by each of the subsector's seg lines, keeping the right side of
-   `v1 -> v2`. Every format keeps the subsector on the right of its segs: side-1 segs are already
-   reversed, and XGL formats chain `v2` into a closed loop. This trims the void that partition
-   clipping leaves behind one-sided walls. Two-sided segs lie on partitions, so clipping by them
-   changes nothing. Skip zero-length segs.
-4. Compute area and centroid (shoelace). Use a small epsilon in clipping (~1/256 unit).
-5. A map with `numnodes == 0` (a single subsector) uses the bbox clipped by its segs.
+   `children & NF_SUBSECTOR` (`0x80000000`). The result is the leaf's **BSP region**.
+3. Split the region by **every linedef that passes through it** into convex pieces.
+4. Classify each piece by the sector at its centroid (see below). Floor pieces become cells; void
+   pieces are dropped.
+5. A map with `numnodes == 0` (a single subsector) uses the bbox as its region.
 
-**Leaves without floor.** Real nodebuilders leave BSP leaves that have segs but no usable floor.
-A polygon has "no usable floor" when its area is below 0.01 or its average width (area over half
-the perimeter) is under 1 map unit; nothing fits there, since the player is 32 units wide. Each
-leaf is classified:
-- **No area** (harmless, no polygon): the BSP region itself has no usable floor. These are leaves
+Why split by all lines through the region, and not just clip by the leaf's own segs (the first
+version, M3)? A subsector's **segs** are guaranteed convex, but its **floor** is not, and its
+region need not stop at its own walls:
+- a wall corner or stub inside the region leaves floor beside the wall, past the end of its line,
+  which clipping by that line's half-plane throws away;
+- void is never visible, so nodebuilders give it to whichever leaf is convenient, beyond walls
+  whose segs belong to other leaves; clipping by the leaf's own segs keeps that void as "floor".
+The M4 hole check (3.2.1) found both: holes of up to 1,000+ units of border.
+
+**Sector at a point** (`SectorAtPoint`): a ray from the point finds the first linedef it hits; the
+point is in that line's front sector if it is on the line's right, else its back sector, and in
+void if that is a one-sided line seen from behind (or nothing is hit). Three rays at
+non-axis-aligned angles vote. An even-odd test over sector outlines was tried first, but vanilla
+maps have unclosed sector outlines that flip its parity and drop real floor; the ray test is local,
+so a gap somewhere else in an outline cannot fool it.
+
+**Leaves without floor.** A polygon has "no usable floor" when its area is below 0.01 or its
+average width (area over half the perimeter) is under 1 map unit; nothing fits there, since the
+player is 32 units wide. Each leaf is classified:
+- **No area** (harmless, no cells): the BSP region itself has no usable floor. These are leaves
   from splitting twice along the same line, and hairline slivers from vertex rounding.
-- **Behind walls** (harmless, no polygon): the region has floor, but the leaf's one-sided segs
-  alone remove all of it. The leaf is solid space inside a pillar or behind a thin wall.
-- **Degenerate** (warning): the floor lies behind one of the leaf's *two-sided* segs (buggy
-  nodes). The engine still assigns that floor to this subsector, so the polygon is the BSP region
-  clipped by the one-sided segs only, which keeps the void out.
+- **Behind walls** (harmless, no cells): every piece of the region is void, e.g. inside a pillar.
+- **Split** (informational): the floor is not convex and needs several cells.
+- **Other-sector floor** (informational): some piece lies, by the surrounding lines, in a
+  different sector than the leaf's (sector tricks, buggy nodes). The engine uses the leaf's sector
+  for floor height there, so the graph does too.
 
-Measured on 100 maps (Doom, Doom II, Plutonia; ~54,000 subsectors): 2,129 leaves have no area,
-229 are behind walls, and Plutonia MAP08 has 2 degenerate subsectors. All 100 maps have 0
-unreached subsectors and 0 centroid mismatches. Builds take under 1 ms per map. Maps with
-extended node formats (DeePBSP, XNOD, XGL) are not tested yet: no local WAD uses them.
-
-**Portals and adjacency.** Two subsectors are neighbours where their polygon edges are collinear
-(tolerance 0.5-1 unit, because vanilla split vertices are rounded to whole units), opposite in
-direction, and overlap by at least 1 unit. Edges are bucketed in a uniform 128-unit grid so large
-maps stay fast. Each overlap becomes a portal segment, which path smoothing will need later. If the
-portal lies on one of the subsector's segs that has a linedef, the portal records that linedef;
-otherwise it is a miniseg (same sector, always open). One-sided walls never produce portals,
-because the void behind them was clipped away.
-
-**Passability** of a directed edge A -> B is evaluated **live** at search time. It is cheap, and it
-makes doors and lifts work naturally in later stages. It mirrors `P_TryMove`/`PIT_CheckLine`
-(`src/doom/p_map.c:212-285, 564-631`):
-- blocked if the crossed linedef has `ML_BLOCKING`;
-- blocked if `floor(B) - floor(A) > 24` (step-up). This is directional: dropping down is always
-  fine, because players have `MF_DROPOFF`;
-- blocked if `min(ceil A, ceil B) - max(floor A, floor B) < 56` or `ceil(B) - floor(B) < 56`.
+Measured on 100 maps (Doom, Doom II, Plutonia; ~54,000 subsectors, ~52,000 cells): 0 unreached
+subsectors and 0 centroid mismatches on every map; under 60 subsectors are split. Builds take
+1-70 ms per map (the ray test checks every linedef; a line grid can cut this if ever needed).
+Extended node formats and UDMF are out of scope (the user's decision): maps can always be rebuilt
+with a better nodebuilder if needed.
 
 **Load-time sanity checks** (shown in the console's Map tab and logged): leaves without area,
-leaves behind walls, degenerate subsectors, subsectors not reachable through the BSP tree,
-`R_PointInSubsector(centroid) != ss` mismatches, build time in ms; from M4 also portal count and
-isolated subsectors. The first few problems of each kind are logged individually with their
-location.
+behind walls, split, with other-sector floor; subsectors not reachable through the BSP tree; cells
+whose centroid `R_PointInSubsector` places in another subsector; build time. The first few
+problems of each kind are logged individually with their location.
 
-`K_Map_SubsectorAt(x, y)` finds a point's subsector via `R_PointInSubsector` (a pure lookup),
-then returns -1 if the point lies outside that subsector's polygon (more than 1 unit away), i.e.
-in the void. The console's hover info and click validation use it.
+`K_Map_CellAt(x, y)` finds a point's subsector via `R_PointInSubsector` (a pure lookup), then the
+cell of that subsector containing the point (within 1 unit), or -1 when the point is in the void.
+`K_Map_SubsectorAt` wraps it. The console's hover info and click validation use them.
+
+#### 3.2.1 `k_graph.c` - navigation graph
+
+**Portals.** Two cells are neighbours where their edges lie on the same line, run in opposite
+directions (all cells are counter-clockwise) and overlap by at least 1 unit; each overlap is a
+portal segment, which path smoothing will need later. Vanilla nodebuilders round split vertices
+to whole units, so a seg (and an edge built from it) can sit at a very slightly different angle
+from its linedef. So only the **shared stretch** has to lie on both lines: within 1 unit at its
+middle and 2 units at its ends. Requiring the whole of a long line to be within tolerance failed
+on long lines; a thin wall still never matches, as it is off by its full thickness everywhere.
+Edges and linedefs are bucketed in a uniform 128-unit grid. Each portal records the two-sided
+linedef it runs along, or -1 when both cells are in the same sector.
+
+**Passability** of a portal, leaving a given cell, is evaluated **live** (`K_Graph_CanCross`). It
+is cheap, and it makes doors and lifts work naturally in later stages. It mirrors
+`P_TryMove`/`PIT_CheckLine` (`src/doom/p_map.c:212-285, 564-631`), with the sector of each cell's
+subsector:
+- blocked if the crossed linedef is one-sided (a map error) or has `ML_BLOCKING`;
+- blocked if `floor(B) - floor(A) > 24` (step-up). This is directional: dropping down is always
+  fine, because players have `MF_DROPOFF`;
+- blocked if `min(ceil A, ceil B) - max(floor A, floor B) < 56` or `ceil(B) - floor(B) < 56`
+  (closed doors).
+
+**Hole check.** Every stretch of every cell's border should border a neighbour (a portal) or lie
+along a one-sided wall. A stretch that does neither, is at least 4 units long and more than 2 units
+from any wall is a **hole** in the navigation mesh (shorter gaps are rounding at corners, gaps
+along a wall are hairline slivers of void). The graph also counts isolated cells and connected
+components (groups joined by portals, open or not; areas reached only by teleporter form their own
+groups).
+
+Measured on the same 100 maps: ~100,000 portals; **41 holes left in total** (from ~1,600 in the
+first version), most of them under 30 units: sectors with broken outlines that both tests read as
+void, narrow strips, and a few neighbouring cells whose edges did not match. Graph builds take
+under 6 ms per map. E1M1: 427 portals, 0 holes, one component.
 
 ### 3.3 `k_path.c` - pathfinder
 
-- A* over subsectors. Start = the subsector containing the player; goal = the subsector containing
-  the clicked point.
+- A* over floor cells. Start = the cell containing the player; goal = the cell containing the
+  clicked point (both via `K_Map_CellAt`).
 - Edge cost = `|centroid(A) - portal_mid| + |portal_mid - centroid(B)|`. The heuristic is the
   straight-line distance between centroids, which is admissible by the triangle inequality.
-- Binary-heap open set; per-node arrays sized to `numsubsectors`, reset with a generation counter.
+- Binary-heap open set; per-node arrays sized to the number of cells, reset with a generation
+  counter.
 - Output waypoints: `portal_mid(1), centroid(2), portal_mid(2), ..., portal_mid(k), goal_point`.
   This keeps the barycenter-to-barycenter idea, but adds the portal midpoint between each pair.
-  Every leg then stays inside one convex subsector, so no leg can cut through a wall corner.
+  Every leg then stays inside one convex cell, so no leg can cut through a wall corner.
   (Without the midpoints, the straight line between the centroids of two adjacent cells can leave
   both cells.)
-- Also returns the list of path subsectors, used for progress tracking.
+- Also returns the list of path cells, used for progress tracking.
 - An unreachable goal returns `K_PATH_NONE`; the priority is marked FAILED with a reason in the log.
 - Later: funnel/string-pulling over the portal list, with portals shrunk by the player radius, for
   smooth runs.
@@ -313,10 +349,10 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
 - there is no thrust while airborne.
 
 **Think - `K_Nav_Tick()`, from `K_Ticker` (once per game tic):**
-- **Progress:** find the player's current subsector in the path list and move the waypoint cursor
+- **Progress:** find the player's current cell in the path list and move the waypoint cursor
   there. This handles overshoot and corner cutting. Also advance when within 32 units of an
   intermediate waypoint.
-- **Off-path:** if the current subsector is not on the path (fell off a ledge, got pushed), replan
+- **Off-path:** if the current cell is not on the path (fell off a ledge, got pushed), replan
   from the current position.
 - **Stuck:** if the player moved < 8 units over the last 35 tics while a goal is active, replan.
   After 3 replans in a row without progress, mark the priority FAILED.
@@ -454,14 +490,16 @@ the config; Karp simply ignores it while it owns the controls.
   - Map coordinates under the cursor, shown in the bottom-left corner.
   - Walls colored like the automap (`am_map.c:1736-1859`): one-sided red, floor-height change
     brown, ceiling-height change yellow, plain two-sided dim gray (toggle).
-  - Overlays (checkboxes): subsector polygons (hashed fill colors), centroids, nav graph (green
-    open, red blocked), and the path polyline with the current waypoint highlighted.
+  - Overlays (checkboxes): floor cells (filled, coloured by subsector), centroids (red where the
+    engine disagrees), the navigation graph (portals and links: green open both ways, yellow one
+    way with an arrow, red blocked), and the path polyline with the current waypoint highlighted.
   - Player arrow (live position and heading) and goal marker.
-  - Hover tooltip: subsector #, sector #, floor/ceiling, neighbour count.
+  - Hover tooltip: subsector # (and which of its cells), sector #, live floor/ceiling, area,
+    neighbours by crossing ("4 neighbours: 3 open, 1 step too high").
   - **Left click -> `K_Brain_RequestGoto(x, y)`.**
 - **Side tabs:**
   - `Priorities`: active priority, status, history, Cancel button.
-  - `Bot`: position, speed, current subsector, path length, waypoint index, controller tunables.
+  - `Bot`: position, speed, current cell, path length, waypoint index, controller tunables.
   - `Map`: load stats and sanity-check results.
 - **Rolling log pane** (bottom, always visible; data from 3.8):
   - newest lines at the bottom; auto-scrolls unless the user has scrolled up (then shows a
