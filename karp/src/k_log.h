@@ -69,6 +69,9 @@ int K_Log_CategoryEnabled(k_logcat_t category);
 
 const char *K_Log_CategoryName(k_logcat_t category);
 
+// Level time as "mm:ss.t".
+void K_Log_FormatTime(int leveltime, char *buf, int buf_len);
+
 // Writes a pending repeat count and closes karp.log. Run via I_AtExit.
 void K_Log_Shutdown(void);
 

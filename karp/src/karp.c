@@ -1,16 +1,24 @@
 //
 // DESCRIPTION:
-//	Karp glue: the -autoplay / -karpconsole switches and lifecycle.
+//	Karp glue: the -autoplay / -karpconsole switches, lifecycle and the
+//	SDL event filter that gives the console its own events.
 //
 
+#include "SDL.h"
+
+#include "d_event.h"
 #include "i_system.h"
+#include "i_video.h"
 #include "m_argv.h"
 
 #include "karp.h"
+#include "k_console.h"
 #include "k_log.h"
+#include "k_settings.h"
 
 static boolean autoplay_enabled;
 static boolean console_enabled;
+static boolean console_open;
 
 // Shared by both switches; safe to call more than once.
 static void InitKarp(void)
@@ -49,4 +57,75 @@ void K_EnableConsole(void)
     console_enabled = true;
 
     K_Log(K_LOG_SYS, K_LOG_INFO, "console enabled");
+}
+
+boolean K_AutoplayEnabled(void)
+{
+    return autoplay_enabled;
+}
+
+// Installed only while the console exists.
+static boolean EventFilter(SDL_Event *event)
+{
+    event_t quit;
+
+    if (K_Console_HandleEvent(event))
+    {
+        return true;
+    }
+
+    // With two windows SDL sends SDL_QUIT only once the last one closes,
+    // and the hidden console still counts. Without this the game's close
+    // button would do nothing; with it, the usual quit prompt appears.
+    if (event->type == SDL_WINDOWEVENT
+     && event->window.event == SDL_WINDOWEVENT_CLOSE
+     && event->window.windowID == SDL_GetWindowID(I_GetWindow()))
+    {
+        quit.type = ev_quit;
+        D_PostEvent(&quit);
+    }
+
+    return false;
+}
+
+static void ShutdownKarp(void)
+{
+    if (console_open)
+    {
+        I_SetEventFilter(NULL);
+        K_Console_Close();
+        console_open = false;
+    }
+
+    K_Settings_SaveIfDirty();
+}
+
+void K_PostVideoInit(void)
+{
+    if (!autoplay_enabled && !console_enabled)
+    {
+        return;
+    }
+
+    if (console_enabled)
+    {
+        console_open = K_Console_Open(I_GetWindow());
+
+        if (console_open)
+        {
+            I_SetEventFilter(EventFilter);
+        }
+    }
+
+    // Registered after I_InitGraphics, so it runs before I_ShutdownGraphics
+    // destroys every remaining SDL window.
+    I_AtExit(ShutdownKarp, true);
+}
+
+void K_Frame(void)
+{
+    if (console_open)
+    {
+        K_Console_Frame();
+    }
 }

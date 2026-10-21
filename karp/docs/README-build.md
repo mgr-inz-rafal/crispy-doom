@@ -33,7 +33,8 @@ run in place.
 - **build crispy-doom (Debug)** - Debug build with symbols, in `build/src/Debug/`
 - **configure crispy-doom** - re-run CMake by hand (safe any time)
 - **rebuild crispy-doom (clean)** - delete `build/`, then run a build task
-- **run crispy-doom** - build, then launch Doom with the `DOOM_IWAD` IWAD
+- **run crispy-doom** - build, then launch Doom with the `DOOM_IWAD` IWAD and the
+  Karp Console open (`-karpconsole`)
 - **run crispy-setup** - build, then launch the config tool
 
 The two build tasks and **run crispy-doom** are all in the build group, so
@@ -52,7 +53,7 @@ So the run tasks launch the game **detached**:
 
 ```jsonc
 "command": "cmd.exe",
-"args": [ "/c", "start", "Crispy Doom", "...\\crispy-doom.exe", "-iwad", "${env:DOOM_IWAD}" ]
+"args": [ "/c", "start", "Crispy Doom", "...\\crispy-doom.exe", "-iwad", "${env:DOOM_IWAD}", "-karpconsole" ]
 ```
 
 `cmd` returns in milliseconds, so the task genuinely finishes, the terminal

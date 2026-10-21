@@ -547,6 +547,7 @@ void D_RunFrame()
         I_UpdateNoBlit ();
         M_Drawer ();                            // menu is drawn even on top of wipes
         I_FinishUpdate ();                      // page flip or blit buffer
+        K_Frame(); // [Karp] keep the console alive during screen melts
         return;
     }
 
@@ -584,6 +585,8 @@ void D_RunFrame()
 		crispy->post_rendering_hook();
 		crispy->post_rendering_hook = NULL;
 	}
+
+    K_Frame(); // [Karp]
 }
 
 //
@@ -611,6 +614,7 @@ void D_DoomLoop (void)
     I_SetGrabMouseCallback(D_GrabMouseCallback);
     I_RegisterWindowIcon(doom_icon_data, doom_icon_w, doom_icon_h);
     I_InitGraphics();
+    K_PostVideoInit(); // [Karp]
     EnableLoadingDisk();
 
     TryRunTics();

@@ -49,6 +49,12 @@ extern int SCREENHEIGHT_4_3;
 
 typedef boolean (*grabmouse_callback_t)(void);
 
+// [Karp] Returns true for events it consumed. Forward declarations, as
+// this header does not include SDL.h.
+union SDL_Event;
+struct SDL_Window;
+typedef boolean (*sdl_event_filter_t)(union SDL_Event *event);
+
 // Called by D_DoomMain,
 // determines the hardware configuration
 // and sets up the video mode
@@ -83,6 +89,8 @@ void I_SetWindowTitle(const char *title);
 
 void I_CheckIsScreensaver(void);
 void I_SetGrabMouseCallback(grabmouse_callback_t func);
+void I_SetEventFilter(sdl_event_filter_t func); // [Karp]
+struct SDL_Window *I_GetWindow(void); // [Karp]
 
 void I_DisplayFPSDots(boolean dots_on);
 void I_BindVideoVariables(void);

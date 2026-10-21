@@ -9,10 +9,20 @@
 #ifndef __KARP__
 #define __KARP__
 
+#include "doomtype.h"
+
 // -autoplay: the bot drives the player.
 void K_EnableAutoplay(void);
 
 // -karpconsole: open the Karp Console window.
 void K_EnableConsole(void);
+
+// Right after I_InitGraphics: opens the console.
+void K_PostVideoInit(void);
+
+// Once per rendered frame: redraws the console (rate-limited).
+void K_Frame(void);
+
+boolean K_AutoplayEnabled(void);
 
 #endif

@@ -208,6 +208,11 @@ static boolean noblit;
 
 static grabmouse_callback_t grabmouse_callback = NULL;
 
+// [Karp] Gets first look at every SDL event, so a second window (the Karp
+// Console) can take the events that belong to it.
+
+static sdl_event_filter_t sdl_event_filter = NULL;
+
 // Does the window currently have focus?
 
 static boolean window_focused = true;
@@ -274,6 +279,18 @@ static boolean MouseShouldBeGrabbed()
 void I_SetGrabMouseCallback(grabmouse_callback_t func)
 {
     grabmouse_callback = func;
+}
+
+// [Karp]
+void I_SetEventFilter(sdl_event_filter_t func)
+{
+    sdl_event_filter = func;
+}
+
+// [Karp]
+SDL_Window *I_GetWindow(void)
+{
+    return screen;
 }
 
 // Set the variable controlling FPS dots.
@@ -473,6 +490,12 @@ void I_GetEvent(void)
 
     while (SDL_PollEvent(&sdlevent))
     {
+        // [Karp] events consumed by the filter never reach the game
+        if (sdl_event_filter != NULL && sdl_event_filter(&sdlevent))
+        {
+            continue;
+        }
+
         switch (sdlevent.type)
         {
             case SDL_KEYDOWN:

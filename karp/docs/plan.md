@@ -201,8 +201,6 @@ redesign.
 - **Event filter** (only installed with `-karpconsole`; called for every SDL event in `I_GetEvent`):
   - any event whose `windowID` is the console's: feed `ImGui_ImplSDL2_ProcessEvent`, consume.
     Keyboard events carry the focused window's ID, so keys typed in the console never reach the game;
-  - `SDL_WINDOWEVENT_MOVED`, `SIZE_CHANGED`, `MAXIMIZED`, `RESTORED` on the console: update the
-    remembered placement (3.7), then pass the event to ImGui as above;
   - `SDL_WINDOWEVENT_CLOSE` on the console: hide the window (never destroy it), consume;
   - `SDL_WINDOWEVENT_CLOSE` on the game window: post `ev_quit` with `D_PostEvent`, do not consume.
     With two windows SDL only sends `SDL_QUIT` when the last window closes, and a hidden window
@@ -383,15 +381,19 @@ the config; Karp simply ignores it while it owns the controls.
      maximized, call `SDL_MaximizeWindow` after showing it, which maximizes it on that monitor.
   2. **Default** (first run or unusable saved rect): if the game is windowed and there is room to
      its right on the same display (game window via `I_GetWindow()`, display usable bounds), open
-     there; otherwise open centred on that display.
+     there; otherwise open centred on that display. The default (960x720) and minimum (480x360)
+     sizes are multiplied by the display's scale factor, so the console looks the same size at
+     150% scaling as at 100%.
 
   A fullscreen game may cover the console. The user then switches to windowed mode (Alt+Enter),
   Alt+Tabs to the console, or drags it to another display, where it will reopen next time.
-- **Remembering placement:** on console `MOVED`/`SIZE_CHANGED`, store the rect, but only while the
-  window is not maximized, so the restored size is the normal one. On `MAXIMIZED`/`RESTORED`,
-  store the flag. Each change marks the settings dirty. `K_Frame` writes `karp.cfg` once the
-  window has been still for 1 second, so a crash or a killed process still keeps the last
-  placement; `K_Shutdown` writes any remaining change. Hiding the console keeps the last rect.
+- **Remembering placement:** polled every console frame rather than driven by window events.
+  While a window is being maximized SDL can report the new size before the maximized flag, but
+  between event pumps the two always agree. The rect is stored only while the window is not
+  maximized, so the restored size is the normal one; the maximized flag is stored separately.
+  Each change marks the settings dirty. `K_Frame` writes `karp.cfg` once the window has been
+  still for 1 second, so a crash or a killed process still keeps the last placement;
+  `K_Shutdown` writes any remaining change. Hiding the console keeps the last rect.
 - **ImGui setup:**
   - backends `imgui_impl_sdl2` + `imgui_impl_sdlrenderer2`;
   - `io.IniFilename = NULL`;
@@ -482,8 +484,9 @@ Later stages will write their decisions into the same stream, e.g. "looking for 
   console_h          720
   console_maximized  0
   ```
-- API: `K_Settings_Load()`, `K_Settings_GetInt(key, default)`, `K_Settings_SetInt(key, value)`
-  (marks the file dirty only if the value actually changed), `K_Settings_SaveIfDirty()`.
+- API: `K_Settings_GetInt(key, default)`, `K_Settings_SetInt(key, value)` (marks the file dirty
+  and returns non-zero only if the value actually changed), `K_Settings_SaveIfDirty()`. The file
+  is loaded on first use, so nothing can overwrite it before it has been read.
 - Writes go to `karp.cfg.tmp`, then replace `karp.cfg`, so a crash mid-write cannot corrupt it.
 - Later console preferences (log pane height, overlay toggles, category filters) go in the same
   file.

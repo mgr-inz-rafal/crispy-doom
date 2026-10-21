@@ -86,11 +86,10 @@ static void OpenLogFile(void)
 static void WriteToSinks(const k_logentry_t *entry, const char *text)
 {
     char line[K_LOG_LINE_LEN + 64];
-    int tics = entry->leveltime;
+    char time[16];
 
-    M_snprintf(line, sizeof(line), "%02d:%02d.%d %-5s %s%s",
-               tics / (60 * TICRATE), (tics / TICRATE) % 60,
-               (tics % TICRATE) * 10 / TICRATE,
+    K_Log_FormatTime(entry->leveltime, time, sizeof(time));
+    M_snprintf(line, sizeof(line), "%s %-5s %s%s", time,
                category_names[entry->category],
                level_prefixes[entry->level], text);
 
@@ -207,6 +206,12 @@ int K_Log_CategoryEnabled(k_logcat_t category)
 const char *K_Log_CategoryName(k_logcat_t category)
 {
     return category_names[category];
+}
+
+void K_Log_FormatTime(int tics, char *buf, int buf_len)
+{
+    M_snprintf(buf, buf_len, "%02d:%02d.%d", tics / (60 * TICRATE),
+               (tics / TICRATE) % 60, (tics % TICRATE) * 10 / TICRATE);
 }
 
 void K_Log_Shutdown(void)
