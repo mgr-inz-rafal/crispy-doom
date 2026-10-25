@@ -747,3 +747,14 @@ Monsters and combat; doors, lifts, switches and keys (the graph keeps sector ref
 evaluates passability live, which is the foundation for these); item priorities (medkits, ammo);
 path smoothing with player radius (beyond the M6 follow-ups); damaging-floor costs; lifting the
 netgame guard; Heretic/Hexen.
+
+### 6.1 Ideas for a late stage
+
+- **Navigation checkpoints (TODO).** Spend time at map load precomputing "checkpoints": points
+  that help the bot find its way through complex maps. Routes between them are tested and
+  confirmed in advance (how is open; for example by simulating the movement, or by remembering
+  legs that worked in play). When the bot plans a route, it checks for checkpoints that could
+  guide it and **tries** to go through them, but they are never obligatory. The aim is not to save
+  processing power (there is plenty) but better routes: from here to there it can be better to
+  pass four confirmed checkpoints than to take a shorter route through a complex maze, along
+  narrow ledges or past awkward obstacles.
