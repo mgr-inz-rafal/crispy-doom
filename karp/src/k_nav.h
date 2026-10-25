@@ -103,6 +103,10 @@ int K_Nav_LineGoalPoint(int line, k_goalkind_t kind, double *x, double *y);
 // the player over the line.
 int K_Nav_SetLineGoal(int line, k_goalkind_t kind);
 
+// Drops the goal: the player stands still (e.g. while a door it opened
+// with a switch rises).
+void K_Nav_Clear(void);
+
 // The route to the current goal, or NULL when there is no goal.
 const k_path_t *K_Nav_GetPath(void);
 

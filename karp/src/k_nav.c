@@ -525,7 +525,7 @@ static boolean UseReaches(const body_t *body, const k_command_t *command)
     t = ((action.a.x - body->x) * ey - (action.a.y - body->y) * ex) / denominator;
     u = ((action.a.x - body->x) * dy - (action.a.y - body->y) * dx) / denominator;
 
-    return t > 0.0 && t <= USE_REACH && u > 0.05 && u < 0.95;
+    return t > 0.0 && t <= USE_REACH && u > 0.02 && u < 0.98;
 }
 
 // Pressing use on a door that is opening (or open) closes it, and on a
@@ -678,6 +678,26 @@ static void StartAction(k_crossing_t crossing, int r)
     action.line = portal->line;
     action.a = portal->a;
     action.b = portal->b;
+
+    // The whole line, not just the portal: a doorway can be split into
+    // several portals, and standing in front of one at its edge can put
+    // the spot closer to the side wall than the player's radius. Doors and
+    // lifts sit centred, so in front of the line's middle is clear.
+    if (portal->line >= 0)
+    {
+        const k_line_t *line = &map->lines[portal->line];
+        k_vec2_t centre = { (line->v1.x + line->v2.x) * 0.5,
+                            (line->v1.y + line->v2.y) * 0.5 };
+
+        if (K_Map_CellAt(centre.x + nx * ACTION_DISTANCE,
+                         centre.y + ny * ACTION_DISTANCE) >= 0)
+        {
+            action.a = line->v1;
+            action.b = line->v2;
+            middle = centre;
+        }
+    }
+
     action.spot.x = middle.x + nx * ACTION_DISTANCE;
     action.spot.y = middle.y + ny * ACTION_DISTANCE;
     action.face = atan2(-ny, -nx);
@@ -1259,6 +1279,15 @@ int K_Nav_SetLineGoal(int line, k_goalkind_t kind)
     }
 
     return StartGoal(x, y, kind, line);
+}
+
+void K_Nav_Clear(void)
+{
+    have_goal = false;
+    memset(&status, 0, sizeof(status));
+    status.state = K_NAV_IDLE;
+    status.goal_line = -1;
+    EndAction();
 }
 
 const k_path_t *K_Nav_GetPath(void)

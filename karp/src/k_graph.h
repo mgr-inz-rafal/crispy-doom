@@ -43,6 +43,8 @@ typedef enum
                             // e.g. a closed door that cannot be opened
                             // from this side, or not high enough
     K_CROSS_LOCKED,         // a door that needs a key the player lacks
+    K_CROSS_NARROW,         // a gap narrower than the player, e.g. between
+                            // bars or raised blocks
 
     // Passable after an action:
     K_CROSS_DOOR,           // a closed door the player can open: use its
@@ -93,6 +95,11 @@ const k_graph_t *K_Graph_Get(void);
 // Whether the player can cross the portal when leaving the given cell.
 k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 
+// Where to cross the portal: as clear of walls and other obstacles as the
+// portal allows (enough not to clip a wall corner), otherwise as near its
+// middle as possible.
+k_vec2_t K_Graph_PortalPoint(int portal, int from_cell);
+
 // Open, or passable after an action (a door, a lift).
 int K_Graph_Passable(k_crossing_t crossing);
 
@@ -102,7 +109,15 @@ double K_Graph_CrossingWait(int portal, int from_cell);
 
 const char *K_Graph_CrossingName(k_crossing_t crossing);
 
-// The key a locked door needs ("blue", "yellow", "red"), or NULL.
+// The key a locked door needs (a k_key_t), or -1.
+int K_Graph_LockKey(int portal);
+
+// K_CROSS_NARROW: the sectors that make the gap narrow (the far side of
+// two-sided lines the player cannot get past, e.g. raised bars), up to max.
+// Returns how many.
+int K_Graph_NarrowSectors(int portal, int from_cell, int *sectors, int max);
+
+// Its name ("blue", "yellow", "red"), or NULL.
 const char *K_Graph_LockName(int portal);
 
 k_mover_t K_Graph_SectorMover(int sector);

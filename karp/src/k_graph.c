@@ -24,6 +24,7 @@
 
 #include "k_graph.h"
 #include "k_log.h"
+#include "k_specials.h"
 
 // Vanilla nodebuilders round split vertices to whole map units, so the
 // edges two neighbours share do not line up exactly: they can be off by
@@ -57,6 +58,21 @@
 
 // Tics to stop in front of a line, face it and press use.
 #define ACTION_OVERHEAD 35.0
+
+// A crossing is a way through only if some point on it is this far from
+// anything that stops the player: its radius (16), plus a unit. A gap
+// exactly as wide as the player (32) needs the player lined up to the
+// fraction of a unit (Doom II MAP02 has one): too hard, so 34 is the least.
+#define CLEARANCE 17.0
+#define CLEARANCE_SAMPLES 9
+#define MAX_NEAR_LINES 256
+
+// Where a route crosses a portal: this far from anything that stops the
+// player where the portal allows (more than its radius, so it does not
+// clip wall corners), and otherwise as near the middle as it can be.
+#define WAYPOINT_CLEARANCE 24.0
+#define WAYPOINT_STEP 4.0
+#define MAX_WAYPOINT_SAMPLES 64
 
 // Per kind of problem, only this many are logged individually.
 #define MAX_REPORTS 5
@@ -94,7 +110,7 @@ static int *cell_items;
 static const char *crossing_names[K_NUM_CROSSINGS] =
 {
     "open", "wall", "blocking line", "step too high", "no headroom",
-    "locked door", "door", "lift", "lift ride",
+    "locked door", "too narrow", "door", "lift", "lift ride",
 };
 
 // Per sector: opened by a manual door line (it is the line's back
@@ -709,41 +725,6 @@ static boolean IsLiftLine(int special)
         || special == 120 || special == 121 || special == 53 || special == 87;
 }
 
-static const char *LockOf(int special)
-{
-    switch (special)
-    {
-        case 26: case 32:
-            return "blue";
-
-        case 27: case 34:
-            return "yellow";
-
-        case 28: case 33:
-            return "red";
-
-        default:
-            return NULL;
-    }
-}
-
-static boolean HasKey(const char *lock)
-{
-    const player_t *player = &players[consoleplayer];
-
-    switch (lock[0])
-    {
-        case 'b':
-            return player->cards[it_bluecard] || player->cards[it_blueskull];
-
-        case 'y':
-            return player->cards[it_yellowcard] || player->cards[it_yellowskull];
-
-        default:
-            return player->cards[it_redcard] || player->cards[it_redskull];
-    }
-}
-
 // From the specials at level load: the kind of a sector does not change
 // when a one-shot line loses its special.
 static void FindMoverSectors(const k_map_t *map)
@@ -872,10 +853,155 @@ static boolean Headroom(fixed_t floor_a, fixed_t ceiling_a,
         && ceiling_b - floor_b >= PLAYER_HEIGHT;
 }
 
+//
+// Clearance
+//
+
+// Whether a line stops a player standing on the given floor under the
+// given ceiling from overlapping it (PIT_CheckLine): a wall, an impassable
+// line, or a two-sided line with a side too high to step onto or too low
+// to fit under. A drop is no obstacle: the player can hang over it.
+// Manual doors count as open: the player opens any it gets to (else a
+// closed door's faces would narrow every crossing near a doorway, its own
+// included).
+static boolean Obstacle(int index, fixed_t floor, fixed_t ceiling)
+{
+    const line_t *line = &lines[index];
+    int side;
+
+    if (line->backsector == NULL || (line->flags & ML_BLOCKING))
+    {
+        return true;
+    }
+
+    for (side = 0; side < 2; ++side)
+    {
+        sector_t *sector = side ? line->backsector : line->frontsector;
+        int number = (int) (sector - sectors);
+        fixed_t top = sector->ceilingheight;
+
+        if (door_sectors[number])
+        {
+            top = SDL_max(top, DoorTop(sector));
+        }
+
+        if (sector->floorheight - floor > MAX_STEP_UP
+         || !Headroom(floor, ceiling, sector->floorheight, top))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The line the portal itself runs along is the crossing, not beside it:
+// it lies on the portal's line and overlaps it.
+static boolean AlongPortal(const k_line_t *line, const k_portal_t *portal)
+{
+    k_vec2_t dir = Sub(portal->b, portal->a);
+    double length = Length(dir);
+    double t1, t2;
+
+    dir.x /= length;
+    dir.y /= length;
+
+    if (fabs(dir.x * (line->v1.y - portal->a.y) - dir.y * (line->v1.x - portal->a.x)) > 1.0
+     || fabs(dir.x * (line->v2.y - portal->a.y) - dir.y * (line->v2.x - portal->a.x)) > 1.0)
+    {
+        return false;
+    }
+
+    t1 = Dot(dir, Sub(line->v1, portal->a));
+    t2 = Dot(dir, Sub(line->v2, portal->a));
+    return SDL_min(length, SDL_max(t1, t2)) - SDL_max(0.0, SDL_min(t1, t2)) > 1.0;
+}
+
+// The obstacle lines within reach of a portal, for a player on the given
+// floor and ceiling.
+static int NearObstacles(const k_portal_t *portal, fixed_t floor, fixed_t ceiling,
+                         double reach, int *found, int max)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t min = { SDL_min(portal->a.x, portal->b.x) - reach - 1.0,
+                     SDL_min(portal->a.y, portal->b.y) - reach - 1.0 };
+    k_vec2_t max_ = { SDL_max(portal->a.x, portal->b.x) + reach + 1.0,
+                      SDL_max(portal->a.y, portal->b.y) + reach + 1.0 };
+    int x, y, x0, y0, x1, y1, k, i;
+    int count = 0;
+    CellRange(min, max_, &x0, &y0, &x1, &y1);
+
+    for (y = y0; y <= y1; ++y)
+    {
+        for (x = x0; x <= x1; ++x)
+        {
+            int cell = y * grid_width + x;
+
+            for (k = cell_first[cell]; k < cell_first[cell + 1]; ++k)
+            {
+                int line = cell_items[k] - num_edges;
+
+                if (line < 0)
+                {
+                    continue;
+                }
+
+                // A line spanning several grid cells comes up more than once.
+                for (i = 0; i < count && found[i] != line; ++i)
+                {
+                }
+
+                if (i < count || count >= max
+                 || AlongPortal(&map->lines[line], portal)
+                 || !Obstacle(line, floor, ceiling))
+                {
+                    continue;
+                }
+
+                found[count++] = line;
+            }
+        }
+    }
+
+    return count;
+}
+
+// Whether no point on the portal is CLEARANCE away from every obstacle.
+static boolean Narrow(const k_portal_t *portal, fixed_t floor, fixed_t ceiling)
+{
+    const k_map_t *map = K_Map_Get();
+    int found[MAX_NEAR_LINES];
+    int count = NearObstacles(portal, floor, ceiling, CLEARANCE, found, MAX_NEAR_LINES);
+    int s, i;
+
+    for (s = 0; s < CLEARANCE_SAMPLES; ++s)
+    {
+        k_vec2_t at = PointAlong(portal->a, portal->b,
+                                 Length(Sub(portal->b, portal->a))
+                                 * (s + 0.5) / CLEARANCE_SAMPLES);
+
+        for (i = 0; i < count; ++i)
+        {
+            if (SegmentDistance(map->lines[found[i]].v1, map->lines[found[i]].v2, at)
+                < CLEARANCE)
+            {
+                break;
+            }
+        }
+
+        if (i == count)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Mirrors P_TryMove/PIT_CheckLine with live heights, then asks whether a
 // door or lift on the way can be worked from this side. wait gets the
 // tics the action is expected to take.
-static k_crossing_t Judge(int portal_index, int from, double *wait)
+static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
 {
     const k_map_t *map = K_Map_Get();
     const k_portal_t *portal = &graph.portals[portal_index];
@@ -903,10 +1029,10 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
             return K_CROSS_WALL;
         }
 
-        // TODO: impassable lines are only judged here, by the one line a
-        // portal records. A portal running along several collinear lines
-        // can miss an impassable one among them, and the planned clearance
-        // checks (narrow gaps) must treat impassable lines like walls.
+        // TODO: crossing an impassable line is only judged here, by the one
+        // line a portal records: a portal running along several collinear
+        // lines can miss an impassable one among them. (The clearance check
+        // does treat impassable lines beside a crossing as walls.)
         if (line->flags & ML_BLOCKING)
         {
             return K_CROSS_BLOCKING;
@@ -986,10 +1112,10 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
          && line->frontsector == a && line->backsector == b
          && Headroom(floor_a, ceiling_a, floor_b, SDL_max(ceiling_b, DoorTop(b))))
         {
-            const char *lock = LockOf(line->special);
+            int key = K_Specials_LockKey(line->special);
             fixed_t speed = IsBlazingDoor(line->special) ? BLAZING_SPEED : DOOR_SPEED;
 
-            if (lock != NULL && !HasKey(lock))
+            if (key >= 0 && !K_Specials_HasKey(key))
             {
                 return K_CROSS_LOCKED;
             }
@@ -1005,11 +1131,152 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
     return K_CROSS_OPEN;
 }
 
+// The floor and ceiling of the sector a cell is in. Standing in a door
+// means it is open.
+static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
+{
+    const k_map_t *map = K_Map_Get();
+    int index = map->subsectors[map->cells[cell].subsector].sector;
+    sector_t *sector = &sectors[index];
+
+    *floor = sector->floorheight;
+    *ceiling = sector->ceilingheight;
+
+    if (door_sectors[index])
+    {
+        *ceiling = SDL_max(*ceiling, DoorTop(sector));
+    }
+}
+
+// The heights decide first; a crossing they let through is still no way
+// if it is narrower than the player.
+static k_crossing_t Judge(int portal_index, int from, double *wait)
+{
+    k_crossing_t crossing = JudgeHeights(portal_index, from, wait);
+    fixed_t floor, ceiling;
+
+    if (!K_Graph_Passable(crossing) || from < 0)
+    {
+        return crossing;
+    }
+
+    StandingHeights(from, &floor, &ceiling);
+
+    if (Narrow(&graph.portals[portal_index], floor, ceiling))
+    {
+        *wait = 0.0;
+        return K_CROSS_NARROW;
+    }
+
+    return crossing;
+}
+
 k_crossing_t K_Graph_CanCross(int portal, int from)
 {
     double wait;
 
     return Judge(portal, from, &wait);
+}
+
+k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = &graph.portals[portal_index];
+    double length = Length(Sub(portal->b, portal->a));
+    int samples = SDL_min(MAX_WAYPOINT_SAMPLES,
+                          SDL_max(2, (int) (length / WAYPOINT_STEP) + 1));
+    int found[MAX_NEAR_LINES];
+    double best_score = -1.0;
+    k_vec2_t best = PointAlong(portal->a, portal->b, length * 0.5);
+    fixed_t floor, ceiling;
+    int count, s, i;
+
+    StandingHeights(from, &floor, &ceiling);
+    count = NearObstacles(portal, floor, ceiling, WAYPOINT_CLEARANCE, found,
+                          MAX_NEAR_LINES);
+
+    if (count == 0)
+    {
+        return best;
+    }
+
+    for (s = 0; s < samples; ++s)
+    {
+        double t = length * (s + 0.5) / samples;
+        k_vec2_t at = PointAlong(portal->a, portal->b, t);
+        double clearance = WAYPOINT_CLEARANCE;
+        double score;
+
+        for (i = 0; i < count; ++i)
+        {
+            clearance = SDL_min(clearance, SegmentDistance(map->lines[found[i]].v1,
+                                                           map->lines[found[i]].v2, at));
+        }
+
+        // Clearance first, then nearness to the middle.
+        score = clearance * 10000.0 - fabs(t - length * 0.5);
+
+        if (score > best_score)
+        {
+            best_score = score;
+            best = at;
+        }
+    }
+
+    return best;
+}
+
+int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
+{
+    int lines_found[MAX_NEAR_LINES];
+    fixed_t floor, ceiling;
+    int count, found = 0;
+    int i, side, j;
+
+    StandingHeights(from, &floor, &ceiling);
+    count = NearObstacles(&graph.portals[portal], floor, ceiling, CLEARANCE,
+                          lines_found, MAX_NEAR_LINES);
+
+    for (i = 0; i < count; ++i)
+    {
+        const line_t *line = &lines[lines_found[i]];
+
+        if (line->backsector == NULL)
+        {
+            continue;
+        }
+
+        // The side that is too high or too low is what narrows the gap
+        // (manual doors count as open, as in Obstacle).
+        for (side = 0; side < 2; ++side)
+        {
+            sector_t *sector = side ? line->backsector : line->frontsector;
+            int index = (int) (sector - sectors);
+            fixed_t top = sector->ceilingheight;
+
+            if (door_sectors[index])
+            {
+                top = SDL_max(top, DoorTop(sector));
+            }
+
+            if (sector->floorheight - floor <= MAX_STEP_UP
+             && Headroom(floor, ceiling, sector->floorheight, top))
+            {
+                continue;
+            }
+
+            for (j = 0; j < found && found_sectors[j] != index; ++j)
+            {
+            }
+
+            if (j == found && found < max)
+            {
+                found_sectors[found++] = index;
+            }
+        }
+    }
+
+    return found;
 }
 
 int K_Graph_Passable(k_crossing_t crossing)
@@ -1031,11 +1298,18 @@ const char *K_Graph_CrossingName(k_crossing_t crossing)
     return crossing_names[crossing];
 }
 
-const char *K_Graph_LockName(int portal)
+int K_Graph_LockKey(int portal)
 {
     int line = graph.portals[portal].line;
 
-    return line >= 0 ? LockOf(lines[line].special) : NULL;
+    return line >= 0 ? K_Specials_LockKey(lines[line].special) : -1;
+}
+
+const char *K_Graph_LockName(int portal)
+{
+    int key = K_Graph_LockKey(portal);
+
+    return key >= 0 ? K_Specials_KeyName(key) : NULL;
 }
 
 k_mover_t K_Graph_SectorMover(int sector)

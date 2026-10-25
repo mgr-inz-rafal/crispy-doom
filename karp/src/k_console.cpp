@@ -1272,6 +1272,47 @@ static void DrawDriving(void)
     ImGui::PopItemWidth();
 }
 
+// The goal stack, top first: the top one is worked on; each goal below
+// waits for the one above it.
+static void DrawPrioritiesTab(void)
+{
+    char text[K_LOG_LINE_LEN * 2];
+    int count = K_Brain_GoalCount();
+
+    ImGui::PushTextWrapPos(0.0f);
+
+    if (count == 0)
+    {
+        ImGui::TextDisabled("No goals");
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        K_Brain_GoalText(i, text, sizeof(text));
+
+        if (i == 0)
+        {
+            ImGui::TextColored(category_colors[K_LOG_BRAIN], "> %s", text);
+        }
+        else
+        {
+            ImGui::Text("  %s", text);
+        }
+    }
+
+    if (K_Brain_FailedCount() > 0)
+    {
+        ImGui::SeparatorText("Failed this level");
+
+        for (int i = 0; i < K_Brain_FailedCount(); ++i)
+        {
+            ImGui::TextColored(error_color, "%s", K_Brain_FailedText(i));
+        }
+    }
+
+    ImGui::PopTextWrapPos();
+}
+
 static void DrawBotTab(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -1350,7 +1391,7 @@ static void DrawTopArea(float height)
     {
         if (ImGui::BeginTabItem("Priorities"))
         {
-            ImGui::TextDisabled("Priority list - arrives in M7");
+            DrawPrioritiesTab();
             ImGui::EndTabItem();
         }
 

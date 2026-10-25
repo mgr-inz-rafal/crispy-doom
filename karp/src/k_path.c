@@ -25,8 +25,9 @@
 
 #include "k_path.h"
 
-// Added per blocked crossing. More than any open route on a map can cost,
-// so a route with fewer blocked crossings always wins.
+// Added per blocked crossing, unless the brain says otherwise. More than
+// any open route on a map can cost, so a route with fewer blocked
+// crossings always wins.
 #define BLOCKED_PENALTY 1.0e7
 
 // A door or lift costs the distance the player could run (16.7 units a
@@ -62,6 +63,8 @@ static unsigned int search;
 static heapitem_t *heap;
 static int heap_size;
 static int heap_capacity;
+
+static k_blockcost_t block_cost;
 
 // The search in progress.
 static const k_map_t *map;
@@ -308,7 +311,8 @@ static boolean Search(k_path_t *path)
 
             if (!K_Graph_Passable(crossing))
             {
-                step += BLOCKED_PENALTY;
+                step += block_cost != NULL ? block_cost(link->portal, cell, crossing)
+                                           : BLOCKED_PENALTY;
             }
             else if (crossing != K_CROSS_OPEN)
             {
@@ -434,7 +438,9 @@ static void BuildPoints(k_path_t *path)
 
     for (i = 0; i < path->num_cells - 1; ++i)
     {
-        k_vec2_t middle = PortalMiddle(graph, path->portals[i]);
+        // Not quite the middle the search costed: as clear of walls as the
+        // portal allows, so the player does not clip corners.
+        k_vec2_t middle = K_Graph_PortalPoint(path->portals[i], path->cells[i]);
 
         // Between two portals (the first leg starts wherever the player
         // stands).
@@ -474,7 +480,7 @@ static void FindBlocked(k_path_t *path)
         k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
         double from_floor, from_ceiling, to_floor, to_ceiling;
 
-        if (K_Graph_Passable(crossing))
+        if (K_Graph_Passable(crossing) || path->blocked_count++ > 0)
         {
             continue;
         }
@@ -484,6 +490,7 @@ static void FindBlocked(k_path_t *path)
 
         path->result = K_PATH_BLOCKED;
         path->blocked_portal = path->portals[i];
+        path->blocked_from = path->cells[i];
         path->blocked_by = crossing;
 
         if (crossing == K_CROSS_STEP)
@@ -496,8 +503,6 @@ static void FindBlocked(k_path_t *path)
                                          - SDL_max(from_floor, to_floor),
                                            to_ceiling - to_floor);
         }
-
-        return;
     }
 }
 
@@ -514,8 +519,10 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, k_vec2_t goal)
     path->num_points = 0;
     path->length = 0.0;
     path->blocked_portal = -1;
+    path->blocked_from = -1;
     path->blocked_by = K_CROSS_OPEN;
     path->blocked_height = 0.0;
+    path->blocked_count = 0;
     path->searched = 0;
 
     start_point = start;
@@ -561,6 +568,11 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, k_vec2_t goal)
 
     path->search_ms = (SDL_GetPerformanceCounter() - begin) * 1000.0
                     / SDL_GetPerformanceFrequency();
+}
+
+void K_Path_SetBlockCost(k_blockcost_t cost)
+{
+    block_cost = cost;
 }
 
 void K_Path_Free(k_path_t *path)
@@ -641,6 +653,10 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
         case K_CROSS_LOCKED:
             M_snprintf(buf, buf_len, "a door at %s that needs the %s key", where,
                        K_Graph_LockName(path->blocked_portal));
+            break;
+
+        case K_CROSS_NARROW:
+            M_snprintf(buf, buf_len, "a gap narrower than the player at %s", where);
             break;
 
         default:

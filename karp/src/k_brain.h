@@ -30,6 +30,14 @@ void K_Brain_Tick(void);
 // line.
 const char *K_Brain_Status(void);
 
+// The goal stack, for the console: index 0 is the top, the one worked on.
+int K_Brain_GoalCount(void);
+void K_Brain_GoalText(int index, char *buf, int buf_len);
+
+// Goals that failed this level, oldest first.
+int K_Brain_FailedCount(void);
+const char *K_Brain_FailedText(int index);
+
 #ifdef __cplusplus
 }
 #endif

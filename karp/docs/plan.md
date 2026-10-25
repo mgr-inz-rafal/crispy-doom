@@ -1,7 +1,7 @@
 # Karp - Stage 1 Plan: "Go To Location"
 
-> Status: approved; M0-M6 implemented, M6 follow-ups next. Work proceeds milestone by milestone
-> (section 4).
+> Status: approved; M0-M6 implemented, plus doors and lifts, GO TO EXIT and the goal stack; now
+> playing through Doom II map by map (section 4).
 > All Karp code lives under `karp/`; engine edits are single-line hooks tagged `// [Karp]`.
 
 ## 1. Context
@@ -95,6 +95,8 @@ karp/
     k_brain.h / k_brain.c     priority system
     k_log.h / k_log.c         rolling log (console pane, stdout, karp.log)
     k_settings.h / k_settings.c  Karp's own persistent settings (karp.cfg), e.g. console placement
+    k_specials.h / k_specials.c  what lines and things do: exit lines, lines that move sectors
+                                 (switches, walk-over lines), keys lying in the level
     k_console.h / k_console.cpp  Karp Console (SDL window, ImGui, map canvas, tabs, log pane)
   third_party/imgui/          Dear ImGui v1.93.0 (latest release at plan time): core files,
                               backends/imgui_impl_sdl2.*, backends/imgui_impl_sdlrenderer2.*,
@@ -347,8 +349,27 @@ become passable after an action, also judged live, with the engine's own rules:
   3-second wait at the bottom. The pathfinder charges that time as distance (16 units a tic), so
   an open route that is not much longer still wins.
 
-Not yet: doors and lifts worked from elsewhere (remote switches, walk-over lines), things
-blocking a doorway, and lifts whose switch is not the line being crossed.
+Doors and lifts worked from elsewhere (remote switches, walk-over lines) are the brain's job: it
+goes and works the line first (3.5). Not yet: things blocking a doorway.
+
+**Narrow gaps** (`K_CROSS_NARROW`). The cells treat the player as a point, so a crossing the
+heights let through is still no way if it is narrower than the player: gaps between bars or
+raised blocks, strips beside a pillar. A crossing is a way through only if some point on it (9
+are sampled) is at least **17 units** from every obstacle: the player's radius (16) plus one, so
+the narrowest gap that counts is 34. A gap exactly as wide as the player (32) needs it lined up
+to the fraction of a unit; Doom II MAP02 has one the bot got stuck in. Obstacles are the lines
+that stop a player standing on the crossing's floor from overlapping them (`PIT_CheckLine`): walls,
+impassable lines (`ML_BLOCKING`), and two-sided lines with a side too high to step onto or too low
+to fit under. A drop is no obstacle (the player can hang over it), and manual doors count as open,
+since the player opens any it gets to (otherwise a closed door's faces, 8 units apart, would
+narrow every crossing near a doorway). Judged live, so bars that lower open the gap.
+`K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the obstacle
+lines), so the brain can look for a line that moves them.
+
+**Where a route crosses a portal** (`K_Graph_PortalPoint`): not always its middle, but the point
+on it that is at least 24 units from every obstacle, the one nearest the middle if several are;
+where no point is that clear, the clearest one. In open rooms that is the middle; next to a wall
+corner it moves away from the corner, so the player does not clip it (Doom II MAP02 again).
 
 **Hole check.** Every stretch of every cell's border should border a neighbour (a portal) or lie
 along a one-sided wall. A stretch that does neither, is at least 4 units long and more than 2 units
@@ -380,10 +401,15 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
 - The heuristic is the straight line to the goal, which no route can beat (consistent, so an
   expanded node is final). Binary-heap open set; per-node arrays sized to the portal count, reset
   with a search stamp.
-- **Blocked crossings are not skipped but cost a large penalty** (10^7 each, more than any open
-  route). One search then gives the shortest open route if there is one, and otherwise the route
-  with the fewest blocked crossings, whose first blocked crossing tells why the goal cannot be
-  reached. Crossings are judged live (`K_Graph_CanCross`).
+- **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
+  search then gives the shortest open route if there is one, and otherwise the route with the
+  cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
+  (with how many there are, and the cell it is crossed from). The penalty comes from the brain
+  (`K_Path_SetBlockCost`): 10^6 for a crossing it knows how to get past (a key lies in the level, a
+  line moves the sector), 10^8 for one it does not, so blocked routes run through fixable
+  crossings. Crossings are judged live (`K_Graph_CanCross`).
+- **Waypoints**: the route's line passes each portal at `K_Graph_PortalPoint` (3.2.1), not exactly
+  at the middle the search costed, so it keeps clear of wall corners.
 - **Legs along a wall.** When a route enters and leaves a cell by two portals on the same edge,
   the leg between them runs along that edge. That is common and harmless along a partition line,
   where the edge is all portals, but between two doorways in one wall it would scrape the wall. A
@@ -486,9 +512,14 @@ not open, not just the next one: the player can stand just off the route, in a c
 (Doom II MAP01: on the edge of a small light sector right in front of the exit door), while the
 route cell it was last in leads on openly. When the target reaches it and the crossing is a
 door, lift or lift ride, an action starts:
-1. **Walk up:** drive to a spot 24 units in front of the portal (on the player's side) and stop.
-   Close enough after 2 seconds, since the spot may be in a wall. The player starts facing the
-   line on the way, turning at up to 45 degrees a tic.
+1. **Walk up:** drive to a spot 24 units in front of the middle of the door's or lift's whole line
+   (on the player's side) and stop; the use check accepts the whole line too. Not in front of the
+   portal: a doorway can be split into several portals, and standing in front of one at its edge
+   put the spot closer to the side wall than the player's radius (Doom II MAP01's exit door, where
+   the bot pushed against the wall and never pressed). Doors and lifts sit centred in their
+   alcoves. If the spot in front of the line's middle is off the floor, the portal's middle is
+   used. Close enough after 2 seconds, since the spot may be in a wall. The player starts facing
+   the line on the way, turning at up to 45 degrees a tic.
 2. **Press use** (door, lift), holding the spot: only when the engine's use trace would hit the
    line (64 units straight ahead from where the player is when that tic starts, after its turn;
    the check uses the predicted position and angle and allows 60), and only when it is worth it.
@@ -513,6 +544,9 @@ Stuck detection pauses while pressing and waiting. The Bot tab shows the action 
 open after 1.4 s", "lift up after 4.2 s"), and the graph overlay draws crossings that need an
 action in blue. The player presses use only through the ticcmd's `BT_USE`, like a human.
 
+`K_Nav_Clear` drops the goal so the player stands still, e.g. while a sector the brain just moved
+settles.
+
 **Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
 before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
 the way. The first run found one bug: one-shot doors lose their line special the moment they
@@ -535,47 +569,78 @@ tested in its own commit (section 4, M6 follow-ups): routes through gaps narrowe
 player, solid things (torches, lamps, barrels, columns, trees) that are not part of the geometry,
 and no way to work free once stuck.
 
-### 3.5 `k_brain.c` - priorities
+### 3.5 `k_brain.c` - priorities: a stack of goals
 
-- Stage 1 types: `IDLE`, `GOTO_LOCATION {x, y, ss}`.
-- `k_priority_t { type, params, status (PENDING/ACTIVE/DONE/FAILED), score, created_tic, reason }`.
-- One active priority. A console click replaces any current GOTO. DONE and FAILED fall back to
-  IDLE, and the finished entry stays in a short history list.
-- The interface is designed for later stages: each priority type has `evaluate()` (a score from the
-  world state, e.g. low health -> medkit) and `update()` (tells nav where to go). The highest score
-  wins.
-- `K_Brain_RequestGoto(x, y)` is called from the console. It rejects clicks outside a level or
-  off the floor (`K_Map_CellAt` returns -1), with a log line. Otherwise the click becomes the
-  GOTO and nav plans it; if there is no route, the GOTO fails at once (back to IDLE) and the reason
-  goes to the log and the status line. Without `-autoplay` (viewer mode) the GOTO is planned and
-  drawn, but no command is ever written.
-- `K_Brain_Tick()`, once per game tic while the bot owns the controls, ticks nav and ends the
-  GOTO when nav reports arrival (`priority GOTO (x,y) done - arrived in 4.2 s`) or failure
-  (`priority GOTO failed - stuck at (x,y)`).
-- **GO TO EXIT.** Under `-autoplay` every level starts with this one priority on the list: go to
-  the level's exit and use it. Exit lines (`p_switch.c`, `p_spec.c`): 11 (exit switch) and 51
-  (secret exit switch) are pressed; 52 (exit line) and 124 (secret exit line) are walked across.
-  Every exit line on the map is planned (normal and secret alike) and the one with the shortest
-  route wins; if none can be reached, the priority fails with the reason for the last one tried
-  (e.g. "no path to the exit switch (line 495): a door at line 350 (600,1528) that needs the
-  blue key"). Nav gets a line goal (3.4): for a switch, a spot 24 units in front of its front
-  side, where it presses use on arrival; for a walk-over line, a spot just past it on the far
-  side from the player, so the route takes the player across.
-- A click during GO TO EXIT pauses it for the GOTO; when the GOTO ends (done or failed), GO TO
-  EXIT starts again from wherever the player is. A failed GO TO EXIT is not retried (no loops);
-  a GOTO that ends, or the next level, brings it back.
-- When a level ends through an exit (`gameaction == ga_completed`, seen in `K_Ticker`), the log
-  says so: `priority GO TO EXIT done - level finished in 8.1 s through the normal exit`.
-- `K_Brain_Reset()` drops any GOTO on every level load (logged) and puts GO TO EXIT back on the
-  list under `-autoplay`.
-- `K_Brain_Status()` returns a one-line description of the current intent for the console status
-  line, e.g. `GO TO EXIT (exit switch at line 162) - 14 waypoints left, 812 units`, `GO TO (1024,
-  -320) - 14 waypoints left, 812 units`, `IDLE - GO TO (1024, -320) done in 4.2 s`, `IDLE - GO TO
-  EXIT failed: <reason>`; in viewer mode `VIEWER - GO TO ... - 14 waypoints, 812 units` (planned
-  only).
-- IDLE means zero movement (the bot owns controls).
-- So far the brain holds the current priority (GOTO or GO TO EXIT) and how the last one ended;
-  the full priority list, statuses, history and scores arrive with the Priorities tab (M7).
+The brain keeps a **stack of goals**; the top one is worked on, and each goal below waits for the
+one above it. Under `-autoplay` every level starts with one goal, **GO TO EXIT**. When the top
+goal cannot be reached, the brain works out what is in the way and pushes the fix in front of
+it, so the list grows into a chain of events that finishes the level, e.g.:
+```
+USE SWITCH line 87 (tag 2)                            <- worked on
+GET BLUE KEY - blue keycard at (928,576), 2943 units
+GO TO EXIT - exit switch at line 495
+```
+
+**A goal is a condition plus candidates.** The condition says when it is done; the candidates
+are the places it can be met, and which one is gone for is chosen when the goal is planned, not
+fixed when it is pushed (the map can have several of anything, and an author can put one where
+it cannot be reached):
+
+| Goal | Done when | Candidates (what the player does there) |
+|---|---|---|
+| GO TO EXIT | the level ends (`gameaction == ga_completed`) | every exit line: 11 and 51 pressed, 52 and 124 crossed (secret exits too) |
+| GET <colour> KEY | the player holds the keycard or skull of that colour, however it got it | every key of that colour lying in the level (cards and skulls, by sprite) |
+| USE TRIGGER (sector) | the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed. Shown as `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` once one is chosen |
+| GO TO (x, y) | the player arrived | the point (a console click) |
+
+**Planning a goal** (`PlanGoal`) scores every candidate not yet tried by route
+(`K_Path_Find` with the brain's block cost, 3.3):
+- the shortest **open** route wins, and nav gets the candidate (a point, or a line to press or
+  cross, 3.4);
+- if none is open, the candidate whose blocked route is cheapest wins (fewest blocked crossings,
+  then shortest), and the fix for its **first** blocked crossing is pushed (`FixFor`):
+  - a **locked door** -> GET KEY of its colour, if such a key lies in the level;
+  - a **step too high or too little headroom** -> USE TRIGGER for the sector beyond, or the one
+    the player stands in, if some line moves it;
+  - a **gap too narrow** -> USE TRIGGER for a sector that narrows it (`K_Graph_NarrowSectors`),
+    e.g. bars that lower;
+  - a **switch that needs a key** the player lacks (remote locked doors 99 and 133-137, e.g.
+    Doom II MAP02's red bars) -> GET KEY of that colour, before going to press it;
+- if nothing can be fixed, the goal **fails**, with the reason for the last candidate tried.
+
+When a goal is done it comes off the stack and the goal below is planned again, from wherever the
+player is: the world has changed. Fixes are optimistic: the switch that targets a sector is used
+without working out exactly where it moves the sector; after it moves, planning again shows
+whether the way is open, and if not, the next blocker is pushed. A USE TRIGGER goal waits, with
+the player standing still, for the sector to start moving after its line is used (2 seconds for a
+walk-over line) and then to stop.
+
+**Guards against loops and early give-ups:**
+- a candidate that does not work out (nav fails, the press moves nothing, the key was not picked
+  up) is not chosen again for that goal; the next candidate is tried;
+- a goal whose candidates all fail is marked failed for the rest of the level, never pushed
+  again, and the goal below looks for another way;
+- a goal already on the stack is never pushed again (a key behind its own door);
+- at most 8 goals deep; one sector is triggered at most 3 times a level (a door that closes again
+  before the player gets there);
+- a failed GO TO EXIT is not added again: no retrying every tic.
+
+**Clicks:** `K_Brain_RequestGoto(x, y)` (from the console) rejects clicks outside a level or off the
+floor, with a log line, and pushes GO TO (x, y) on top (a new click replaces one still being gone
+to); it is planned at once, so the route shows in viewer mode too. When it ends on an otherwise
+empty stack, GO TO EXIT starts again with the level's failures forgotten: the player may now
+stand somewhere that changes things.
+
+**Log and console.** Every push, choice, done and failure goes to the log, e.g. `GO TO EXIT: the
+exit switch at line 495 is blocked by a door at line 350 (600,1528) that needs the blue key -
+added GET BLUE KEY`, `USE SWITCH line 101 (tag 5) done - sector 30 moved (floor 48, ceiling
+124)`, `GO TO EXIT done - level finished in 8.0 s through the normal exit`. The status line
+shows the top goal (with waypoints left while driving); the console's Priorities tab shows the
+whole stack, top first, and the goals that failed this level in red. `K_Brain_Reset()` empties
+the stack on every level load and puts GO TO EXIT back under `-autoplay`.
+
+Later: temporary goals pushed in front of the chain (get a medikit), scores, and danger in the
+candidate scoring (a guarded medikit loses to a lonely one far away).
 
 ### 3.6 `K_BuildTiccmd` - command injection (H6)
 
@@ -679,7 +744,8 @@ the config; Karp simply ignores it while it owns the controls.
   - **Left click -> `K_Brain_RequestGoto(x, y)`**; right or middle drag pans. The click that
     focuses the console also counts.
 - **Side tabs:**
-  - `Priorities`: active priority, status, history, Cancel button.
+  - `Priorities`: the goal stack, top (worked on) first, each with what it is going for or waiting
+    on, and the goals that failed this level in red (3.5). Later: a Cancel button.
   - `Bot`: position, facing, current cell; the route's goal, result, cells, waypoints, length and
     search time, with the reason when it is blocked; driving state, speed, waypoint "n of N",
     distance left, time, replans, prediction error, the reason when it failed; and sliders for the
@@ -769,9 +835,17 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    with Doom II (more line types; Doom is mostly a subset), with `-nomonsters`.
 
    Playthrough log (Doom II):
-   - MAP01: finished in 8.1 s (exit door, exit switch), after one fix (the closed crossing ahead
-     is looked for from the player's route cell on, not only at it).
-   - MAP02: the exit is behind a blue key door; the bot cannot pick up keys yet. Next: keys.
+   - MAP01: finished in 8.0 s (exit door, exit switch). Fixes it took: the closed crossing ahead
+     is looked for from the player's route cell on, not only at it; the spot for working a door
+     is in front of the middle of its line, not of a portal at the doorway's edge.
+   - MAP02: needs keys and switches, which led to the goal stack (3.5): the bot pressed the
+     switches for two doors (tags 5 and 8), found that the red bars need the red key, and went
+     for it. Narrow gaps (between the bars, and a 32-unit passage beside a closed block) and
+     wall corners it clipped led to the clearance checks (3.2.1). It then stops at the red key:
+     the key is reached by a **running jump** (follow-up 7). Skipped for now, to come back to.
+   - MAP03: the exit is reached through a **teleporter** (line 418, a walk-over teleport to sector
+     7); Karp has no teleport links yet, so every route to the exit looks blocked. Next:
+     teleporters (follow-up 8).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -780,15 +854,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    and a door that falls short makes the route replan. Remote doors and switches come later.
 
    **M6 follow-ups**, each in its own commit and re-measured with the drive test (section 3.4):
-   1. **Narrow gaps.** Work out how wide each portal really is between walls and treat one
-      narrower than the player as a new "too narrow" crossing. Start at 32 units (the player's
-      width); getting the player lined up exactly enough to pass a 32-unit gap may prove too hard,
-      so it may need to become ~34. Waypoints also move at least 16 units away from wall ends, so
-      routes stop scraping door jambs.
-   2. **Impassable lines** (`ML_BLOCKING`). A portal along one is already refused, but only by the
-      one line the portal records: a portal along several collinear lines can miss an impassable
-      one among them, and the clearance checks of follow-up 1 must treat impassable lines like
-      walls (TODO in `K_Graph_CanCross`).
+   1. **Narrow gaps.** Done (3.2.1): a crossing narrower than 34 units is "too narrow" (32 proved
+      too tight, as expected), and waypoints keep 24 units from obstacles where the portal allows.
+   2. **Impassable lines** (`ML_BLOCKING`). The clearance check treats them as walls. Still open: a
+      portal along one is refused only by the one line the portal records, so a portal along
+      several collinear lines can miss an impassable one among them (TODO in `K_Graph_CanCross`).
    3. **Solid things.** Torches, lamps, barrels, columns, trees and the like block the player but
       are not part of the geometry. Read the solid non-monster things at level load and block the
       parts of portals and cells they cover, widened by the player's radius; barrels can be
@@ -810,8 +880,23 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       edge (16.7 units/tic running, about 21 when strafe-running), falls while it flies, and can
       land only on a floor at most 24 units above where it is by then. Gaps narrower than the
       player need no jump at all: its floor is the highest one under its 32x32 box, so it walks
-      across. Following a jump link means a straight, full-speed run-up and no braking.
-8. **M7 Priorities tab** - IDLE/GOTO lifecycle, history, cancel; polish.
+      across. Following a jump link means a straight, full-speed run-up and no braking. Doom II
+      MAP02's red key needs one.
+   8. **Teleporters.** Lines 39 (once) and 97 (repeatable) teleport the player when crossed from
+      the front side (125 and 126 are for monsters only). The player lands on the teleport
+      destination thing in a sector with the line's tag, facing its angle, standing still. The
+      graph needs one-way teleport links from the cells on the line's front side to the
+      destination's cell (costing the walk to the line); nav walks across the line from the front
+      and carries on from the destination, which must not count as being pushed off the route. A
+      once-only teleporter loses its special after use, so its link goes (judged live). Doom II
+      MAP03 needs one.
+   9. **Walk-over lifts and timing.** A lift lowered by crossing a line (Doom II MAP03 has fast
+      ones, special 120) goes down, waits 3 seconds and comes back up, so the bot must head for it
+      right after crossing: finish the lower-the-lift goal as soon as the lift starts moving, and
+      treat a lift on its way down, or waiting at the bottom, as a crossing to wait at (like a door
+      that is already opening). Missing the window makes it cross the line again (3 times at most).
+8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
+   history, cancel, polish.
 
 ## 5. Verification
 

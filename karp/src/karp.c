@@ -22,6 +22,7 @@
 #include "k_map.h"
 #include "k_nav.h"
 #include "k_settings.h"
+#include "k_specials.h"
 
 static boolean autoplay_enabled;
 static boolean console_enabled;
@@ -160,6 +161,7 @@ void K_LevelLoaded(void)
 
     K_Map_Build();
     K_Graph_Build();
+    K_Specials_Build();
     K_Brain_Reset();
     K_Nav_Reset();
     level_completed = false;

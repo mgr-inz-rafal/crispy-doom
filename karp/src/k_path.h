@@ -38,7 +38,8 @@ typedef struct
     int *cells;
     int *portals;
 
-    // The line to follow: the start, the middle of each portal, the goal.
+    // The line to follow: the start, a point on each portal (its middle,
+    // moved clear of walls if need be: K_Graph_PortalPoint), the goal.
     // Each leg runs between two points on the border of one convex cell,
     // so it stays inside that cell and cannot cut through a wall corner.
     // leg_cells[i] is the cell (index into cells) of the leg from
@@ -48,11 +49,14 @@ typedef struct
     int *leg_cells;
     double length;
 
-    // K_PATH_BLOCKED: the first crossing on the route that is blocked, why,
-    // and by how much (the height of the step, or the headroom left).
+    // K_PATH_BLOCKED: the first crossing on the route that is blocked (the
+    // portal, and the cell it is crossed from), why, and by how much (the
+    // height of the step, or the headroom left); and how many there are.
     int blocked_portal;
+    int blocked_from;
     k_crossing_t blocked_by;
     double blocked_height;
+    int blocked_count;
 
     int searched;           // search nodes expanded
     double search_ms;
@@ -63,6 +67,14 @@ typedef struct
 // Plans a route from start to goal over the crossings that are open now.
 // The arrays in path are reused from call to call.
 void K_Path_Find(k_path_t *path, k_vec2_t start, k_vec2_t goal);
+
+// What a blocked crossing adds to the cost of a route. More than any route
+// on a map could cost, so open routes always win; set by the brain, which
+// knows which blocked crossings it could get past (a key, a switch).
+// Without one, every blocked crossing costs the same.
+typedef double (*k_blockcost_t)(int portal, int from_cell, k_crossing_t crossing);
+
+void K_Path_SetBlockCost(k_blockcost_t cost);
 
 void K_Path_Free(k_path_t *path);
 
