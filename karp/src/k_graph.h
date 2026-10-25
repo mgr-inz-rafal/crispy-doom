@@ -40,9 +40,29 @@ typedef enum
     K_CROSS_BLOCKING,       // the line blocks players (ML_BLOCKING)
     K_CROSS_STEP,           // the floor beyond is more than 24 units higher
     K_CROSS_HEADROOM,       // less than 56 units between floor and ceiling,
-                            // e.g. a closed door
+                            // e.g. a closed door that cannot be opened
+                            // from this side, or not high enough
+    K_CROSS_LOCKED,         // a door that needs a key the player lacks
+
+    // Passable after an action:
+    K_CROSS_DOOR,           // a closed door the player can open: use its
+                            // line from this side
+    K_CROSS_LIFT,           // a raised lift the player can lower: use its
+                            // line from this side, then step on
+    K_CROSS_RIDE,           // off a lift that is down: wait on it until it
+                            // rises
     K_NUM_CROSSINGS
 } k_crossing_t;
+
+// What the mover of a sector (a door, lift, floor...) is doing.
+typedef enum
+{
+    K_MOVER_NONE,           // nothing is moving it
+    K_MOVER_UP,
+    K_MOVER_DOWN,
+    K_MOVER_WAITING,        // a door open at the top, a lift at the bottom
+    K_MOVER_OTHER,          // some other mover; direction unknown
+} k_mover_t;
 
 typedef struct
 {
@@ -73,7 +93,19 @@ const k_graph_t *K_Graph_Get(void);
 // Whether the player can cross the portal when leaving the given cell.
 k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 
+// Open, or passable after an action (a door, a lift).
+int K_Graph_Passable(k_crossing_t crossing);
+
+// How long the action a crossing needs is expected to take, in tics: 0
+// for an open one.
+double K_Graph_CrossingWait(int portal, int from_cell);
+
 const char *K_Graph_CrossingName(k_crossing_t crossing);
+
+// The key a locked door needs ("blue", "yellow", "red"), or NULL.
+const char *K_Graph_LockName(int portal);
+
+k_mover_t K_Graph_SectorMover(int sector);
 
 #ifdef __cplusplus
 }

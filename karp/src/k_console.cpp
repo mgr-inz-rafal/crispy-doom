@@ -548,9 +548,14 @@ static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
     for (int i = 0; i < graph->num_portals; ++i)
     {
         const k_portal_t *portal = &graph->portals[i];
-        bool forward = K_Graph_CanCross(i, portal->cell[0]) == K_CROSS_OPEN;
-        bool backward = K_Graph_CanCross(i, portal->cell[1]) == K_CROSS_OPEN;
-        ImU32 color = forward && backward ? IM_COL32(80, 200, 90, 255)
+        k_crossing_t forward_crossing = K_Graph_CanCross(i, portal->cell[0]);
+        k_crossing_t backward_crossing = K_Graph_CanCross(i, portal->cell[1]);
+        bool forward = K_Graph_Passable(forward_crossing) != 0;
+        bool backward = K_Graph_Passable(backward_crossing) != 0;
+        bool action = (forward && forward_crossing != K_CROSS_OPEN)
+                   || (backward && backward_crossing != K_CROSS_OPEN);
+        ImU32 color = action ? IM_COL32(70, 150, 255, 255)
+                    : forward && backward ? IM_COL32(80, 200, 90, 255)
                     : forward || backward ? IM_COL32(235, 200, 50, 255)
                     : IM_COL32(230, 60, 60, 255);
         ImU32 link_color = (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 110);
@@ -820,8 +825,9 @@ static void DrawMapView(void)
     {
         ImGui::SetTooltip("Where neighbouring cells meet, from live sector "
                           "heights.\nGreen: open both ways. Yellow: one way "
-                          "only (arrow), e.g. a drop.\nRed: blocked, e.g. a "
-                          "closed door or a step too high.");
+                          "only (arrow), e.g. a drop.\nBlue: a door or lift "
+                          "the bot can work.\nRed: blocked, e.g. a locked door "
+                          "or a step too high.");
     }
 
     ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -1198,6 +1204,11 @@ static void DrawDriving(void)
         {
             StatRow("Waypoint", "%d of %d", nav->target, path->num_points - 1);
             StatRow("Remaining", "%.0f units", nav->remaining);
+
+            if (nav->action != K_ACTION_NONE)
+            {
+                StatRow("Action", "%s", nav->action_text);
+            }
         }
 
         if (nav->state != K_NAV_IDLE || nav->tics > 0)

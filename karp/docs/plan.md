@@ -322,6 +322,29 @@ subsector:
 - blocked if `min(ceil A, ceil B) - max(floor A, floor B) < 56` or `ceil(B) - floor(B) < 56`
   (closed doors).
 
+**Doors and lifts** (manual ones, worked by using the line being crossed). Some blocked crossings
+become passable after an action, also judged live, with the engine's own rules:
+- **Door:** no headroom, but the line has a manual door special (1, 26-28, 31-34, 117, 118: the
+  special is read from the engine's line, since one-shot doors lose it), the player is on its
+  front side (use only works from there) and the door is the line's back sector. It opens to the
+  lowest surrounding ceiling less 4 (`EV_VerticalDoor`), computed now; if that is not high enough
+  the crossing stays blocked. Without the key a key door is **locked** (its own crossing kind,
+  named with the key in the "no path" reason).
+- **Lift:** a step too high, but the line is a lift switch (21, 62, 122, 123) tagged with the
+  sector beyond, the player is on its front side, and the lift's bottom (the lowest surrounding
+  floor, as `EV_DoPlat` computes it) is within 24 of the player's floor.
+- **Lift ride:** a step too high off a lift that is down, but within 24 once it is back up (an
+  active lift remembers its top; an idle one is at it).
+- Standing in a door sector means its door is open, so crossings out of one are judged with the
+  door's open height.
+- Each also gives the time it is expected to take: stopping and pressing (~1 second), plus the
+  door's travel at 2 units/tic (8 blazing), or for a lift the trip down and up at 4 (8) and its
+  3-second wait at the bottom. The pathfinder charges that time as distance (16 units a tic), so
+  an open route that is not much longer still wins.
+
+Not yet: doors and lifts worked from elsewhere (remote switches, walk-over lines), things
+blocking a doorway, and lifts whose switch is not the line being crossed.
+
 **Hole check.** Every stretch of every cell's border should border a neighbour (a portal) or lie
 along a one-sided wall. A stretch that does neither, is at least 4 units long and more than 2 units
 from any wall is a **hole** in the navigation mesh (shorter gaps are rounding at corners, gaps
@@ -442,6 +465,46 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
 5. Idle or failed: zero movement.
 
 The controller settings are adjustable in the console's Bot tab, but not saved yet.
+
+**Doors and lifts on the route** (`UpdateAction` in Think, `SteerAction` in Act). The target never
+moves past the way out of a cell whose crossing is not open yet, and the speed profile treats
+that waypoint as a stop. When the target reaches it and the crossing is a door, lift or lift
+ride, an action starts:
+1. **Walk up:** drive to a spot 24 units in front of the portal (on the player's side) and stop.
+   Close enough after 2 seconds, since the spot may be in a wall. The player starts facing the
+   line on the way, turning at up to 45 degrees a tic.
+2. **Press use** (door, lift), holding the spot: only when the engine's use trace would hit the
+   line (64 units straight ahead from where the player is when that tic starts, after its turn;
+   the check uses the predicted position and angle and allows 60), and only when it is worth it.
+   Pressing on a door that is opening or open closes it, and on a busy lift does nothing, so the
+   door must be still or closing and the lift still. A door already opening, or a lift already
+   on its way, needs no press. Use is released for at least a tic between presses, or the
+   engine ignores it.
+3. **Wait**, holding the spot, for as long as the door or lift keeps moving. When the crossing
+   turns open the action is over and the route goes on: through the door, or onto the lift. On
+   the lift the crossing off it is a lift ride: walk to a spot 24 units from its edge and wait
+   for the ride up. A door that starts closing before the player got through is pressed again
+   (that reopens it); a press after which nothing moves within 15 tics (a miss, or a lift that
+   went back up without the player) is repeated, 3 times at most.
+4. **Giving up:** nothing moving for 5 seconds while still blocked (a lift waits 3 at the
+   bottom), never able to press within 3 seconds, or 3 presses that moved nothing: the goal
+   fails with the line in the reason. If the crossing becomes blocked outright (a door that no
+   longer opens high enough because a neighbouring ceiling moved, a key door), the route is
+   replanned.
+
+Stuck detection pauses while pressing and waiting. The Bot tab shows the action ("door at line
+151: waiting"), the log its start and end ("opening the door at line 151", "door at line 151
+open after 1.4 s", "lift up after 4.2 s"), and the graph overlay draws crossings that need an
+action in blue. The player presses use only through the ticcmd's `BT_USE`, like a human.
+
+**Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
+before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
+the way. The first run found one bug: one-shot doors lose their line special the moment they
+are used, so a door already opening must count as a door whatever its line says (it now does,
+using the height its thinker is heading for). In a lift mode (every goal just past a lift),
+every lift the bot reached worked: called, boarded, ridden up. Nearly all failures were still
+"stuck" (gaps narrower than the player, solid things), mostly before the bot reached a door or
+lift. Seen in play but not looked into: on E1M2 the bot got stuck at the red door.
 
 **Measured** with a temporary drive test (8 random reachable goals per map, one after another,
 run fast-forward), on Doom (36 maps): 138 of 204 goals reached, 66 failed, none timed out. 12 maps
@@ -668,6 +731,16 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 6. **M5 Pathfinder** - A*, `k_nav` planning, GOTO from a click; the console draws the route and
    the Bot tab shows it, the log says why when there is none (no movement yet).
 7. **M6 Driving** - H2, H5, H6, H7, prediction, controller, arrival, replanning, stuck detection.
+   **How we proceed from here:** play the maps one by one with the bot and fix whatever stops it
+   from finishing them, rather than perfecting each feature first. That gets a "not yet perfect,
+   but working" bot through the levels; the follow-ups below are the known candidates.
+
+   **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
+   3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
+   so the bot waits for as long as the sector moves; a door may not open high enough, and how
+   high depends on the neighbouring ceilings, which can move, so the open height is judged live
+   and a door that falls short makes the route replan. Remote doors and switches come later.
+
    **M6 follow-ups**, each in its own commit and re-measured with the drive test (section 3.4):
    1. **Narrow gaps.** Work out how wide each portal really is between walls and treat one
       narrower than the player as a new "too narrow" crossing. Start at 32 units (the player's
@@ -743,8 +816,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 
 ## 6. Out of scope (later stages)
 
-Monsters and combat; doors, lifts, switches and keys (the graph keeps sector references and
-evaluates passability live, which is the foundation for these); item priorities (medkits, ammo);
+Monsters and combat; remote doors and lifts, switches, walk-over triggers and collecting keys
+(manual doors and lifts work, section 3.2.1; the rest builds on the same live crossings); item
+priorities (medkits, ammo);
 path smoothing with player radius (beyond the M6 follow-ups); damaging-floor costs; lifting the
 netgame guard; Heretic/Hexen.
 

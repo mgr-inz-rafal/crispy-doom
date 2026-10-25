@@ -17,7 +17,9 @@
 #include "SDL.h"
 
 #include "doomdata.h"
+#include "doomstat.h"
 #include "m_fixed.h"
+#include "p_local.h"
 #include "r_state.h"
 
 #include "k_graph.h"
@@ -44,6 +46,17 @@
 // Player movement limits (p_map.c: P_TryMove, PIT_CheckLine).
 #define MAX_STEP_UP (24 * FRACUNIT)
 #define PLAYER_HEIGHT (56 * FRACUNIT)
+
+// Movers (p_doors.c, p_plats.c), in map units per tic: doors move at 2,
+// blazing ones at 8; lifts at 4, blazing ones at 8. A lift waits 3 seconds
+// at the bottom.
+#define DOOR_SPEED (2 * FRACUNIT)
+#define LIFT_SPEED (4 * FRACUNIT)
+#define BLAZING_SPEED (8 * FRACUNIT)
+#define LIFT_WAIT (3 * TICRATE)
+
+// Tics to stop in front of a line, face it and press use.
+#define ACTION_OVERHEAD 35.0
 
 // Per kind of problem, only this many are logged individually.
 #define MAX_REPORTS 5
@@ -81,7 +94,13 @@ static int *cell_items;
 static const char *crossing_names[K_NUM_CROSSINGS] =
 {
     "open", "wall", "blocking line", "step too high", "no headroom",
+    "locked door", "door", "lift", "lift ride",
 };
+
+// Per sector: opened by a manual door line (it is the line's back
+// sector), or moved by a lift line (it has the line's tag).
+static unsigned char *door_sectors;
+static unsigned char *lift_sectors;
 
 //
 // Vector helpers
@@ -646,6 +665,119 @@ static void CheckConnectivity(const k_map_t *map)
     free(size);
 }
 
+//
+// Doors and lifts
+//
+
+// Doors opened by using their own line (EV_VerticalDoor); the door is the
+// line's back sector.
+static boolean IsManualDoor(int special)
+{
+    switch (special)
+    {
+        case 1: case 26: case 27: case 28:      // open, wait, close
+        case 31: case 32: case 33: case 34:     // open and stay
+        case 117: case 118:                     // blazing
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+static boolean IsBlazingDoor(int special)
+{
+    return special == 117 || special == 118;
+}
+
+// Lifts lowered by using a line (S1, SR, blazing S1 and SR); the lift is
+// the sectors with the line's tag.
+static boolean IsLiftSwitch(int special)
+{
+    return special == 21 || special == 62 || special == 122 || special == 123;
+}
+
+static boolean IsBlazingLift(int special)
+{
+    return special == 120 || special == 121 || special == 122 || special == 123;
+}
+
+// Every line that moves a lift: switches, walk-over lines, perpetual lifts.
+static boolean IsLiftLine(int special)
+{
+    return IsLiftSwitch(special) || special == 10 || special == 88
+        || special == 120 || special == 121 || special == 53 || special == 87;
+}
+
+static const char *LockOf(int special)
+{
+    switch (special)
+    {
+        case 26: case 32:
+            return "blue";
+
+        case 27: case 34:
+            return "yellow";
+
+        case 28: case 33:
+            return "red";
+
+        default:
+            return NULL;
+    }
+}
+
+static boolean HasKey(const char *lock)
+{
+    const player_t *player = &players[consoleplayer];
+
+    switch (lock[0])
+    {
+        case 'b':
+            return player->cards[it_bluecard] || player->cards[it_blueskull];
+
+        case 'y':
+            return player->cards[it_yellowcard] || player->cards[it_yellowskull];
+
+        default:
+            return player->cards[it_redcard] || player->cards[it_redskull];
+    }
+}
+
+// From the specials at level load: the kind of a sector does not change
+// when a one-shot line loses its special.
+static void FindMoverSectors(const k_map_t *map)
+{
+    int count = SDL_max(numsectors, 1);
+    int i, s;
+
+    free(door_sectors);
+    free(lift_sectors);
+    door_sectors = calloc(count, 1);
+    lift_sectors = calloc(count, 1);
+
+    for (i = 0; i < numlines; ++i)
+    {
+        const line_t *line = &lines[i];
+
+        if (IsManualDoor(line->special) && map->lines[i].back_sector >= 0)
+        {
+            door_sectors[map->lines[i].back_sector] = 1;
+        }
+
+        if (IsLiftLine(line->special) && line->tag != 0)
+        {
+            for (s = 0; s < numsectors; ++s)
+            {
+                if (sectors[s].tag == line->tag)
+                {
+                    lift_sectors[s] = 1;
+                }
+            }
+        }
+    }
+}
+
 void K_Graph_Build(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -665,6 +797,7 @@ void K_Graph_Build(void)
     }
 
     BuildLinks(map);
+    FindMoverSectors(map);
     CheckHoles(map);
     CheckConnectivity(map);
 
@@ -685,14 +818,75 @@ const k_graph_t *K_Graph_Get(void)
     return &graph;
 }
 
-k_crossing_t K_Graph_CanCross(int portal_index, int from)
+static const plat_t *PlatOf(const sector_t *sector)
+{
+    const thinker_t *thinker = sector->specialdata;
+
+    if (thinker != NULL && thinker->function.acp1 == (actionf_p1) T_PlatRaise)
+    {
+        return (const plat_t *) thinker;
+    }
+
+    return NULL;
+}
+
+static const vldoor_t *DoorOf(const sector_t *sector)
+{
+    const thinker_t *thinker = sector->specialdata;
+
+    if (thinker != NULL && thinker->function.acp1 == (actionf_p1) T_VerticalDoor)
+    {
+        return (const vldoor_t *) thinker;
+    }
+
+    return NULL;
+}
+
+// How high a door opens (EV_VerticalDoor): the lowest surrounding ceiling,
+// less 4. Live, since the surrounding ceilings can move.
+static fixed_t DoorTop(sector_t *sector)
+{
+    return P_FindLowestCeilingSurrounding(sector) - 4 * FRACUNIT;
+}
+
+// Where a lift goes down to (EV_DoPlat): the lowest surrounding floor.
+static fixed_t LiftBottom(sector_t *sector)
+{
+    return SDL_min(P_FindLowestFloorSurrounding(sector), sector->floorheight);
+}
+
+// Where a lift comes back up to: an active one remembers it, an idle one
+// is there.
+static fixed_t LiftTop(const sector_t *sector)
+{
+    const plat_t *plat = PlatOf(sector);
+
+    return plat != NULL ? SDL_max(plat->high, sector->floorheight)
+                        : sector->floorheight;
+}
+
+static boolean Headroom(fixed_t floor_a, fixed_t ceiling_a,
+                        fixed_t floor_b, fixed_t ceiling_b)
+{
+    return SDL_min(ceiling_a, ceiling_b) - SDL_max(floor_a, floor_b) >= PLAYER_HEIGHT
+        && ceiling_b - floor_b >= PLAYER_HEIGHT;
+}
+
+// Mirrors P_TryMove/PIT_CheckLine with live heights, then asks whether a
+// door or lift on the way can be worked from this side. wait gets the
+// tics the action is expected to take.
+static k_crossing_t Judge(int portal_index, int from, double *wait)
 {
     const k_map_t *map = K_Map_Get();
     const k_portal_t *portal = &graph.portals[portal_index];
     int to = portal->cell[0] == from ? portal->cell[1] : portal->cell[0];
     int from_sector = map->subsectors[map->cells[from].subsector].sector;
     int to_sector = map->subsectors[map->cells[to].subsector].sector;
-    const sector_t *a, *b;
+    const line_t *line = NULL;
+    sector_t *a, *b;
+    fixed_t floor_a, ceiling_a, floor_b, ceiling_b;
+
+    *wait = 0.0;
 
     if (from_sector < 0 || to_sector < 0)
     {
@@ -701,9 +895,10 @@ k_crossing_t K_Graph_CanCross(int portal_index, int from)
 
     if (portal->line >= 0)
     {
-        const k_line_t *line = &map->lines[portal->line];
+        // The engine's line, for its live special: one-shot lines lose it.
+        line = &lines[portal->line];
 
-        if (line->back_sector < 0)
+        if (map->lines[portal->line].back_sector < 0)
         {
             return K_CROSS_WALL;
         }
@@ -718,28 +913,155 @@ k_crossing_t K_Graph_CanCross(int portal_index, int from)
         }
     }
 
-    // Live heights: doors and lifts move.
     a = &sectors[from_sector];
     b = &sectors[to_sector];
+    floor_a = a->floorheight;
+    ceiling_a = a->ceilingheight;
+    floor_b = b->floorheight;
+    ceiling_b = b->ceilingheight;
+
+    // Standing in a door means it is open.
+    if (door_sectors[from_sector])
+    {
+        ceiling_a = SDL_max(ceiling_a, DoorTop(a));
+    }
+
+    if (to_sector == from_sector)
+    {
+        floor_b = floor_a;
+        ceiling_b = ceiling_a;
+    }
 
     // Stepping up is limited; dropping down never is (players have
     // MF_DROPOFF).
-    if (b->floorheight - a->floorheight > MAX_STEP_UP)
+    if (floor_b - floor_a > MAX_STEP_UP)
     {
+        // On a lift that is down: wait for it to come back up.
+        if (lift_sectors[from_sector]
+         && floor_b - LiftTop(a) <= MAX_STEP_UP
+         && Headroom(LiftTop(a), ceiling_a, floor_b, ceiling_b))
+        {
+            const plat_t *plat = PlatOf(a);
+            fixed_t speed = plat != NULL ? plat->speed : LIFT_SPEED;
+
+            *wait = (double) (LiftTop(a) - floor_a) / speed
+                  + (plat != NULL && plat->status == waiting ? plat->count : 0);
+            return K_CROSS_RIDE;
+        }
+
+        // A raised lift whose switch is this line: lower it, step on, ride
+        // it up.
+        if (line != NULL && IsLiftSwitch(line->special) && line->tag != 0
+         && line->tag == b->tag && line->frontsector == a
+         && LiftBottom(b) - floor_a <= MAX_STEP_UP
+         && Headroom(floor_a, ceiling_a, LiftBottom(b), ceiling_b))
+        {
+            fixed_t speed = IsBlazingLift(line->special) ? BLAZING_SPEED : LIFT_SPEED;
+
+            *wait = ACTION_OVERHEAD + LIFT_WAIT
+                  + 2.0 * (floor_b - LiftBottom(b)) / speed;
+            return K_CROSS_LIFT;
+        }
+
         return K_CROSS_STEP;
     }
 
-    if (SDL_min(a->ceilingheight, b->ceilingheight)
-      - SDL_max(a->floorheight, b->floorheight) < PLAYER_HEIGHT
-     || b->ceilingheight - b->floorheight < PLAYER_HEIGHT)
+    if (!Headroom(floor_a, ceiling_a, floor_b, ceiling_b))
     {
+        const vldoor_t *door = DoorOf(b);
+
+        // A door already opening (however it was opened; one-shot doors
+        // lose their line special right away): wait for it, if it goes high
+        // enough.
+        if (door != NULL && door->direction == 1
+         && Headroom(floor_a, ceiling_a, floor_b, SDL_max(ceiling_b, door->topheight)))
+        {
+            *wait = (double) SDL_max(0, floor_b + PLAYER_HEIGHT - ceiling_b) / door->speed;
+            return K_CROSS_DOOR;
+        }
+
+        // A door opened by using this line from its front side, if it opens
+        // high enough.
+        if (line != NULL && IsManualDoor(line->special)
+         && line->frontsector == a && line->backsector == b
+         && Headroom(floor_a, ceiling_a, floor_b, SDL_max(ceiling_b, DoorTop(b))))
+        {
+            const char *lock = LockOf(line->special);
+            fixed_t speed = IsBlazingDoor(line->special) ? BLAZING_SPEED : DOOR_SPEED;
+
+            if (lock != NULL && !HasKey(lock))
+            {
+                return K_CROSS_LOCKED;
+            }
+
+            *wait = ACTION_OVERHEAD
+                  + (double) SDL_max(0, floor_b + PLAYER_HEIGHT - ceiling_b) / speed;
+            return K_CROSS_DOOR;
+        }
+
         return K_CROSS_HEADROOM;
     }
 
     return K_CROSS_OPEN;
 }
 
+k_crossing_t K_Graph_CanCross(int portal, int from)
+{
+    double wait;
+
+    return Judge(portal, from, &wait);
+}
+
+int K_Graph_Passable(k_crossing_t crossing)
+{
+    return crossing == K_CROSS_OPEN || crossing == K_CROSS_DOOR
+        || crossing == K_CROSS_LIFT || crossing == K_CROSS_RIDE;
+}
+
+double K_Graph_CrossingWait(int portal, int from)
+{
+    double wait;
+
+    Judge(portal, from, &wait);
+    return wait;
+}
+
 const char *K_Graph_CrossingName(k_crossing_t crossing)
 {
     return crossing_names[crossing];
+}
+
+const char *K_Graph_LockName(int portal)
+{
+    int line = graph.portals[portal].line;
+
+    return line >= 0 ? LockOf(lines[line].special) : NULL;
+}
+
+k_mover_t K_Graph_SectorMover(int sector)
+{
+    const sector_t *s = &sectors[sector];
+    const vldoor_t *door = DoorOf(s);
+    const plat_t *plat = PlatOf(s);
+
+    if (s->specialdata == NULL)
+    {
+        return K_MOVER_NONE;
+    }
+
+    if (door != NULL)
+    {
+        return door->direction == 1 ? K_MOVER_UP
+             : door->direction == -1 ? K_MOVER_DOWN
+             : door->direction == 0 ? K_MOVER_WAITING : K_MOVER_OTHER;
+    }
+
+    if (plat != NULL)
+    {
+        return plat->status == up ? K_MOVER_UP
+             : plat->status == down ? K_MOVER_DOWN
+             : plat->status == waiting ? K_MOVER_WAITING : K_MOVER_NONE;
+    }
+
+    return K_MOVER_OTHER;
 }

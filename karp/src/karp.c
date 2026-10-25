@@ -202,7 +202,7 @@ void K_BuildTiccmd(ticcmd_t *cmd, int maketic)
     // Pause and save still work; anything else the human pressed is dropped.
     if (!(cmd->buttons & BT_SPECIAL))
     {
-        cmd->buttons = 0;
+        cmd->buttons = command.use ? BT_USE : 0;
     }
 
     // Lets the renderer interpolate the turn, as for keyboard turning.

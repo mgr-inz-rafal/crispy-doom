@@ -23,6 +23,15 @@ typedef enum
     K_NAV_FAILED,           // no route, or stuck; the route stays to show why
 } k_navstate_t;
 
+// What the bot is doing at a door or lift on the route.
+typedef enum
+{
+    K_ACTION_NONE,
+    K_ACTION_DOOR,          // opening a door
+    K_ACTION_LIFT,          // calling a lift down
+    K_ACTION_RIDE,          // on a lift, waiting for it to rise
+} k_navaction_t;
+
 // Controller settings, adjustable in the console's Bot tab.
 typedef struct
 {
@@ -49,6 +58,9 @@ typedef struct
     double prediction_error;    // average distance between where the
                                 // controller expected the player after a
                                 // tic and where it was, over ~1 second
+    k_navaction_t action;
+    int action_line;        // the line it uses, -1 if none
+    char action_text[96];   // e.g. "door at line 151: waiting"
     char problem[200];      // K_NAV_FAILED: why
 } k_navstatus_t;
 
@@ -58,6 +70,7 @@ typedef struct
     int forward;
     int side;
     int turn;               // angleturn: 65536 is a full circle
+    int use;                // press use (BT_USE)
 } k_command_t;
 
 // Drops the goal and its route; called on every level load.

@@ -29,6 +29,10 @@
 // so a route with fewer blocked crossings always wins.
 #define BLOCKED_PENALTY 1.0e7
 
+// A door or lift costs the distance the player could run (16.7 units a
+// tic) while waiting for it.
+#define WAIT_COST 16.0
+
 // A player standing on a hole in the mesh starts from the nearest cell
 // within this distance.
 #define START_SEARCH 64.0
@@ -290,6 +294,7 @@ static boolean Search(k_path_t *path)
         {
             const k_link_t *link = &graph->links[i];
             const k_portal_t *portal = &graph->portals[link->portal];
+            k_crossing_t crossing;
             double step;
 
             // Never straight back out the way it came in.
@@ -299,10 +304,15 @@ static boolean Search(k_path_t *path)
             }
 
             step = Distance(at, PortalMiddle(graph, link->portal));
+            crossing = K_Graph_CanCross(link->portal, cell);
 
-            if (K_Graph_CanCross(link->portal, cell) != K_CROSS_OPEN)
+            if (!K_Graph_Passable(crossing))
             {
                 step += BLOCKED_PENALTY;
+            }
+            else if (crossing != K_CROSS_OPEN)
+            {
+                step += WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
             }
 
             Relax(2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1),
@@ -464,7 +474,7 @@ static void FindBlocked(k_path_t *path)
         k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
         double from_floor, from_ceiling, to_floor, to_ceiling;
 
-        if (crossing == K_CROSS_OPEN)
+        if (K_Graph_Passable(crossing))
         {
             continue;
         }
@@ -626,6 +636,11 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
 
         case K_CROSS_BLOCKING:
             M_snprintf(buf, buf_len, "a line that blocks the player at %s", where);
+            break;
+
+        case K_CROSS_LOCKED:
+            M_snprintf(buf, buf_len, "a door at %s that needs the %s key", where,
+                       K_Graph_LockName(path->blocked_portal));
             break;
 
         default:
