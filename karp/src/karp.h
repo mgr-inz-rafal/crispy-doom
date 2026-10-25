@@ -18,6 +18,9 @@ void K_EnableAutoplay(void);
 // -karpconsole: open the Karp Console window.
 void K_EnableConsole(void);
 
+// -quitonexit: quit as soon as a level is finished (for test runs).
+void K_EnableQuitOnExit(void);
+
 // Right after I_InitGraphics: opens the console.
 void K_PostVideoInit(void);
 

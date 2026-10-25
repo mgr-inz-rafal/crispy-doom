@@ -105,7 +105,7 @@ karp/
 
 | # | Where | Hook | Purpose |
 |---|---|---|---|
-| H1 | `src/doom/d_main.c` after the `-warp` block (:2327) | Two `//!` doc blocks (`@category game`) + `if (M_CheckParm("-autoplay")) K_EnableAutoplay();` and `if (M_CheckParm("-karpconsole")) K_EnableConsole();` | Turn the bot and/or the console on. Warn if `-autoplay` is used without `-warp` (the bot still activates on any level). |
+| H1 | `src/doom/d_main.c` after the `-warp` block (:2327) | Three `//!` doc blocks (`@category game`) + `if (M_CheckParm("-autoplay")) K_EnableAutoplay();`, `if (M_CheckParm("-karpconsole")) K_EnableConsole();` and `if (M_CheckParm("-quitonexit")) K_EnableQuitOnExit();` | Turn the bot and/or the console on, and let test runs end by themselves. Warn if `-autoplay` is used without `-warp` (the bot still activates on any level). |
 | H2 | `src/doom/d_main.c` `D_GrabMouseCallback`, after the menu/pause check (:517) | `if (K_OwnsControls()) return false;` | While the bot drives there is nothing for the mouse to do, so a windowed game leaves the cursor free to reach the console. A fullscreen game still grabs (crispy decides that before asking the callback); Alt+Tab releases it. |
 | H3 | `src/doom/d_main.c` `D_DoomLoop`, right after `I_InitGraphics()` (:611) | `K_PostVideoInit();` | With `-karpconsole`: create the console and install the event filter. Whenever Karp is on: register `I_AtExit(K_Shutdown, true)` |
 | H4 | `src/doom/p_setup.c` end of `P_SetupLevel`, before the closing brace (:1402) | `K_LevelLoaded();` | Rebuild the map snapshot and nav graph, reset brain and nav, bump the level generation |
@@ -184,9 +184,14 @@ redesign.
 
   | Params | Result |
   |---|---|
-  | `-autoplay -karpconsole` | Full stage 1: map view, click a target, the bot drives there |
-  | `-autoplay` | The bot runs and logs to stdout and `karp.log`. In stage 1 nothing sets a target without the console, so it stays IDLE; later stages choose priorities on their own. |
+  | `-autoplay -karpconsole` | The bot heads for the level's exit (GO TO EXIT, 3.5); a click on the map sends it somewhere else first |
+  | `-autoplay` | The same without the console; it logs to stdout and `karp.log` |
   | `-karpconsole` | Viewer: the human plays normally. Clicks plan and draw a path, but nothing drives the player. Useful for debugging the map reader and pathfinder. |
+
+  `-quitonexit` (any combination) quits the game as soon as a level is finished, so a test run
+  ends by itself and leaves a complete `karp.log`. Test runs on real maps use the normal game
+  (no fast-forwarding), so they can be watched: `-warp NN -nomonsters -autoplay -karpconsole
+  -quitonexit`.
 - **No configuration changes.** Karp never writes `fullscreen`, `use_mouse`, window sizes or any
   other crispy config variable, not even temporarily. Video mode and the game window stay entirely
   under the user's control. Karp's own preferences live in its own file, `karp.cfg` (3.9).
@@ -466,10 +471,21 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
 
 The controller settings are adjustable in the console's Bot tab, but not saved yet.
 
+**Line goals.** Besides a point, nav can be sent to work a line (`K_Nav_SetLineGoal`): press a
+switch, or walk across a line. `K_Nav_LineGoalPoint` gives the spot: 24 units in front of a
+switch's front side (use only works from there), or just past a walk-over line on the side away
+from the player; 32, 16 and 40 units are tried in turn until the spot is on floor. On arriving at
+a switch's spot the player presses use as for a door (below), facing the line; a press after
+which nothing happens within 15 tics is repeated, 3 times at most. What the switch does is up to
+the caller (an exit ends the level).
+
 **Doors and lifts on the route** (`UpdateAction` in Think, `SteerAction` in Act). The target never
 moves past the way out of a cell whose crossing is not open yet, and the speed profile treats
-that waypoint as a stop. When the target reaches it and the crossing is a door, lift or lift
-ride, an action starts:
+that waypoint as a stop. "The" crossing is the first one from the player's route cell on that is
+not open, not just the next one: the player can stand just off the route, in a cell beside it
+(Doom II MAP01: on the edge of a small light sector right in front of the exit door), while the
+route cell it was last in leads on openly. When the target reaches it and the crossing is a
+door, lift or lift ride, an action starts:
 1. **Walk up:** drive to a spot 24 units in front of the portal (on the player's side) and stop.
    Close enough after 2 seconds, since the spot may be in a wall. The player starts facing the
    line on the way, turning at up to 45 degrees a tic.
@@ -536,14 +552,30 @@ and no way to work free once stuck.
 - `K_Brain_Tick()`, once per game tic while the bot owns the controls, ticks nav and ends the
   GOTO when nav reports arrival (`priority GOTO (x,y) done - arrived in 4.2 s`) or failure
   (`priority GOTO failed - stuck at (x,y)`).
-- `K_Brain_Reset()` drops any GOTO on every level load (logged).
+- **GO TO EXIT.** Under `-autoplay` every level starts with this one priority on the list: go to
+  the level's exit and use it. Exit lines (`p_switch.c`, `p_spec.c`): 11 (exit switch) and 51
+  (secret exit switch) are pressed; 52 (exit line) and 124 (secret exit line) are walked across.
+  Every exit line on the map is planned (normal and secret alike) and the one with the shortest
+  route wins; if none can be reached, the priority fails with the reason for the last one tried
+  (e.g. "no path to the exit switch (line 495): a door at line 350 (600,1528) that needs the
+  blue key"). Nav gets a line goal (3.4): for a switch, a spot 24 units in front of its front
+  side, where it presses use on arrival; for a walk-over line, a spot just past it on the far
+  side from the player, so the route takes the player across.
+- A click during GO TO EXIT pauses it for the GOTO; when the GOTO ends (done or failed), GO TO
+  EXIT starts again from wherever the player is. A failed GO TO EXIT is not retried (no loops);
+  a GOTO that ends, or the next level, brings it back.
+- When a level ends through an exit (`gameaction == ga_completed`, seen in `K_Ticker`), the log
+  says so: `priority GO TO EXIT done - level finished in 8.1 s through the normal exit`.
+- `K_Brain_Reset()` drops any GOTO on every level load (logged) and puts GO TO EXIT back on the
+  list under `-autoplay`.
 - `K_Brain_Status()` returns a one-line description of the current intent for the console status
-  line, e.g. `GO TO (1024, -320) - 14 waypoints left, 812 units`, `IDLE - GO TO (1024, -320) done
-  in 4.2 s`, `IDLE - GO TO (1024, -320) failed: <reason>`; in viewer mode `VIEWER - GO TO ... - 14
-  waypoints, 812 units` (planned only).
+  line, e.g. `GO TO EXIT (exit switch at line 162) - 14 waypoints left, 812 units`, `GO TO (1024,
+  -320) - 14 waypoints left, 812 units`, `IDLE - GO TO (1024, -320) done in 4.2 s`, `IDLE - GO TO
+  EXIT failed: <reason>`; in viewer mode `VIEWER - GO TO ... - 14 waypoints, 812 units` (planned
+  only).
 - IDLE means zero movement (the bot owns controls).
-- So far the brain holds just the current GOTO and how the last one ended; the priority list,
-  statuses, history and scores arrive with the Priorities tab (M7).
+- So far the brain holds the current priority (GOTO or GO TO EXIT) and how the last one ended;
+  the full priority list, statuses, history and scores arrive with the Priorities tab (M7).
 
 ### 3.6 `K_BuildTiccmd` - command injection (H6)
 
@@ -733,7 +765,13 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 7. **M6 Driving** - H2, H5, H6, H7, prediction, controller, arrival, replanning, stuck detection.
    **How we proceed from here:** play the maps one by one with the bot and fix whatever stops it
    from finishing them, rather than perfecting each feature first. That gets a "not yet perfect,
-   but working" bot through the levels; the follow-ups below are the known candidates.
+   but working" bot through the levels; the follow-ups below are the known candidates. We start
+   with Doom II (more line types; Doom is mostly a subset), with `-nomonsters`.
+
+   Playthrough log (Doom II):
+   - MAP01: finished in 8.1 s (exit door, exit switch), after one fix (the closed crossing ahead
+     is looked for from the player's route cell on, not only at it).
+   - MAP02: the exit is behind a blue key door; the bot cannot pick up keys yet. Next: keys.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

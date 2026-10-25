@@ -2357,6 +2357,18 @@ void D_DoomMain (void)
         K_EnableConsole(); // [Karp]
     }
 
+    //!
+    // @category game
+    //
+    // [Karp] Quit as soon as a level is finished, so a test run ends by
+    // itself with its log complete.
+    //
+
+    if (M_CheckParm("-quitonexit"))
+    {
+        K_EnableQuitOnExit(); // [Karp]
+    }
+
     // Undocumented:
     // Invoked by setup to test the controls.
 

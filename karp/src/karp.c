@@ -26,6 +26,10 @@
 static boolean autoplay_enabled;
 static boolean console_enabled;
 static boolean console_open;
+static boolean quit_on_exit;
+static boolean level_completed;     // reported for this level
+
+extern boolean secretexit;          // g_game.c
 
 // Shared by both switches; safe to call more than once.
 static void InitKarp(void)
@@ -64,6 +68,14 @@ void K_EnableConsole(void)
     console_enabled = true;
 
     K_Log(K_LOG_SYS, K_LOG_INFO, "console enabled");
+}
+
+void K_EnableQuitOnExit(void)
+{
+    InitKarp();
+    quit_on_exit = true;
+
+    K_Log(K_LOG_SYS, K_LOG_INFO, "quitting when a level is finished");
 }
 
 boolean K_AutoplayEnabled(void)
@@ -150,6 +162,7 @@ void K_LevelLoaded(void)
     K_Graph_Build();
     K_Brain_Reset();
     K_Nav_Reset();
+    level_completed = false;
 }
 
 boolean K_OwnsControls(void)
@@ -171,6 +184,20 @@ void K_Ticker(void)
         K_Log(K_LOG_SYS, K_LOG_WARN, "netgame - the bot stays idle, stage 1 "
               "is single player only");
         netgame_logged = true;
+    }
+
+    // An exit sets this during the tic; the intermission starts next tic.
+    if ((autoplay_enabled || console_enabled || quit_on_exit)
+     && gameaction == ga_completed && !level_completed)
+    {
+        level_completed = true;
+        K_Brain_LevelCompleted(secretexit);
+
+        if (quit_on_exit)
+        {
+            K_Log(K_LOG_SYS, K_LOG_INFO, "level finished - quitting (-quitonexit)");
+            I_Quit();
+        }
     }
 
     if (K_OwnsControls())

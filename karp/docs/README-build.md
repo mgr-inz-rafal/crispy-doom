@@ -35,8 +35,9 @@ run in place.
 - **rebuild crispy-doom (clean)** - delete `build/`, then run a build task
 - **run crispy-doom** - build, then launch Doom with the `DOOM_IWAD` IWAD and the
   Karp Console open (`-karpconsole`)
-- **run crispy-doom with autoplay** - the same, plus `-autoplay`: the bot owns
-  movement in every level and drives to wherever you click in the console
+- **run crispy-doom with autoplay** - the same, plus `-autoplay -nomonsters`:
+  the bot owns movement in every level and heads for the exit; a click in the
+  console sends it somewhere else first
 - **run crispy-setup** - build, then launch the config tool
 
 The two build tasks and both **run crispy-doom** tasks are all in the build

@@ -23,14 +23,24 @@ typedef enum
     K_NAV_FAILED,           // no route, or stuck; the route stays to show why
 } k_navstate_t;
 
-// What the bot is doing at a door or lift on the route.
+// What the bot is doing at a door or lift on the route, or at a switch it
+// was sent to.
 typedef enum
 {
     K_ACTION_NONE,
     K_ACTION_DOOR,          // opening a door
     K_ACTION_LIFT,          // calling a lift down
     K_ACTION_RIDE,          // on a lift, waiting for it to rise
+    K_ACTION_USE,           // pressing the switch at the goal
 } k_navaction_t;
+
+// What to do at the goal.
+typedef enum
+{
+    K_GOAL_POINT,           // just get there
+    K_GOAL_USE_LINE,        // press use on a line (a switch)
+    K_GOAL_CROSS_LINE,      // walk across a line (a walk-over trigger)
+} k_goalkind_t;
 
 // Controller settings, adjustable in the console's Bot tab.
 typedef struct
@@ -46,6 +56,8 @@ typedef struct
 typedef struct
 {
     k_navstate_t state;
+    k_goalkind_t goal_kind;
+    int goal_line;          // the line to work at the goal, -1 if none
     int target;             // index into the route's points: the waypoint
                             // being driven to
     int route_cell;         // index into the route's cells: the last one
@@ -80,6 +92,16 @@ void K_Nav_Reset(void);
 // non-zero if one was found; K_Nav_GetPath has the route, or why there is
 // none, either way.
 int K_Nav_SetGoal(double x, double y);
+
+// Where to stand to work a line: in front of a switch (its front side,
+// where use works), or just past a line to walk across, on the side away
+// from the player. Returns 0 if there is no floor there.
+int K_Nav_LineGoalPoint(int line, k_goalkind_t kind, double *x, double *y);
+
+// Like K_Nav_SetGoal, to the point K_Nav_LineGoalPoint gives; on arrival
+// a switch is pressed. Walking across needs nothing more: the route takes
+// the player over the line.
+int K_Nav_SetLineGoal(int line, k_goalkind_t kind);
 
 // The route to the current goal, or NULL when there is no goal.
 const k_path_t *K_Nav_GetPath(void);

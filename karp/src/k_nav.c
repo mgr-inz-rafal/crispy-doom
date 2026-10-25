@@ -304,18 +304,32 @@ static k_crossing_t CrossingOut(int r)
     return K_Graph_CanCross(path.portals[r], path.cells[r]);
 }
 
+// The first crossing from the player's route cell on that is not open yet
+// (a door, a lift...), or -1. Not just the next one: the player can stand
+// just off the route, in a cell beside it, while the route cell it last
+// was in leads on openly.
+static int NextClosedCrossing(void)
+{
+    int r;
+
+    for (r = SDL_max(status.route_cell, 0); r < path.num_cells - 1; ++r)
+    {
+        if (CrossingOut(r) != K_CROSS_OPEN)
+        {
+            return r;
+        }
+    }
+
+    return -1;
+}
+
 // The furthest waypoint the target may move to: not past a crossing that
 // is not open yet.
 static int TargetLimit(void)
 {
-    int r = status.route_cell;
+    int r = NextClosedCrossing();
 
-    if (r < path.num_cells - 1 && CrossingOut(r) != K_CROSS_OPEN)
-    {
-        return ExitPoint(r);
-    }
-
-    return path.num_points - 1;
+    return r >= 0 ? ExitPoint(r) : path.num_points - 1;
 }
 
 //
@@ -518,7 +532,14 @@ static boolean UseReaches(const body_t *body, const k_command_t *command)
 // busy lift does nothing.
 static boolean WorthPressing(void)
 {
-    k_mover_t mover = K_Graph_SectorMover(action.sector);
+    k_mover_t mover;
+
+    if (action.kind == K_ACTION_USE)
+    {
+        return true;
+    }
+
+    mover = K_Graph_SectorMover(action.sector);
 
     if (action.kind == K_ACTION_DOOR)
     {
@@ -594,7 +615,7 @@ static void Fail(const char *problem)
 
 static void ActionText(void)
 {
-    static const char *kinds[] = { "", "door", "lift", "lift ride" };
+    static const char *kinds[] = { "", "door", "lift", "lift ride", "switch" };
 
     if (action.line >= 0)
     {
@@ -733,44 +754,97 @@ static void FailAction(const char *what)
     Fail(problem);
 }
 
+// At the goal: press the switch the player was sent to.
+static void StartUseAction(void)
+{
+    const k_line_t *line = &K_Map_Get()->lines[status.goal_line];
+    k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
+
+    memset(&action, 0, sizeof(action));
+    action.kind = K_ACTION_USE;
+    action.route_cell = -1;
+    action.sector = -1;
+    action.line = status.goal_line;
+    action.a = line->v1;
+    action.b = line->v2;
+    action.spot = goal;
+    action.face = atan2(middle.y - goal.y, middle.x - goal.x);
+    action.start_tics = status.tics;
+    action.press_tic = -2;
+
+    status.action = action.kind;
+    status.action_line = action.line;
+    SetPhase(PHASE_AIM);
+
+    K_Log(K_LOG_NAV, K_LOG_INFO, "pressing the switch at line %d (%.0f,%.0f)",
+          action.line, middle.x, middle.y);
+}
+
+// What a switch does is up to whoever sent the player (an exit ends the
+// level); here, only a press that changed nothing is repeated.
+static boolean UpdateUseAction(void)
+{
+    ++action.tics;
+
+    if (action.phase == PHASE_AIM && action.tics > AIM_TICS)
+    {
+        FailAction("could not use the line");
+        return false;
+    }
+
+    if (action.phase == PHASE_WAIT && gametic - action.press_tic > PRESS_TICS)
+    {
+        if (action.presses >= MAX_PRESSES)
+        {
+            FailAction("using the line does nothing");
+            return false;
+        }
+
+        SetPhase(PHASE_AIM);
+    }
+
+    return true;
+}
+
 static boolean Replan(k_vec2_t at, const char *why);
 
-// Works the door or lift at the crossing ahead, if any. Returns false if
-// the route was replaced or failed.
+// Works the door or lift at the next crossing that is not open, if the
+// player has got to it. Returns false if the route was replaced or failed.
 static boolean UpdateAction(k_vec2_t at, double speed)
 {
-    int r = status.route_cell;
+    int r;
     k_crossing_t crossing;
     k_mover_t mover;
     double height;
     char why[96];
 
-    if (action.kind != K_ACTION_NONE && action.route_cell != r)
+    if (action.kind == K_ACTION_USE)
     {
-        EndAction();
+        return UpdateUseAction();
     }
 
-    if (r >= path.num_cells - 1)
+    r = NextClosedCrossing();
+
+    if (action.kind != K_ACTION_NONE && action.route_cell != r)
+    {
+        // The crossing it worked on is open now: done. (Or the player was
+        // pushed back to an earlier one: start over there.)
+        if (r < 0 || r > action.route_cell)
+        {
+            FinishAction();
+        }
+        else
+        {
+            EndAction();
+        }
+    }
+
+    if (r < 0 || status.target < ExitPoint(r))
     {
         return true;
     }
 
     crossing = CrossingOut(r);
-
-    if (crossing == K_CROSS_OPEN)
-    {
-        if (action.kind != K_ACTION_NONE)
-        {
-            FinishAction();
-        }
-
-        return true;
-    }
-
-    if (status.target < ExitPoint(r))
-    {
-        return true;
-    }
 
     // The way ahead closed since the route was planned, e.g. a door that
     // no longer opens high enough.
@@ -1006,12 +1080,19 @@ k_navstate_t K_Nav_Tick(void)
     }
 
     if (status.target == path.num_points - 1 && Distance(at, goal) < ARRIVE_RADIUS
-     && status.speed < ARRIVE_SPEED)
+     && status.speed < ARRIVE_SPEED && action.kind == K_ACTION_NONE)
     {
-        have_goal = false;
-        status.state = K_NAV_IDLE;
-        status.remaining = 0.0;
-        return K_NAV_ARRIVED;
+        if (status.goal_kind == K_GOAL_USE_LINE)
+        {
+            StartUseAction();
+        }
+        else
+        {
+            have_goal = false;
+            status.state = K_NAV_IDLE;
+            status.remaining = 0.0;
+            return K_NAV_ARRIVED;
+        }
     }
 
     if (status.stuck > 0 && Distance(at, stuck_at) > UNSTUCK_DISTANCE)
@@ -1070,7 +1151,7 @@ void K_Nav_Reset(void)
     }
 }
 
-int K_Nav_SetGoal(double x, double y)
+static int StartGoal(double x, double y, k_goalkind_t kind, int line)
 {
     char text[K_LOG_LINE_LEN];
     k_vec2_t start;
@@ -1093,6 +1174,8 @@ int K_Nav_SetGoal(double x, double y)
 
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_DRIVING;
+    status.goal_kind = kind;
+    status.goal_line = line;
     StartRoute();
 
     K_Path_Describe(&path, text, sizeof(text));
@@ -1111,6 +1194,71 @@ int K_Nav_SetGoal(double x, double y)
     M_snprintf(status.problem, sizeof(status.problem), "no path: %s", text);
     status.state = K_NAV_FAILED;
     return 0;
+}
+
+int K_Nav_SetGoal(double x, double y)
+{
+    return StartGoal(x, y, K_GOAL_POINT, -1);
+}
+
+int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
+{
+    // Tried in turn until one is on floor: a switch may sit in a shallow
+    // alcove, a walk-over line just in front of a wall.
+    static const double distances[] = { 24.0, 32.0, 16.0, 40.0 };
+    const k_line_t *line = &K_Map_Get()->lines[line_index];
+    k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
+    double length = Distance(line->v1, line->v2);
+    double nx, ny;
+    k_pose_t player;
+    int i;
+
+    if (length < 1e-6)
+    {
+        return 0;
+    }
+
+    // The front side is on the right of v1 -> v2.
+    nx = (line->v2.y - line->v1.y) / length;
+    ny = -(line->v2.x - line->v1.x) / length;
+
+    // Walking across: aim for the side the player is not on.
+    if (kind == K_GOAL_CROSS_LINE && K_Map_GetPlayer(&player)
+     && (player.x - middle.x) * nx + (player.y - middle.y) * ny > 0.0)
+    {
+        nx = -nx;
+        ny = -ny;
+    }
+
+    for (i = 0; i < arrlen(distances); ++i)
+    {
+        *x = middle.x + nx * distances[i];
+        *y = middle.y + ny * distances[i];
+
+        if (K_Map_CellAt(*x, *y) >= 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int K_Nav_SetLineGoal(int line, k_goalkind_t kind)
+{
+    double x, y;
+
+    if (!K_Nav_LineGoalPoint(line, kind, &x, &y))
+    {
+        have_goal = false;
+        memset(&status, 0, sizeof(status));
+        M_snprintf(status.problem, sizeof(status.problem),
+                   "no floor to stand on at line %d", line);
+        status.state = K_NAV_FAILED;
+        return 0;
+    }
+
+    return StartGoal(x, y, kind, line);
 }
 
 const k_path_t *K_Nav_GetPath(void)

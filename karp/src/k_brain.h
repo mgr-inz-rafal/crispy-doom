@@ -12,8 +12,12 @@
 extern "C" {
 #endif
 
-// Back to IDLE; called on every level load.
+// Back to IDLE, with GO TO EXIT on the list under -autoplay; called on
+// every level load.
 void K_Brain_Reset(void);
+
+// The level just ended through an exit (secret or not).
+void K_Brain_LevelCompleted(int secret);
 
 // A click on the console's map: go to (x, y). Clicks that are not on any
 // floor are ignored, with a log line.
