@@ -41,8 +41,11 @@ typedef struct
     // The line to follow: the start, the middle of each portal, the goal.
     // Each leg runs between two points on the border of one convex cell,
     // so it stays inside that cell and cannot cut through a wall corner.
+    // leg_cells[i] is the cell (index into cells) of the leg from
+    // points[i] to points[i + 1].
     int num_points;
     k_vec2_t *points;
+    int *leg_cells;
     double length;
 
     // K_PATH_BLOCKED: the first crossing on the route that is blocked, why,

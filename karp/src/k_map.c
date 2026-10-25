@@ -973,5 +973,8 @@ int K_Map_GetPlayer(k_pose_t *pose)
     pose->x = FixedToMap(mo->x);
     pose->y = FixedToMap(mo->y);
     pose->angle = mo->angle * (2.0 * K_PI / 4294967296.0);
+    pose->momx = FixedToMap(mo->momx);
+    pose->momy = FixedToMap(mo->momy);
+    pose->onground = mo->z <= mo->floorz;
     return 1;
 }

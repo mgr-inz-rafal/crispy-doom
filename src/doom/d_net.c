@@ -36,6 +36,8 @@
 
 #include "d_loop.h"
 
+#include "karp.h" // [Karp]
+
 ticcmd_t *netcmds;
 
 // Called when a player leaves the game
@@ -91,6 +93,7 @@ static void RunTic(ticcmd_t *cmds, boolean *ingame)
         D_DoAdvanceDemo ();
 
     G_Ticker ();
+    K_Ticker(); // [Karp]
 }
 
 static loop_interface_t doom_loop_interface = {

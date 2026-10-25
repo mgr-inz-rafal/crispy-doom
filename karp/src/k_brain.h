@@ -19,6 +19,9 @@ void K_Brain_Reset(void);
 // floor are ignored, with a log line.
 void K_Brain_RequestGoto(double x, double y);
 
+// Once per game tic while the bot drives.
+void K_Brain_Tick(void);
+
 // One line describing what the bot is doing now, for the console's status
 // line.
 const char *K_Brain_Status(void);

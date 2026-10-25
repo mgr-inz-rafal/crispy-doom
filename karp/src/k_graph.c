@@ -708,6 +708,10 @@ k_crossing_t K_Graph_CanCross(int portal_index, int from)
             return K_CROSS_WALL;
         }
 
+        // TODO: impassable lines are only judged here, by the one line a
+        // portal records. A portal running along several collinear lines
+        // can miss an impassable one among them, and the planned clearance
+        // checks (narrow gaps) must treat impassable lines like walls.
         if (line->flags & ML_BLOCKING)
         {
             return K_CROSS_BLOCKING;

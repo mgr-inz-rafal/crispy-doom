@@ -7,9 +7,12 @@
 #include "SDL.h"
 
 #include "d_event.h"
+#include "d_main.h"
+#include "doomstat.h"
 #include "i_system.h"
 #include "i_video.h"
 #include "m_argv.h"
+#include "r_state.h"
 
 #include "karp.h"
 #include "k_brain.h"
@@ -147,4 +150,61 @@ void K_LevelLoaded(void)
     K_Graph_Build();
     K_Brain_Reset();
     K_Nav_Reset();
+}
+
+boolean K_OwnsControls(void)
+{
+    const player_t *player = &players[consoleplayer];
+
+    // Stage 1 is single player only (karp/docs/plan.md, 2.4).
+    return autoplay_enabled && !netgame && gamestate == GS_LEVEL
+        && gameaction == ga_nothing && !paused && !menuactive && !demoplayback
+        && player->mo != NULL && player->playerstate == PST_LIVE;
+}
+
+void K_Ticker(void)
+{
+    static boolean netgame_logged = false;
+
+    if (autoplay_enabled && netgame && !netgame_logged)
+    {
+        K_Log(K_LOG_SYS, K_LOG_WARN, "netgame - the bot stays idle, stage 1 "
+              "is single player only");
+        netgame_logged = true;
+    }
+
+    if (K_OwnsControls())
+    {
+        K_Brain_Tick();
+    }
+}
+
+// Writes only the fields a human's keyboard and mouse would, so the command
+// travels the normal way: the network, every machine's G_Ticker, demos.
+void K_BuildTiccmd(ticcmd_t *cmd, int maketic)
+{
+    k_command_t command;
+
+    if (!K_OwnsControls())
+    {
+        return;
+    }
+
+    K_Nav_BuildCommand(maketic, &command);
+
+    cmd->forwardmove = command.forward;
+    cmd->sidemove = command.side;
+    cmd->angleturn = command.turn;
+    cmd->lookfly = 0;
+    cmd->arti = 0;
+    cmd->lookdir = 0;
+
+    // Pause and save still work; anything else the human pressed is dropped.
+    if (!(cmd->buttons & BT_SPECIAL))
+    {
+        cmd->buttons = 0;
+    }
+
+    // Lets the renderer interpolate the turn, as for keyboard turning.
+    localview.ticangleturn = cmd->angleturn;
 }

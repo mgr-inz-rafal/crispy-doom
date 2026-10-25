@@ -35,10 +35,12 @@ run in place.
 - **rebuild crispy-doom (clean)** - delete `build/`, then run a build task
 - **run crispy-doom** - build, then launch Doom with the `DOOM_IWAD` IWAD and the
   Karp Console open (`-karpconsole`)
+- **run crispy-doom with autoplay** - the same, plus `-autoplay`: the bot owns
+  movement in every level and drives to wherever you click in the console
 - **run crispy-setup** - build, then launch the config tool
 
-The two build tasks and **run crispy-doom** are all in the build group, so
-Ctrl+Shift+B lists them to pick from (no task is marked default).
+The two build tasks and both **run crispy-doom** tasks are all in the build
+group, so Ctrl+Shift+B lists them to pick from (no task is marked default).
 
 ### Why the run tasks launch through `cmd /c start`
 

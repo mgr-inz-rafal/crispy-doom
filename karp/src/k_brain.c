@@ -1,9 +1,10 @@
 //
 // DESCRIPTION:
 //	Karp priority system. So far a single GOTO at a time, set by clicking
-//	the console's map; it is planned but not yet driven.
+//	the console's map.
 //
 
+#include "doomdef.h"
 #include "m_misc.h"
 
 #include "karp.h"
@@ -17,14 +18,30 @@ typedef enum
     PRIORITY_GOTO,
 } priority_type_t;
 
+// How the last GOTO ended.
+typedef enum
+{
+    OUTCOME_NONE,
+    OUTCOME_DONE,
+    OUTCOME_FAILED,
+} outcome_t;
+
 static priority_type_t priority;
 static double goto_x, goto_y;
 
-// The last GOTO failed (the bot is IDLE again), and why.
-static boolean failed;
+static outcome_t outcome;
+static int outcome_tics;
 static char failure[K_LOG_LINE_LEN];
 
 static char status[K_LOG_LINE_LEN + 64];
+
+static void FailGoto(void)
+{
+    M_StringCopy(failure, K_Nav_GetStatus()->problem, sizeof(failure));
+    priority = PRIORITY_IDLE;
+    outcome = OUTCOME_FAILED;
+    K_Log(K_LOG_BRAIN, K_LOG_WARN, "priority GOTO failed - %s", failure);
+}
 
 void K_Brain_Reset(void)
 {
@@ -35,7 +52,7 @@ void K_Brain_Reset(void)
     }
 
     priority = PRIORITY_IDLE;
-    failed = false;
+    outcome = OUTCOME_NONE;
 }
 
 void K_Brain_RequestGoto(double x, double y)
@@ -59,46 +76,71 @@ void K_Brain_RequestGoto(double x, double y)
     priority = PRIORITY_GOTO;
     goto_x = x;
     goto_y = y;
-    failed = false;
+    outcome = OUTCOME_NONE;
 
     K_Log(K_LOG_BRAIN, K_LOG_INFO, "new priority GOTO (%.0f,%.0f) - user click",
           x, y);
 
     if (!K_Nav_SetGoal(x, y))
     {
-        const k_path_t *path = K_Nav_GetPath();
+        FailGoto();
+    }
+}
 
-        if (path != NULL)
-        {
-            K_Path_Describe(path, failure, sizeof(failure));
-        }
-        else
-        {
-            M_StringCopy(failure, "not in a level", sizeof(failure));
-        }
+void K_Brain_Tick(void)
+{
+    if (priority != PRIORITY_GOTO)
+    {
+        return;
+    }
 
-        priority = PRIORITY_IDLE;
-        failed = true;
-        K_Log(K_LOG_BRAIN, K_LOG_WARN, "priority GOTO failed - no path: %s",
-              failure);
+    switch (K_Nav_Tick())
+    {
+        case K_NAV_ARRIVED:
+            priority = PRIORITY_IDLE;
+            outcome = OUTCOME_DONE;
+            outcome_tics = K_Nav_GetStatus()->tics;
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "priority GOTO (%.0f,%.0f) done - "
+                  "arrived in %.1f s", goto_x, goto_y,
+                  (double) outcome_tics / TICRATE);
+            break;
+
+        case K_NAV_FAILED:
+            FailGoto();
+            break;
+
+        default:
+            break;
     }
 }
 
 const char *K_Brain_Status(void)
 {
     const char *mode = K_AutoplayEnabled() ? "" : "VIEWER - ";
+    const k_navstatus_t *nav = K_Nav_GetStatus();
     const k_path_t *path = K_Nav_GetPath();
 
-    if (priority == PRIORITY_GOTO && path != NULL)
+    if (priority == PRIORITY_GOTO && path != NULL && K_AutoplayEnabled())
+    {
+        M_snprintf(status, sizeof(status), "GO TO (%.0f, %.0f) - %d waypoints "
+                   "left, %.0f units", goto_x, goto_y,
+                   path->num_points - nav->target, nav->remaining);
+    }
+    else if (priority == PRIORITY_GOTO && path != NULL)
     {
         M_snprintf(status, sizeof(status), "%sGO TO (%.0f, %.0f) - %d waypoints, "
                    "%.0f units", mode, goto_x, goto_y, path->num_points - 1,
                    path->length);
     }
-    else if (failed)
+    else if (outcome == OUTCOME_FAILED)
     {
         M_snprintf(status, sizeof(status), "%sIDLE - GO TO (%.0f, %.0f) failed: "
                    "%s", mode, goto_x, goto_y, failure);
+    }
+    else if (outcome == OUTCOME_DONE)
+    {
+        M_snprintf(status, sizeof(status), "IDLE - GO TO (%.0f, %.0f) done in "
+                   "%.1f s", goto_x, goto_y, (double) outcome_tics / TICRATE);
     }
     else if (!K_AutoplayEnabled())
     {

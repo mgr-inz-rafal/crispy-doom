@@ -109,6 +109,8 @@ typedef struct
 {
     double x, y;
     double angle;           // radians, counter-clockwise from east
+    double momx, momy;      // momentum, map units per tic
+    int onground;           // movement input only works on the ground
 } k_pose_t;
 
 // Called by Karp at the end of every P_SetupLevel.

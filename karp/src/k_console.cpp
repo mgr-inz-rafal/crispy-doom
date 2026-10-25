@@ -29,6 +29,7 @@
 #include "k_settings.h"
 
 #define FRAME_INTERVAL_MS       16      // redraw at most ~60 times a second
+#define TICS_PER_SECOND         35.0    // the game's TICRATE
 #define PLACEMENT_SAVE_DELAY_MS 1000    // save once the window is still
 
 // At 100% display scaling; multiplied by the display's scale factor.
@@ -729,6 +730,15 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
         draw->AddCircleFilled(screen_points[i], 2.5f * ui_scale, color);
     }
 
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+
+    // The waypoint the bot is driving to.
+    if (nav->state == K_NAV_DRIVING && nav->target < path->num_points - 1)
+    {
+        draw->AddCircle(screen_points[nav->target], 5.0f * ui_scale,
+                        IM_COL32(255, 255, 255, 255), 0, thickness);
+    }
+
     if (path->result == K_PATH_BLOCKED)
     {
         const k_portal_t *portal = &K_Graph_Get()->portals[path->blocked_portal];
@@ -1118,6 +1128,139 @@ static void DrawMapTab(void)
     }
 }
 
+static void DrawRouteStats(const k_path_t *path)
+{
+    if (ImGui::BeginTable("route", 2, ImGuiTableFlags_RowBg))
+    {
+        StatRow("Goal", "%.0f, %.0f", path->goal.x, path->goal.y);
+        StatRow("Result", "%s", K_Path_ResultName(path->result));
+
+        if (path->num_cells > 0)
+        {
+            StatRow("Cells", "%d", path->num_cells);
+            StatRow("Waypoints", "%d", path->num_points - 1);
+            StatRow("Length", "%.0f units", path->length);
+        }
+
+        StatRow("Search", "%d nodes, %.2f ms", path->searched, path->search_ms);
+        ImGui::EndTable();
+    }
+
+    if (path->result != K_PATH_FOUND)
+    {
+        char text[K_LOG_LINE_LEN];
+
+        K_Path_Describe(path, text, sizeof(text));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(warning_color, "%s", text);
+        ImGui::PopTextWrapPos();
+    }
+}
+
+static const char *NavStateName(k_navstate_t state)
+{
+    switch (state)
+    {
+        case K_NAV_DRIVING:
+            return "driving";
+
+        case K_NAV_ARRIVED:
+            return "arrived";
+
+        case K_NAV_FAILED:
+            return "failed";
+
+        default:
+            return "idle";
+    }
+}
+
+static void DrawDriving(void)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    k_navtuning_t *tuning = K_Nav_Tuning();
+    k_pose_t player;
+
+    ImGui::SeparatorText("Driving");
+
+    if (ImGui::BeginTable("driving", 2, ImGuiTableFlags_RowBg))
+    {
+        StatRow("State", "%s", NavStateName(nav->state));
+
+        if (K_Map_GetPlayer(&player))
+        {
+            StatRow("Speed", "%.1f units/tic",
+                    sqrt(player.momx * player.momx + player.momy * player.momy));
+        }
+
+        if (nav->state == K_NAV_DRIVING && path != NULL)
+        {
+            StatRow("Waypoint", "%d of %d", nav->target, path->num_points - 1);
+            StatRow("Remaining", "%.0f units", nav->remaining);
+        }
+
+        if (nav->state != K_NAV_IDLE || nav->tics > 0)
+        {
+            StatRow("Time", "%.1f s", nav->tics / TICS_PER_SECOND);
+            StatRow("Replans", "%d", nav->replans);
+            StatRow("Prediction error", "%.2f units", nav->prediction_error);
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("How far the player ended up from where the "
+                                  "controller expected after each tic, averaged "
+                                  "over about a second. Walls the player slides "
+                                  "along make it grow.");
+            }
+        }
+
+        ImGui::EndTable();
+    }
+
+    if (nav->state == K_NAV_FAILED)
+    {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(warning_color, "%s", nav->problem);
+        ImGui::PopTextWrapPos();
+    }
+
+    ImGui::SeparatorText("Controller");
+
+    static const double min_speed = 2.0, max_speed = 16.7;
+    static const double min_braking = 0.3, max_braking = 3.0;
+    static const double min_radius = 4.0, max_radius = 64.0;
+    static const double min_turn = 1.0, max_turn = 45.0;
+
+    ImGui::PushItemWidth(-FLT_MIN);
+    ImGui::TextUnformatted("Top speed");
+    ImGui::SliderScalar("##speed", ImGuiDataType_Double, &tuning->max_speed,
+                        &min_speed, &max_speed, "%.1f units/tic");
+    ImGui::TextUnformatted("Braking");
+    ImGui::SliderScalar("##braking", ImGuiDataType_Double, &tuning->braking,
+                        &min_braking, &max_braking, "%.2f units/tic/tic");
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("The deceleration assumed when slowing down for "
+                          "corners and the goal. Higher brakes later.");
+    }
+
+    ImGui::TextUnformatted("Waypoint radius");
+    ImGui::SliderScalar("##radius", ImGuiDataType_Double, &tuning->advance_radius,
+                        &min_radius, &max_radius, "%.0f units");
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("A waypoint on the way counts as reached this close.");
+    }
+
+    ImGui::TextUnformatted("Turn rate");
+    ImGui::SliderScalar("##turn", ImGuiDataType_Double, &tuning->max_turn,
+                        &min_turn, &max_turn, "%.1f degrees/tic");
+    ImGui::PopItemWidth();
+}
+
 static void DrawBotTab(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -1151,37 +1294,16 @@ static void DrawBotTab(void)
 
     ImGui::SeparatorText("Route");
 
-    if (path == NULL)
+    if (path != NULL)
+    {
+        DrawRouteStats(path);
+    }
+    else
     {
         ImGui::TextDisabled("No goal - click the map");
-        return;
     }
 
-    if (ImGui::BeginTable("route", 2, ImGuiTableFlags_RowBg))
-    {
-        StatRow("Goal", "%.0f, %.0f", path->goal.x, path->goal.y);
-        StatRow("Result", "%s", K_Path_ResultName(path->result));
-
-        if (path->num_cells > 0)
-        {
-            StatRow("Cells", "%d", path->num_cells);
-            StatRow("Waypoints", "%d", path->num_points - 1);
-            StatRow("Length", "%.0f units", path->length);
-        }
-
-        StatRow("Search", "%d nodes, %.2f ms", path->searched, path->search_ms);
-        ImGui::EndTable();
-    }
-
-    if (path->result != K_PATH_FOUND)
-    {
-        char text[K_LOG_LINE_LEN];
-
-        K_Path_Describe(path, text, sizeof(text));
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextColored(warning_color, "%s", text);
-        ImGui::PopTextWrapPos();
-    }
+    DrawDriving();
 }
 
 //

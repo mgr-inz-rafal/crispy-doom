@@ -516,6 +516,9 @@ boolean D_GrabMouseCallback(void)
     if (menuactive || paused)
         return false;
 
+    if (K_OwnsControls()) // [Karp] the bot drives; leave the cursor free
+        return false;
+
     // only grab mouse when playing levels (but not demos)
 
     return (gamestate == GS_LEVEL) && !demoplayback && !advancedemo;

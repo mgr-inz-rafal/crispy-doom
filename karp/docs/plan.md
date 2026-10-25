@@ -1,6 +1,7 @@
 # Karp - Stage 1 Plan: "Go To Location"
 
-> Status: approved; M0-M5 implemented. Work proceeds milestone by milestone (section 4).
+> Status: approved; M0-M6 implemented, M6 follow-ups next. Work proceeds milestone by milestone
+> (section 4).
 > All Karp code lives under `karp/`; engine edits are single-line hooks tagged `// [Karp]`.
 
 ## 1. Context
@@ -20,7 +21,9 @@ Stage 1 builds the skeleton every later stage stands on:
    the player there.
 
 Stage 1 assumptions: no monsters (`-nomonsters`), no doors/lifts/switches on the route, no
-strafe-jumps, no narrow-corridor/player-radius handling. Static geometry only.
+jumps over gaps (an M6 follow-up). Static geometry only. The first version planned no player-width handling at all;
+the M6 drive test showed it is needed (gaps narrower than the player, solid things, narrow
+ledges), so it comes in the M6 follow-ups (section 4).
 
 Decisions taken with the user:
 - Console UI: **Dear ImGui** in a second SDL2 window, same process. ImGui is vendored, because the
@@ -103,11 +106,11 @@ karp/
 | # | Where | Hook | Purpose |
 |---|---|---|---|
 | H1 | `src/doom/d_main.c` after the `-warp` block (:2327) | Two `//!` doc blocks (`@category game`) + `if (M_CheckParm("-autoplay")) K_EnableAutoplay();` and `if (M_CheckParm("-karpconsole")) K_EnableConsole();` | Turn the bot and/or the console on. Warn if `-autoplay` is used without `-warp` (the bot still activates on any level). |
-| H2 | `src/doom/d_main.c` `D_GrabMouseCallback` (:505) | `if (K_OwnsControls()) return false;` | While the bot drives there is nothing for the mouse to do, so a windowed game leaves the cursor free to reach the console. A fullscreen game still grabs (crispy decides that before asking the callback); Alt+Tab releases it. |
+| H2 | `src/doom/d_main.c` `D_GrabMouseCallback`, after the menu/pause check (:517) | `if (K_OwnsControls()) return false;` | While the bot drives there is nothing for the mouse to do, so a windowed game leaves the cursor free to reach the console. A fullscreen game still grabs (crispy decides that before asking the callback); Alt+Tab releases it. |
 | H3 | `src/doom/d_main.c` `D_DoomLoop`, right after `I_InitGraphics()` (:611) | `K_PostVideoInit();` | With `-karpconsole`: create the console and install the event filter. Whenever Karp is on: register `I_AtExit(K_Shutdown, true)` |
 | H4 | `src/doom/p_setup.c` end of `P_SetupLevel`, before the closing brace (:1402) | `K_LevelLoaded();` | Rebuild the map snapshot and nav graph, reset brain and nav, bump the level generation |
 | H5 | `src/doom/d_net.c` `RunTic`, after `G_Ticker()` (:93) | `K_Ticker();` | Think once per game tic on fresh state (read-only) |
-| H6 | `src/doom/g_game.c` end of `G_BuildTiccmd`, after the lowres block (between :981 and :982) | `K_BuildTiccmd(cmd);` | Write the bot's input into the command before it enters the network layer (section 3.6) |
+| H6 | `src/doom/g_game.c` end of `G_BuildTiccmd`, after the lowres block (between :981 and :982) | `K_BuildTiccmd(cmd, maketic);` | Write the bot's input into the command before it enters the network layer (section 3.6) |
 | H7 | `src/doom/g_game.c` `G_PrepTiccmd`, right after the `strafe` declaration (:1398) | `if (K_OwnsControls()) { mousex = mousey = 0; return; }` | Skip crispy's per-frame mouse look while the bot drives. Without it, moving the mouse over the focused game window turns the view until the next tic, then the bot's command snaps it back. |
 | H8 | `src/doom/d_main.c` `D_RunFrame`: end of function (after :584) and before the wipe-branch `return` (:548) | `K_Frame();` | Redraw the console (rate-limited); the second call keeps it alive during screen melts |
 | H9 | `src/i_video.c` / `i_video.h` (shared by all games) | `I_SetEventFilter(fn)`; call `if (event_filter && event_filter(&sdlevent)) continue;` at the top of the `SDL_PollEvent` loop in `I_GetEvent` (:474); `I_GetWindow()` accessor (`struct SDL_Window;` forward declaration, since i_video.h does not include SDL.h) | Route console events to Karp. Only Doom registers a filter, and only with `-karpconsole`; otherwise it stays NULL. |
@@ -380,51 +383,78 @@ smooth runs.
 
 ### 3.4 `k_nav.c` - path following and steering
 
-So far (M5) nav only plans: `K_Nav_SetGoal(x, y)` runs `K_Path_Find` from the player's position,
-logs the outcome and keeps the route for the console (`K_Nav_GetPath`); `K_Nav_Reset` drops it on
-every level load. M6 adds the rest of this section.
+`K_Nav_SetGoal(x, y)` plans a route from the player's position (`K_Path_Find`), logs the outcome
+and starts driving it; `K_Nav_Reset` drops it on every level load. `K_Nav_GetStatus` reports the
+state (idle, driving, failed), the waypoint being driven to, distance left, speed, time, replans
+and prediction error for the console. Without `-autoplay` nothing ticks, so a route is only
+drawn.
 
 Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`):
 - thrust per tic = `move * 2048 / 65536` units, so forwardmove 50 gives 1.5625;
-- friction 0.90625; running top speed ~16.7 units/tic; coasting stop distance ~161 units;
-- the turn in a ticcmd is applied **before** thrust in the same tic;
-- there is no thrust while airborne.
+- each tic: turn, then thrust (on the ground only), then move by the momentum (each axis clamped
+  to 30), then friction 0.90625 (on the ground only; momentum under 1/16 with no input stops);
+- running forward tops out at 16.7 units/tic of movement; coasting from there takes ~161 units to
+  stop, braking with full reverse thrust ~45.
 
-**Think - `K_Nav_Tick()`, from `K_Ticker` (once per game tic):**
-- **Progress:** find the player's current cell in the path list and move the waypoint cursor
-  there. This handles overshoot and corner cutting. Also advance when within 32 units of an
-  intermediate waypoint.
-- **Off-path:** if the current cell is not on the path (fell off a ledge, got pushed), replan
-  from the current position.
-- **Stuck:** if the player moved < 8 units over the last 35 tics while a goal is active, replan.
-  After 3 replans in a row without progress, mark the priority FAILED.
-- **Arrival:** within 16 units of the goal and speed < 1 -> report DONE.
+**Think - `K_Nav_Tick()`, once per game tic** (from `K_Ticker`, through the brain):
+- **Progress:** the player's cell is looked up in the route's cells. Moving further along the
+  route (perhaps having cut a corner) moves the target waypoint to the first one inside that
+  cell, never back; being pushed back to an earlier route cell sets the target to that cell's way
+  out again. The route remembers which cell each leg runs through (`k_path_t.leg_cells`) for
+  this. A waypoint on the way also counts as reached within 24 units (tunable).
+- **Off the route:** a cell that is not on the route but is one open crossing from a route cell
+  (a corner cut through a neighbouring cell) is tolerated. Anywhere else (fell off a ledge, got
+  pushed) the route is replanned from where the player is, with a log line.
+- **Stuck:** moved under 8 units over the last 35 tics: replan, with a log line. After 3 times in
+  a row the goal fails ("stuck at (x,y)"); the count starts over once the player gets 64 units
+  from where it last got stuck. A replan that finds no route fails the goal at once.
+- **Arrival:** at the last waypoint, within 16 units of the goal and slower than 1 unit/tic: the
+  goal is done and the route is dropped.
+- **Prediction check:** the position predicted for the tic that just ran is compared with the
+  real one; the average over about a second is the prediction error shown in the Bot tab.
 
-Every state change is logged (section 3.8).
+**Act - `K_Nav_BuildCommand(tic)`, once per command** (from `K_BuildTiccmd`):
+1. **Predict.** In single player a command is built 0-2 tics before it runs (`d_loop.c:169`;
+   `gametic` is the next tic to run, `maketic` the one being built), and more in netgames. Nav
+   keeps the commands it sent in a 16-entry ring keyed by tic and replays the ones still waiting
+   to run (`gametic` up to the new tic) on the current player state with the physics above,
+   ignoring walls. The result is the position, momentum and angle when this command will run.
+   If a waypoint is reached during those tics, the next one is the target.
+2. **Speed profile.** The speed wanted now is the lowest of: the top speed (16.7 units/tic,
+   tunable) and, for each waypoint within 400 units along the route, `sqrt(v_k^2 + 2 a s_k)`,
+   where `s_k` is the distance along the route to it, `a` the assumed braking (1.5 units/tic^2,
+   tunable, about half of what full reverse thrust gives) and `v_k` the speed to take that
+   waypoint at: full speed where the route runs straight on, falling with the cosine of the turn
+   to 20% of it through a right angle or sharper, and 0 at the goal. The plan's first version
+   used `k * distance` toward the goal only; corners need slowing for too. Toward the goal the
+   speed is also capped at the distance left, so one tic never carries the player past it.
+3. **Velocity controller.** Desired velocity `v_des` = that speed toward the target waypoint.
+   Required thrust `T = v_des - momentum`, decomposed in the player frame using the **post-turn**
+   angle `a'`: `forward = T . (cos a', sin a')`, `side = T . (sin a', -cos a')`, scaled to command
+   units (`/ (2048/65536)`). If either exceeds its limit (forward +-50, side +-40), both are scaled
+   down so the thrust direction is kept, then rounded. Movement therefore does not depend on
+   facing, and pushing against the momentum brakes. Airborne, no movement is sent (it would do
+   nothing).
+4. **Heading:** turn toward the desired velocity, at most 11.25 degrees per tic (2048 angleturn
+   units, tunable). Cosmetic for now; later stages need it for aiming and using. When recording a
+   demo without `-longtics`, the turn is rounded to a multiple of 256; no remainder needs carrying,
+   since the next command aims from the actual angle again.
+5. Idle or failed: zero movement.
 
-**Act - `K_Nav_BuildCommand()`, from `K_BuildTiccmd`:**
-1. **Predict.** In single player a command is built 1-3 tics before it runs (`d_loop.c:169`), and
-   more in netgames. Karp keeps a small ring of the commands it emitted, tagged with `maketic`.
-   The pending ones (tagged `>= gametic`) are replayed from the current player state with the
-   physics model above (turn, thrust if on ground, move, friction). Walls are ignored, which is
-   fine over 1-3 tics. The result is the predicted position, momentum and angle at the moment
-   this command will execute.
-2. **Velocity controller** on the predicted state:
-   1. Desired velocity `v_des = dir_to_waypoint * speed`, where `speed = 16.7` toward
-      intermediate waypoints and `speed = min(16.7, k * distance)` toward the final goal (k ~0.12,
-      tunable).
-   2. Required thrust `T = v_des - momentum`.
-   3. Decompose `T` into the player frame using the **post-turn** angle `a'`:
-      `forward = T . (cos a', sin a')`, `side = T . (sin a', -cos a')`.
-   4. Scale to command units (`* 32`). If either axis exceeds its limit (forward +-50, side +-40),
-      scale **both** axes down uniformly so the thrust direction is kept, then round.
+The controller settings are adjustable in the console's Bot tab, but not saved yet.
 
-   Because movement comes from strafe decomposition, it does not depend on facing, and
-   counter-thrust brakes automatically.
-3. **Heading:** turn toward the direction of travel, at most 2048 angleturn units per tic (about
-   11 degrees; tunable in the console). This is cosmetic for now; later stages need it for aiming
-   and using.
-4. IDLE, DONE, FAILED or no path -> zero movement.
+**Measured** with a temporary drive test (8 random reachable goals per map, one after another,
+run fast-forward), on Doom (36 maps): 138 of 204 goals reached, 66 failed, none timed out. 12 maps
+reached every goal, most without a single replan. Average speed along the route 9-13 units/tic.
+The prediction is off by 0.0-0.2 units per tic where the player moves freely; it grows only
+while the player pushes against something (prediction ignores collisions). 10 maps got no goals:
+their start areas are closed off by doors, which are out of scope for stage 1.
+
+Almost all failures cascade from a few places where the player got stuck: the replan gives the
+same route, and every later goal starts from the same spot. The causes, each to be fixed and
+tested in its own commit (section 4, M6 follow-ups): routes through gaps narrower than the
+player, solid things (torches, lamps, barrels, columns, trees) that are not part of the geometry,
+and no way to work free once stuck.
 
 ### 3.5 `k_brain.c` - priorities
 
@@ -440,12 +470,16 @@ Every state change is logged (section 3.8).
   GOTO and nav plans it; if there is no route, the GOTO fails at once (back to IDLE) and the reason
   goes to the log and the status line. Without `-autoplay` (viewer mode) the GOTO is planned and
   drawn, but no command is ever written.
+- `K_Brain_Tick()`, once per game tic while the bot owns the controls, ticks nav and ends the
+  GOTO when nav reports arrival (`priority GOTO (x,y) done - arrived in 4.2 s`) or failure
+  (`priority GOTO failed - stuck at (x,y)`).
 - `K_Brain_Reset()` drops any GOTO on every level load (logged).
 - `K_Brain_Status()` returns a one-line description of the current intent for the console status
-  line, e.g. `GO TO (1024, -320) - 14 waypoints, 812 units`, `IDLE - GO TO (1024, -320) failed:
-  <reason>`, prefixed `VIEWER - ` without `-autoplay`.
+  line, e.g. `GO TO (1024, -320) - 14 waypoints left, 812 units`, `IDLE - GO TO (1024, -320) done
+  in 4.2 s`, `IDLE - GO TO (1024, -320) failed: <reason>`; in viewer mode `VIEWER - GO TO ... - 14
+  waypoints, 812 units` (planned only).
 - IDLE means zero movement (the bot owns controls).
-- So far (M5) the brain holds just the current GOTO and the last failure; the priority list,
+- So far the brain holds just the current GOTO and how the last one ended; the priority list,
   statuses, history and scores arrive with the Priorities tab (M7).
 
 ### 3.6 `K_BuildTiccmd` - command injection (H6)
@@ -453,13 +487,13 @@ Every state change is logged (section 3.8).
 Called at the end of `G_BuildTiccmd`, after crispy's fliplevels and lowres handling, so Karp writes
 final, world-space values into the command that is about to be queued and sent. If the gate fails,
 the human command is left untouched (intermissions, menus and so on behave normally). Otherwise:
-1. Compute the command (`K_Nav_BuildCommand`, prediction included) and record it in the pending
-   ring with its `maketic`.
+1. Compute the command (`K_Nav_BuildCommand(maketic)`, prediction included); nav records it in its
+   ring of sent commands.
 2. Always write `forwardmove`, `sidemove` and `angleturn`; set `lookfly`, `arti`, `lookdir` to 0.
 3. If `cmd->buttons & BT_SPECIAL` (pause/unpause, save), keep `buttons`; otherwise clear them.
    Movement is still overwritten in that case, so no human movement leaks through.
-4. If `lowres_turn` (demo recording without `-longtics`), round `angleturn` to a multiple of 256
-   and carry the remainder into the next command, as crispy does for the keyboard.
+4. If `lowres_turn` (demo recording without `-longtics`), nav has already rounded the turn to a
+   multiple of 256 (section 3.4).
 5. Set `localview.ticangleturn = cmd->angleturn`, the same thing crispy's keyboard turning does
    (`g_game.c:898-900`), so the renderer interpolates the turn. Like crispy's keyboard turning,
    this is a single slot: if several commands are built before a tic runs, the view interpolation
@@ -542,8 +576,8 @@ the config; Karp simply ignores it while it owns the controls.
     way with an arrow, red blocked).
   - The route, whenever there is a goal: its cells faintly filled, the line to follow with a dot
     per waypoint, and a goal ring. Blue line and green ring when the route is open; orange line,
-    the blocking crossing as a thick red line, and a red ring when it is blocked. M6 highlights
-    the current waypoint.
+    the blocking crossing as a thick red line, and a red ring when it is blocked. While the bot
+    drives, a white ring marks the waypoint it is driving to.
   - Player arrow (live position and heading).
   - Hover tooltip: subsector # (and which of its cells), sector #, live floor/ceiling, area,
     neighbours by crossing ("4 neighbours: 3 open, 1 step too high").
@@ -552,8 +586,9 @@ the config; Karp simply ignores it while it owns the controls.
 - **Side tabs:**
   - `Priorities`: active priority, status, history, Cancel button.
   - `Bot`: position, facing, current cell; the route's goal, result, cells, waypoints, length and
-    search time, with the reason when it is blocked. M6 adds speed, waypoint index and controller
-    tunables.
+    search time, with the reason when it is blocked; driving state, speed, waypoint "n of N",
+    distance left, time, replans, prediction error, the reason when it failed; and sliders for the
+    controller settings (top speed, braking, waypoint radius, turn rate).
   - `Map`: load stats and sanity-check results.
 - **Rolling log pane** (bottom, always visible; data from 3.8):
   - newest lines at the bottom; auto-scrolls unless the user has scrolled up (then shows a
@@ -633,6 +668,38 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 6. **M5 Pathfinder** - A*, `k_nav` planning, GOTO from a click; the console draws the route and
    the Bot tab shows it, the log says why when there is none (no movement yet).
 7. **M6 Driving** - H2, H5, H6, H7, prediction, controller, arrival, replanning, stuck detection.
+   **M6 follow-ups**, each in its own commit and re-measured with the drive test (section 3.4):
+   1. **Narrow gaps.** Work out how wide each portal really is between walls and treat one
+      narrower than the player as a new "too narrow" crossing. Start at 32 units (the player's
+      width); getting the player lined up exactly enough to pass a 32-unit gap may prove too hard,
+      so it may need to become ~34. Waypoints also move at least 16 units away from wall ends, so
+      routes stop scraping door jambs.
+   2. **Impassable lines** (`ML_BLOCKING`). A portal along one is already refused, but only by the
+      one line the portal records: a portal along several collinear lines can miss an impassable
+      one among them, and the clearance checks of follow-up 1 must treat impassable lines like
+      walls (TODO in `K_Graph_CanCross`).
+   3. **Solid things.** Torches, lamps, barrels, columns, trees and the like block the player but
+      are not part of the geometry. Read the solid non-monster things at level load and block the
+      parts of portals and cells they cover, widened by the player's radius; barrels can be
+      destroyed, so check those live.
+   4. **Downhill and drops.** Going down stairs the player keeps gaining speed: each step down
+      leaves it briefly airborne, with no friction and no control, so it overshoots the target,
+      and next to a pit that can mean falling in. Slow down earlier for crossings that drop
+      (like a corner), and brake harder where it matters.
+   5. **Narrow paths.** Some maps need narrow walkways and bridges, e.g. Doom II MAP24's long
+      ledges only 4-8 units wide over the nukage. Entering a narrow portal or cell, slow down
+      enough to stay on it.
+   6. **Stuck recovery.** Before replanning when stuck, block the crossing ahead for a while, so
+      the new route really differs. If the player stays stuck too long, try semi-random moves in
+      different directions, strafing included, to work free.
+   7. **Running jumps.** Some maps can only be finished by running off a ledge at full speed and
+      clearing a gap to a floor on the other side (at least one Doom II map; which one will turn up
+      in playtesting). The graph then needs "jump" links between cells that share no border,
+      where the gap, the drop and the run-up allow it: the player must reach top speed before the
+      edge (16.7 units/tic running, about 21 when strafe-running), falls while it flies, and can
+      land only on a floor at most 24 units above where it is by then. Gaps narrower than the
+      player need no jump at all: its floor is the highest one under its 32x32 box, so it walks
+      across. Following a jump link means a straight, full-speed run-up and no braking.
 8. **M7 Priorities tab** - IDLE/GOTO lifecycle, history, cancel; polish.
 
 ## 5. Verification
@@ -678,5 +745,5 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 
 Monsters and combat; doors, lifts, switches and keys (the graph keeps sector references and
 evaluates passability live, which is the foundation for these); item priorities (medkits, ammo);
-path smoothing with player radius; narrow corridors; strafe-jumps; damaging-floor costs; lifting
-the netgame guard; Heretic/Hexen.
+path smoothing with player radius (beyond the M6 follow-ups); damaging-floor costs; lifting the
+netgame guard; Heretic/Hexen.

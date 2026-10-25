@@ -333,6 +333,8 @@ static void EnsureCapacity(k_path_t *path, int cells)
     // the goal.
     path->points = realloc(path->points,
                            (2 * path->capacity + 2) * sizeof(*path->points));
+    path->leg_cells = realloc(path->leg_cells,
+                              (2 * path->capacity + 2) * sizeof(*path->leg_cells));
 }
 
 static void Reconstruct(k_path_t *path)
@@ -429,12 +431,15 @@ static void BuildPoints(k_path_t *path)
         if (i > 0 && LegAlongWall(path->cells[i],
                                   path->points[path->num_points - 1], middle))
         {
+            path->leg_cells[path->num_points - 1] = i;
             path->points[path->num_points++] = map->cells[path->cells[i]].centroid;
         }
 
+        path->leg_cells[path->num_points - 1] = i;
         path->points[path->num_points++] = middle;
     }
 
+    path->leg_cells[path->num_points - 1] = path->num_cells - 1;
     path->points[path->num_points++] = goal_point;
     path->length = 0.0;
 
@@ -553,6 +558,7 @@ void K_Path_Free(k_path_t *path)
     free(path->cells);
     free(path->portals);
     free(path->points);
+    free(path->leg_cells);
     memset(path, 0, sizeof(*path));
 }
 

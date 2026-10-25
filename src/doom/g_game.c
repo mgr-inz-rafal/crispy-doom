@@ -83,6 +83,8 @@
 
 #include "d_pwad.h" // [crispy] kex secret level
 
+#include "karp.h" // [Karp]
+
 #define SAVEGAMESIZE	0x2c000
 
 void	G_ReadDemoTiccmd (ticcmd_t* cmd); 
@@ -979,7 +981,9 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
                             cmd->angleturn - desired_angleturn :
                             desired_angleturn - cmd->angleturn;
     }
-} 
+
+    K_BuildTiccmd(cmd, maketic); // [Karp]
+}
  
 
 //
@@ -1395,6 +1399,8 @@ void G_PrepTiccmd (void)
 {
     const boolean strafe = gamekeydown[key_strafe] ||
         mousebuttons[mousebstrafe] || joybuttons[joybstrafe];
+
+    if (K_OwnsControls()) { mousex = mousey = 0; return; } // [Karp] the bot turns
 
     if (mousex && !strafe)
     {
