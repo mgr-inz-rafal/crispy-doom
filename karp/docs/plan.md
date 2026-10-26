@@ -684,7 +684,7 @@ it cannot be reached):
 |---|---|---|
 | GO TO EXIT | the level ends (`gameaction == ga_completed`) | every exit line: 11 and 51 pressed, 52 and 124 crossed (secret exits too) |
 | GET <colour> KEY | the player holds the keycard or skull of that colour, however it got it | every key of that colour lying in the level (cards and skulls, by sprite); the player goes to a pickup spot (below) |
-| USE TRIGGER (sector) | the crossing it was pushed for is open, or will be after a wait (a door opening, a lift on its way, a floor to ride up); else the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed. Shown as `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` once one is chosen |
+| USE TRIGGER (sector) | the crossing it was pushed for is open, or will be after a wait (a door opening, a lift on its way, a floor to ride up); else the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed; a stair builder (7, 8, 100, 127) also moves every step of its chain, found at level load as `EV_BuildStairs` finds them (through two-sided lines with the step in front, to the sector behind with the first step's floor texture), though only the first is tagged. Shown as `USE TRIGGER for sector N (tag T)`, then `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` with the line's tag once one is chosen |
 | GO TO (x, y) | the player arrived | the point (a console click) |
 
 **Planning a goal** (`PlanGoal`) scores every candidate not yet tried by route
@@ -707,7 +707,12 @@ it cannot be reached):
     does may not last until the player gets there: on Doom II MAP12 the bot ran 11,000 units to
     lower a lift, fetched the yellow key while it went back up, and had to lower it again;
   - USE TRIGGER only for a sector some line still moves (one-shot lines lose their special);
-- if nothing can be fixed, the goal **fails**, with the reason for the last candidate tried.
+- if nothing can be fixed, but sectors are still moving (`K_Graph_MoversActive`: a floor,
+  ceiling, door or lift on its way; perpetual lifts and crushers do not count), the goal
+  **waits**: the player stands still and the goal is planned again every second, for up to 15
+  seconds. Stairs being built (Doom II MAP15) or a floor going down (MAP13) can still open a way;
+- otherwise the goal **fails**, with the reason for the last candidate tried; the log first
+  gives the reason for each candidate (up to 8).
 
 **Pickup spots.** A key is picked up when the player's box touches the key's (radius 20), so
 within 36 units on each axis, not only at the key itself. If the player cannot stand at the key
@@ -1015,6 +1020,27 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        still moves.
      The new key order sent MAP03's bot out of a switch alcove past a pillar, where it stuck
      against the corner: the controller now slides along walls (3.4).
+   - MAP13: three keys in a chain (yellow behind red, red behind blue), teleporters and a lift
+     ride all worked: the bot had the blue and red keys after 53 s. The yellow key is on top of a
+     stepped pyramid (96-unit steps) beside a perpetual lift (sector 20, 16 to 400): from the
+     lift's top it takes a **running jump** of about 140 units, dropping 96, onto the key's ledge
+     (follow-up 7). Skipped for now, to come back to. Also seen: after the red key the bot gave up
+     on a step that was still shrinking by a unit a tic (a floor moving down, follow-up 9).
+   - MAP14: the red skull key (near the plasma gun) is reached by a **jump** over several gaps,
+     straight north from about (2021,572), per the user (follow-up 7). Without it the planner
+     goes round in circles (bars behind the red door, the red key behind a switch room) and
+     gives up at once. Also seen: the switch room (sector 256) is entered through a doorway
+     exactly 32 wide (sector 302; Karp needs 34) and has a crushing ceiling started by walk-over
+     lines just outside (73, stopped by 74): the bot knows nothing of crushers or damage yet.
+     Skipped for now, to come back to.
+   - MAP15: the yellow key is in a room left by **stairs** that a switch builds (line 634,
+     special 127). Karp knew only the tagged first step, so the bot saw no way out: stair
+     builders now count as moving every step of their chain (3.5). The bot pressed the switch,
+     and with no way left while the stairs rose it waited and planned again (3.5). From the top
+     of the stairs, though, the way on is a **jump** from the central tower to the southwest
+     region with the yellow door, per the user (follow-up 7). Skipped for now, to come back to.
+     The failure log now gives every candidate's reason, which showed both exits blocked further
+     on, past the stairs.
    - **Setting off right after a press** (3.5): the bot no longer stands at a switch until what
      it moved has stopped, but heads for the door, lift or rising floor at once and waits there.
      Times: MAP03 40.0 -> 34.2 s, MAP05 33.0 -> 30.7 s, MAP12 84.9 -> 77.1 s (MAP01 and MAP10
@@ -1067,8 +1093,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       straight over the middle of the overlap without cutting corners. Doom II MAP04's red key
       needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
       By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
-      But six of the first eleven Doom II maps need them (MAP02, MAP04, MAP06, MAP08, MAP09,
-      MAP11), so they will probably have to come sooner.
+      But nine of the first fifteen Doom II maps need them (MAP02, MAP04, MAP06, MAP08, MAP09,
+      MAP11, MAP13, MAP14, MAP15; MAP14's over several gaps in a row), so they will probably have
+      to come sooner.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -1080,7 +1107,10 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       that is already opening). Missing the window makes it cross the line again (3 times at most).
       Done (3.2.1, 3.5): a lift on its way down, or a perpetual one, is waited for, and a trigger
       goal ends as soon as the way it was pushed for opens or starts opening, so the bot heads
-      for the lift right away.
+      for the lift right away. Other floors on their way down (`T_MoveFloor`, not a lift) are
+      not judged as crossings to wait at, but when no way is left while anything still moves,
+      the brain waits and plans again (3.5), so the bot no longer gives up on a step that is
+      shrinking (Doom II MAP13).
    10. **Boss-death triggers** (needs monsters and combat, so a later stage). Some levels move
        sectors when the last monster of a kind dies, not from any line (`A_BossDeath` and
        `A_KeenDie` in `p_enemy.c`):

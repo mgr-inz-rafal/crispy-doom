@@ -7,9 +7,11 @@
 //
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "SDL.h"
 
+#include "doomdata.h"
 #include "doomstat.h"
 #include "p_local.h"
 #include "r_state.h"
@@ -23,59 +25,153 @@ static int *trigger_first;
 static int *trigger_count;
 static int *trigger_lines;
 
+// While building: which line moves which sector.
+typedef struct
+{
+    int sector;
+    int line;
+} pair_t;
+
+static pair_t *pairs;
+static int num_pairs;
+static int pairs_capacity;
+
+static void AddPair(int sector, int line)
+{
+    if (num_pairs == pairs_capacity)
+    {
+        pairs_capacity = SDL_max(pairs_capacity * 2, 64);
+        pairs = realloc(pairs, pairs_capacity * sizeof(*pairs));
+    }
+
+    pairs[num_pairs].sector = sector;
+    pairs[num_pairs].line = line;
+    ++num_pairs;
+}
+
+static boolean IsStairBuilder(int special)
+{
+    return special == 7 || special == 8 || special == 100 || special == 127;
+}
+
+// A stair builder raises its tagged sector, then the steps after it, as
+// EV_BuildStairs finds them: through a two-sided line that has the step in
+// front, to the sector behind with the first step's floor texture, and on
+// from there. Those are not tagged, but the line moves them too. visited
+// (per sector) stops a chain that comes round to itself, which the engine
+// stops by the sectors it has already set moving.
+static void AddStairs(int start, int line, unsigned char *visited)
+{
+    int texture = sectors[start].floorpic;
+    int step = start;
+    int i;
+
+    memset(visited, 0, SDL_max(numsectors, 1));
+    visited[start] = 1;
+
+    for (;;)
+    {
+        const sector_t *sector = &sectors[step];
+        int next = -1;
+
+        for (i = 0; i < sector->linecount && next < 0; ++i)
+        {
+            const line_t *l = sector->lines[i];
+
+            if ((l->flags & ML_TWOSIDED) && l->frontsector == sector
+             && l->backsector->floorpic == texture)
+            {
+                next = (int) (l->backsector - sectors);
+            }
+        }
+
+        if (next < 0 || visited[next])
+        {
+            return;
+        }
+
+        visited[next] = 1;
+        AddPair(next, line);
+        step = next;
+    }
+}
+
 void K_Specials_Build(void)
 {
     int count = SDL_max(numsectors, 1);
-    int total = 0;
-    int s, i;
+    unsigned char *visited = malloc(count);
+    int *fill;
+    int s, i, k;
 
     free(trigger_first);
     free(trigger_count);
     free(trigger_lines);
     trigger_first = calloc(count, sizeof(int));
     trigger_count = calloc(count, sizeof(int));
+    num_pairs = 0;
 
-    // Count, then fill: few lines are movers, so the sector-by-line loops
-    // stay small.
-    for (s = 0; s < numsectors; ++s)
+    // Few lines are movers, so the line-by-sector loop stays small.
+    for (i = 0; i < numlines; ++i)
     {
-        trigger_first[s] = total;
-
-        if (sectors[s].tag == 0)
+        if (lines[i].tag == 0
+         || K_Specials_MoverTrigger(lines[i].special) == K_TRIGGER_NONE)
         {
             continue;
         }
 
-        for (i = 0; i < numlines; ++i)
+        for (s = 0; s < numsectors; ++s)
         {
-            if (lines[i].tag == sectors[s].tag
-             && K_Specials_MoverTrigger(lines[i].special) != K_TRIGGER_NONE)
+            if (sectors[s].tag == lines[i].tag)
             {
-                ++trigger_count[s];
-                ++total;
+                AddPair(s, i);
+
+                if (IsStairBuilder(lines[i].special))
+                {
+                    AddStairs(s, i, visited);
+                }
             }
         }
     }
 
-    trigger_lines = malloc(SDL_max(total, 1) * sizeof(int));
-    total = 0;
+    // Per sector, its lines (each once: chains from two tagged sectors can
+    // meet).
+    trigger_lines = malloc(SDL_max(num_pairs, 1) * sizeof(int));
 
+    for (k = 0; k < num_pairs; ++k)
+    {
+        ++trigger_count[pairs[k].sector];
+    }
+
+    for (s = 1; s < numsectors; ++s)
+    {
+        trigger_first[s] = trigger_first[s - 1] + trigger_count[s - 1];
+    }
+
+    fill = calloc(count, sizeof(int));
+
+    for (k = 0; k < num_pairs; ++k)
+    {
+        int sector = pairs[k].sector;
+        int *first = &trigger_lines[trigger_first[sector]];
+
+        for (i = 0; i < fill[sector] && first[i] != pairs[k].line; ++i)
+        {
+        }
+
+        if (i == fill[sector])
+        {
+            first[fill[sector]++] = pairs[k].line;
+        }
+    }
+
+    // The duplicates left gaps at the end of each range.
     for (s = 0; s < numsectors; ++s)
     {
-        if (sectors[s].tag == 0)
-        {
-            continue;
-        }
-
-        for (i = 0; i < numlines; ++i)
-        {
-            if (lines[i].tag == sectors[s].tag
-             && K_Specials_MoverTrigger(lines[i].special) != K_TRIGGER_NONE)
-            {
-                trigger_lines[total++] = i;
-            }
-        }
+        trigger_count[s] = fill[s];
     }
+
+    free(fill);
+    free(visited);
 }
 
 k_trigger_t K_Specials_ExitTrigger(int special, int *secret)

@@ -170,6 +170,10 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int ma
 
 k_mover_t K_Graph_SectorMover(int sector);
 
+// Whether any floor, ceiling, door or lift in the level is on its way
+// somewhere. Perpetual lifts and crushers, which never stop, do not count.
+int K_Graph_MoversActive(void);
+
 #ifdef __cplusplus
 }
 #endif

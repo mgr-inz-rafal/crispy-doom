@@ -57,6 +57,12 @@
 #define MOVE_TICS (15 * TICRATE)
 #define MAX_TRIGGERS 3
 
+// No way to any candidate while sectors are still moving (stairs being
+// built, a floor going down): plan again after RETRY_TICS, for up to
+// MAX_WAIT_TICS in all before the goal fails.
+#define RETRY_TICS TICRATE
+#define MAX_WAIT_TICS (15 * TICRATE)
+
 // A key is picked up when the player's box touches the key's (radius 20):
 // within 36 on each axis. Where the player cannot stand at the key, it
 // goes to the nearest point within PICKUP_REACH on each axis (some margin)
@@ -109,6 +115,11 @@ typedef struct
     // (a door opening, a lift on its way down), the goal is done: the
     // player goes on and waits there, not at the switch.
     int portal, from;
+
+    // Found no way while sectors were moving: not planned again before
+    // leveltime retry_tic; waited is how long it has waited so far.
+    int retry_tic;
+    int waited;
 } goal_t;
 
 typedef struct
@@ -148,21 +159,23 @@ static void GoalName(const goal_t *goal, char *buf, int len)
                        : goal->param == K_KEY_YELLOW ? "YELLOW" : "RED");
             break;
 
+        // The line's tag: a stair builder's steps after the first are not
+        // tagged.
         case GOAL_TRIGGER:
             if (goal->planned && goal->chosen.kind == K_GOAL_USE_LINE)
             {
                 M_snprintf(buf, len, "USE SWITCH line %d (tag %d)", goal->chosen.line,
-                           sectors[goal->param].tag);
+                           lines[goal->chosen.line].tag);
             }
             else if (goal->planned)
             {
                 M_snprintf(buf, len, "CROSS LINE %d (tag %d)", goal->chosen.line,
-                           sectors[goal->param].tag);
+                           lines[goal->chosen.line].tag);
             }
             else
             {
-                M_snprintf(buf, len, "USE TRIGGER tag %d (sector %d)",
-                           sectors[goal->param].tag, goal->param);
+                M_snprintf(buf, len, "USE TRIGGER for sector %d (tag %d)", goal->param,
+                           sectors[goal->param].tag);
             }
             break;
 
@@ -606,6 +619,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     goal->used = false;
     goal->moving = false;
     goal->wait = 0;
+    goal->waited = 0;
 
     if (goal->type == GOAL_TRIGGER)
     {
@@ -624,6 +638,31 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     if (!ok)
     {
         CandidateFailed(goal, K_Nav_GetStatus()->problem);
+    }
+}
+
+// Why each candidate was given up on, while planning a goal: logged one
+// by one when it fails (the failure itself names only the last).
+#define MAX_REASONS 8
+
+static char reasons[MAX_REASONS][K_LOG_LINE_LEN];
+static int num_reasons;
+
+static void KeepReason(const char *reason)
+{
+    if (num_reasons < MAX_REASONS)
+    {
+        M_StringCopy(reasons[num_reasons++], reason, K_LOG_LINE_LEN);
+    }
+}
+
+static void LogReasons(const char *name)
+{
+    int i;
+
+    for (i = 0; i < num_reasons && num_reasons > 1; ++i)
+    {
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: %s", name, reasons[i]);
     }
 }
 
@@ -650,6 +689,7 @@ static void PlanGoal(goal_t *goal)
     start.y = player.y;
     CountKeys();
     GoalName(goal, name, sizeof(name));
+    num_reasons = 0;
 
     M_snprintf(reason, sizeof(reason), "%s",
                goal->type == GOAL_EXIT ? "the map has no exit line"
@@ -667,6 +707,7 @@ static void PlanGoal(goal_t *goal)
         {
             M_snprintf(reason, sizeof(reason), "the %s did not work out",
                        candidates[i].what);
+            KeepReason(reason);
             continue;
         }
 
@@ -685,6 +726,7 @@ static void PlanGoal(goal_t *goal)
                 {
                     M_snprintf(reason, sizeof(reason), "no way to the %s: %s",
                                candidates[i].what, text);
+                    KeepReason(reason);
                 }
                 else if (keys_lying[key] > 0 && Allowed(GOAL_KEY, key))
                 {
@@ -706,6 +748,7 @@ static void PlanGoal(goal_t *goal)
                     M_snprintf(reason, sizeof(reason), "the %s needs the %s key, and "
                                "there is none to get", candidates[i].what,
                                K_Specials_KeyName(key));
+                    KeepReason(reason);
                 }
 
                 continue;
@@ -754,6 +797,7 @@ static void PlanGoal(goal_t *goal)
         {
             M_snprintf(reason, sizeof(reason), "no way to the %s: %s",
                        candidates[i].what, text);
+            KeepReason(reason);
         }
     }
 
@@ -783,8 +827,25 @@ static void PlanGoal(goal_t *goal)
             ++trigger_uses[fix_param];
         }
     }
+    else if (K_Graph_MoversActive() && goal->waited < MAX_WAIT_TICS)
+    {
+        // The way may still open (stairs being built, a floor going down,
+        // Doom II MAP15 and MAP13): stand still and plan again shortly.
+        if (goal->waited == 0)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: no way yet (%s), but sectors are "
+                  "moving - waiting", name, reason);
+        }
+
+        M_snprintf(goal->note, sizeof(goal->note), "waiting while sectors move - %s",
+                   reason);
+        goal->retry_tic = leveltime + RETRY_TICS;
+        goal->waited += RETRY_TICS;
+        K_Nav_Clear();
+    }
     else
     {
+        LogReasons(name);
         FailGoal(reason);
     }
 }
@@ -931,7 +992,11 @@ void K_Brain_Tick(void)
 
     if (!goal->planned)
     {
-        PlanGoal(goal);
+        if (leveltime >= goal->retry_tic)
+        {
+            PlanGoal(goal);
+        }
+
         return;
     }
 

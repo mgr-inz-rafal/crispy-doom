@@ -1871,6 +1871,40 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
     return clearance;
 }
 
+int K_Graph_MoversActive(void)
+{
+    const thinker_t *thinker;
+
+    for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
+    {
+        actionf_p1 function = thinker->function.acp1;
+
+        if (function == (actionf_p1) T_MoveFloor || function == (actionf_p1) T_VerticalDoor)
+        {
+            return true;
+        }
+
+        if (function == (actionf_p1) T_PlatRaise
+         && ((const plat_t *) thinker)->type != perpetualRaise)
+        {
+            return true;
+        }
+
+        if (function == (actionf_p1) T_MoveCeiling)
+        {
+            ceiling_e type = ((const ceiling_t *) thinker)->type;
+
+            if (type != crushAndRaise && type != fastCrushAndRaise
+             && type != silentCrushAndRaise)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 k_mover_t K_Graph_SectorMover(int sector)
 {
     const sector_t *s = &sectors[sector];
