@@ -51,8 +51,10 @@
 
 // A sector moved by a line: the time it gets to start moving after a
 // walk-over line is crossed, and to stop again (perpetual lifts never
-// do). After MAX_TRIGGERS times in a level, a sector is not worked again:
-// e.g. a door that closes before the player gets there.
+// do). After MAX_TRIGGERS times in a level, a line is not worked again:
+// e.g. the switch of a door that closes before the player gets there.
+// Per line, not per sector: Doom II MAP21 raises a staircase 16 units a
+// press, by four switches in a row.
 #define START_TICS (2 * TICRATE)
 #define MOVE_TICS (15 * TICRATE)
 #define MAX_TRIGGERS 3
@@ -136,7 +138,7 @@ static int num_failed;
 static boolean exit_wanted; // GO TO EXIT goes on an empty list
 
 static int keys_lying[K_NUM_KEYS];  // refreshed when planning
-static unsigned char *trigger_uses; // per sector
+static unsigned char *line_uses;    // per line, as a trigger goal's choice
 static k_path_t scratch;
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
@@ -228,13 +230,15 @@ static boolean OnStack(goal_type_t type, int param)
 // there (it would wait for itself), and not too deep.
 static boolean Allowed(goal_type_t type, int param)
 {
-    if (depth >= MAX_GOALS || IsFailed(type, param) || OnStack(type, param))
-    {
-        return false;
-    }
+    return depth < MAX_GOALS && !IsFailed(type, param) && !OnStack(type, param);
+}
 
-    return type != GOAL_TRIGGER || trigger_uses == NULL
-        || trigger_uses[param] < MAX_TRIGGERS;
+// Whether a line can still be worked: it has its special (one-shot lines
+// lose it once used) and has not been worked MAX_TRIGGERS times.
+static boolean LineWorks(int line)
+{
+    return K_Specials_MoverTrigger(K_Specials_LineSpecial(line)) != K_TRIGGER_NONE
+        && (line_uses == NULL || line_uses[line] < MAX_TRIGGERS);
 }
 
 static goal_t *Push(goal_type_t type, int param)
@@ -449,8 +453,7 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                 int line = K_Specials_TriggerLine(goal->param, i);
                 k_trigger_t trigger = K_Specials_MoverTrigger(K_Specials_LineSpecial(line));
 
-                // One-shot lines lose their special once used.
-                if (trigger != K_TRIGGER_NONE
+                if (LineWorks(line)
                  && LineCandidate(line, trigger, trigger == K_TRIGGER_USE ? "switch"
                                   : trigger == K_TRIGGER_SHOOT ? "gun switch"
                                   : "walk-over line", &out[count]))
@@ -477,17 +480,14 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 // Getting past blocked crossings
 //
 
-// Whether some line still moves the sector: one-shot lines lose their
-// special once used.
+// Whether some line can still move the sector (LineWorks).
 static boolean LiveTrigger(int sector)
 {
     int i;
 
     for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
     {
-        int line = K_Specials_TriggerLine(sector, i);
-
-        if (K_Specials_MoverTrigger(K_Specials_LineSpecial(line)) != K_TRIGGER_NONE)
+        if (LineWorks(K_Specials_TriggerLine(sector, i)))
         {
             return true;
         }
@@ -572,7 +572,9 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param,
 
     *key_door = -1;
 
-    if (!FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param))
+    // A gap inside a cell is no crossing's: nothing found fixes it.
+    if (path->blocked_pinch
+     || !FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param))
     {
         return false;
     }
@@ -631,6 +633,11 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     if (goal->type == GOAL_TRIGGER)
     {
         K_Map_SectorHeights(goal->param, &goal->floor, &goal->ceiling);
+
+        if (line_uses != NULL && candidate->line >= 0)
+        {
+            ++line_uses[candidate->line];
+        }
     }
 
     GoalName(goal, name, sizeof(name));
@@ -832,11 +839,6 @@ static void PlanGoal(goal_t *goal)
 
         GoalName(fix, fix_name, sizeof(fix_name));
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: %s - added %s", name, blocker, fix_name);
-
-        if (fix_type == GOAL_TRIGGER && trigger_uses != NULL)
-        {
-            ++trigger_uses[fix_param];
-        }
     }
     else if (waitable > 0 && (moving = K_Graph_MovingSector()) >= 0
           && goal->waited < MAX_WAIT_TICS)
@@ -934,8 +936,8 @@ void K_Brain_Reset(void)
     outcome[0] = '\0';
     exit_wanted = K_AutoplayEnabled();
 
-    free(trigger_uses);
-    trigger_uses = calloc(SDL_max(numsectors, 1), 1);
+    free(line_uses);
+    line_uses = calloc(SDL_max(numlines, 1), 1);
 
     K_Path_SetBlockCost(BlockCost);
 }

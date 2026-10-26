@@ -810,7 +810,13 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
                         IM_COL32(255, 255, 255, 255), 0, thickness);
     }
 
-    if (path->result == K_PATH_BLOCKED)
+    // A gap inside a cell has no portal to show: a ring round it instead.
+    if (path->result == K_PATH_BLOCKED && path->blocked_pinch)
+    {
+        draw->AddCircle(MapToScreen(center, path->blocked_at.x, path->blocked_at.y),
+                        8.0f * ui_scale, IM_COL32(255, 40, 40, 255), 0, 2.0f * thickness);
+    }
+    else if (path->result == K_PATH_BLOCKED)
     {
         const k_portal_t *portal = &K_Graph_Get()->portals[path->blocked_portal];
 

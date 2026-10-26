@@ -310,6 +310,29 @@ static int Pop(void)
 // Search
 //
 
+// Where a node enters its cell: at the start or a teleporter's destination
+// (a point), else across its portal.
+static void NodeEntry(int node, k_vec2_t *a, k_vec2_t *b)
+{
+    if (node == start_node || NodeTeleport(node) >= 0)
+    {
+        *a = *b = NodePosition(node);
+    }
+    else
+    {
+        *a = graph->portals[node / 2].a;
+        *b = graph->portals[node / 2].b;
+    }
+}
+
+// A gap inside a cell (K_Graph_Pinched) is no crossing's, so no fix the
+// brain could find gets the player through: costed as a wall would be.
+static double PinchCost(int portal, int cell)
+{
+    return block_cost != NULL && portal >= 0 ? block_cost(portal, cell, K_CROSS_WALL)
+                                             : BLOCKED_PENALTY;
+}
+
 static void PrepareNodes(void)
 {
     num_nodes = 2 * graph->num_portals + 2;
@@ -373,7 +396,7 @@ static boolean Search(k_path_t *path)
     {
         int node = Pop();
         int cell, i, end;
-        k_vec2_t at;
+        k_vec2_t at, entry_a, entry_b;
 
         if (done[node] == search)
         {
@@ -390,10 +413,18 @@ static boolean Search(k_path_t *path)
 
         cell = NodeCell(node);
         at = NodePosition(node);
+        NodeEntry(node, &entry_a, &entry_b);
 
         if (cell == goal_cell)
         {
-            Relax(goal_node, node, Distance(at, goal_point));
+            double step = Distance(at, goal_point);
+
+            if (K_Graph_Pinched(cell, entry_a, entry_b, goal_point, goal_point, NULL))
+            {
+                step += PinchCost(node == start_node ? -1 : node / 2, cell);
+            }
+
+            Relax(goal_node, node, step);
         }
 
         end = graph->first_link[cell] + graph->link_count[cell];
@@ -422,6 +453,12 @@ static boolean Search(k_path_t *path)
             else if (crossing != K_CROSS_OPEN)
             {
                 step += WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
+            }
+
+            // The way through the cell, from where the node came in.
+            if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->b, NULL))
+            {
+                step += PinchCost(link->portal, cell);
             }
 
             Relax(2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1),
@@ -617,15 +654,69 @@ static void CellHeights(int cell, double *floor, double *ceiling)
                         floor, ceiling);
 }
 
+// A gap on the way through route cell i: from the start, a teleporter's
+// destination or the portal in, to the portal out or the goal.
+static boolean PinchedAt(const k_path_t *path, int i, k_vec2_t *where)
+{
+    k_vec2_t in_a, in_b, out_a, out_b;
+    int teleport = i > 0 ? K_Graph_Teleport(path->portals[i - 1], path->cells[i - 1]) : -1;
+
+    if (i == 0)
+    {
+        in_a = in_b = start_point;
+    }
+    else if (teleport >= 0)
+    {
+        in_a = in_b = graph->teleports[teleport].to;
+    }
+    else
+    {
+        in_a = graph->portals[path->portals[i - 1]].a;
+        in_b = graph->portals[path->portals[i - 1]].b;
+    }
+
+    if (i == path->num_cells - 1)
+    {
+        out_a = out_b = goal_point;
+    }
+    else
+    {
+        out_a = graph->portals[path->portals[i]].a;
+        out_b = graph->portals[path->portals[i]].b;
+    }
+
+    return K_Graph_Pinched(path->cells[i], in_a, in_b, out_a, out_b, where);
+}
+
 static void FindBlocked(k_path_t *path)
 {
     int i;
 
-    for (i = 0; i < path->num_cells - 1; ++i)
+    for (i = 0; i < path->num_cells; ++i)
     {
-        const k_portal_t *portal = &graph->portals[path->portals[i]];
-        k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
+        const k_portal_t *portal;
+        k_crossing_t crossing;
         double from_floor, from_ceiling, to_floor, to_ceiling;
+        k_vec2_t where;
+
+        if (PinchedAt(path, i, &where) && path->blocked_count++ == 0)
+        {
+            path->result = K_PATH_BLOCKED;
+            path->blocked_portal = i < path->num_cells - 1 ? path->portals[i]
+                                 : i > 0 ? path->portals[i - 1] : -1;
+            path->blocked_from = path->cells[i];
+            path->blocked_by = K_CROSS_NARROW;
+            path->blocked_pinch = true;
+            path->blocked_at = where;
+        }
+
+        if (i == path->num_cells - 1)
+        {
+            break;
+        }
+
+        portal = &graph->portals[path->portals[i]];
+        crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
 
         if (K_Graph_Passable(crossing) || path->blocked_count++ > 0)
         {
@@ -672,6 +763,7 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
     path->blocked_by = K_CROSS_OPEN;
     path->blocked_height = 0.0;
     path->blocked_count = 0;
+    path->blocked_pinch = false;
     path->searched = 0;
 
     start_point = start;
@@ -770,6 +862,13 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
 
         case K_PATH_BLOCKED:
             break;
+    }
+
+    if (path->blocked_pinch)
+    {
+        M_snprintf(buf, buf_len, "a gap narrower than the player at (%.0f,%.0f)",
+                   path->blocked_at.x, path->blocked_at.y);
+        return;
     }
 
     at = PortalMiddle(g, path->blocked_portal);

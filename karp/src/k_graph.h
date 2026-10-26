@@ -126,6 +126,14 @@ k_vec2_t K_Graph_PortalPoint(int portal, int from_cell);
 // Open, passable after an action (a door, a lift), or a teleporter.
 int K_Graph_Passable(k_crossing_t crossing);
 
+// Whether going through the cell from one stretch of its border to another
+// (a portal, or a point: a == b) means squeezing through a gap narrower
+// than the player inside it, where no portal crosses: a closed block beside
+// a wall, mid-cell (Doom II MAP21's yellow bars). Judged live, like a
+// crossing; where gets the gap's middle.
+int K_Graph_Pinched(int cell, k_vec2_t from_a, k_vec2_t from_b,
+                    k_vec2_t to_a, k_vec2_t to_b, k_vec2_t *where);
+
 // How long the action a crossing needs is expected to take, in tics: 0
 // for an open one. For a teleporter, the time the player stands frozen
 // on arrival.

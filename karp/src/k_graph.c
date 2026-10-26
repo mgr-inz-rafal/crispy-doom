@@ -81,6 +81,18 @@
 #define CLEARANCE_SAMPLES 9
 #define MAX_NEAR_LINES 256
 
+// A gap inside a cell, between its portals, can be narrower than the
+// player too: a closed block beside a wall, mid-cell (Doom II MAP21's
+// yellow bars leave 32 units). Chords across cells, at most two clearances
+// long, from the corners and the ends of lines on their borders, are
+// judged like crossings: sampled every CHORD_STEP, and CHORD_REACH past
+// their ends too, since the player's box can hang over open floor beyond
+// (else every thin cell beside a wall would look like a gap).
+#define MAX_CHORD (2.0 * CLEARANCE + 1.0)
+#define CHORD_REACH (CLEARANCE - 1.0)
+#define CHORD_STEP 2.0
+#define MAX_CHORD_POINTS 64
+
 // Where a route crosses a portal: this far from anything that stops the
 // player where the portal allows (more than its radius, so it does not
 // clip wall corners), and otherwise as near the middle as it can be.
@@ -136,6 +148,20 @@ static k_vec2_t *door_min, *door_max;   // per door sector, its bounding box
 // Per line: the teleporter it belongs to, -1 if none.
 static int *line_teleports;
 static int teleports_capacity;
+
+// Chords across cells where a gap inside one may be narrower than the
+// player (K_Graph_Pinched), grouped by cell.
+typedef struct
+{
+    k_vec2_t a, b;
+    int judged;             // leveltime + 1 when last judged, 0 never
+    boolean narrow;
+} chord_t;
+
+static chord_t *chords;
+static int num_chords;
+static int chords_capacity;
+static int *chord_first;    // per cell, into chords; one extra at the end
 
 //
 // Vector helpers
@@ -1081,6 +1107,154 @@ static void FindTeleporters(const k_map_t *map)
     }
 }
 
+//
+// Pinches
+//
+
+static boolean OnBorder(const k_vec2_t *poly, int n, k_vec2_t p)
+{
+    int i;
+
+    for (i = 0; i < n; ++i)
+    {
+        if (SegmentDistance(poly[i], poly[(i + 1) % n], p) < 1.0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static boolean SamePoint(k_vec2_t a, k_vec2_t b)
+{
+    return fabs(a.x - b.x) < 0.5 && fabs(a.y - b.y) < 0.5;
+}
+
+// A chord of the cell being built (from chord_first[cell] on), if it goes
+// across it: not too long, not along an edge, not there already.
+static void TryChord(int cell, const k_vec2_t *poly, int n, k_vec2_t a, k_vec2_t b)
+{
+    double length = Length(Sub(b, a));
+    k_vec2_t middle = { (a.x + b.x) * 0.5, (a.y + b.y) * 0.5 };
+    int i;
+
+    if (length < 1.0 || length > MAX_CHORD || OnBorder(poly, n, middle))
+    {
+        return;
+    }
+
+    for (i = chord_first[cell]; i < num_chords; ++i)
+    {
+        if ((SamePoint(chords[i].a, a) && SamePoint(chords[i].b, b))
+         || (SamePoint(chords[i].a, b) && SamePoint(chords[i].b, a)))
+        {
+            return;
+        }
+    }
+
+    if (num_chords == chords_capacity)
+    {
+        chords_capacity = SDL_max(chords_capacity * 2, 256);
+        chords = realloc(chords, chords_capacity * sizeof(*chords));
+    }
+
+    chords[num_chords].a = a;
+    chords[num_chords].b = b;
+    chords[num_chords].judged = 0;
+    chords[num_chords].narrow = false;
+    ++num_chords;
+}
+
+// The narrowest way across a convex cell between two obstacles on its
+// border starts at the end of one of them: a corner, or the end of a line
+// partway along an edge. From each such point, a chord to the nearest
+// point of every other edge, and to each other such point.
+static void FindChords(const k_map_t *map)
+{
+    int c;
+
+    num_chords = 0;
+    free(chord_first);
+    chord_first = malloc((map->num_cells + 1) * sizeof(*chord_first));
+
+    for (c = 0; c < map->num_cells; ++c)
+    {
+        const k_cell_t *cell = &map->cells[c];
+        const k_vec2_t *poly = &map->points[cell->first_point];
+        int n = cell->num_points;
+        k_vec2_t points[MAX_CHORD_POINTS];
+        k_vec2_t min = { cell->min.x - 1.0, cell->min.y - 1.0 };
+        k_vec2_t max = { cell->max.x + 1.0, cell->max.y + 1.0 };
+        int num_points = 0;
+        int x, y, x0, y0, x1, y1, k, i, j, end;
+
+        chord_first[c] = num_chords;
+
+        for (i = 0; i < n && num_points < MAX_CHORD_POINTS; ++i)
+        {
+            points[num_points++] = poly[i];
+        }
+
+        CellRange(min, max, &x0, &y0, &x1, &y1);
+
+        for (y = y0; y <= y1; ++y)
+        {
+            for (x = x0; x <= x1; ++x)
+            {
+                int grid = y * grid_width + x;
+
+                for (k = cell_first[grid]; k < cell_first[grid + 1]; ++k)
+                {
+                    int line = cell_items[k] - num_edges;
+                    k_vec2_t ends[2];
+
+                    if (line < 0)
+                    {
+                        continue;
+                    }
+
+                    ends[0] = map->lines[line].v1;
+                    ends[1] = map->lines[line].v2;
+
+                    for (end = 0; end < 2; ++end)
+                    {
+                        for (j = 0; j < num_points && !SamePoint(points[j], ends[end]); ++j)
+                        {
+                        }
+
+                        if (j == num_points && num_points < MAX_CHORD_POINTS
+                         && OnBorder(poly, n, ends[end]))
+                        {
+                            points[num_points++] = ends[end];
+                        }
+                    }
+                }
+            }
+        }
+
+        for (i = 0; i < num_points; ++i)
+        {
+            for (j = 0; j < n; ++j)
+            {
+                k_vec2_t a = poly[j], ab = Sub(poly[(j + 1) % n], poly[j]);
+                double t = SDL_max(0.0, SDL_min(1.0, Dot(Sub(points[i], a), ab)
+                                                     / SDL_max(Dot(ab, ab), 1e-12)));
+                k_vec2_t nearest = { a.x + ab.x * t, a.y + ab.y * t };
+
+                TryChord(c, poly, n, points[i], nearest);
+            }
+
+            for (j = i + 1; j < num_points; ++j)
+            {
+                TryChord(c, poly, n, points[i], points[j]);
+            }
+        }
+    }
+
+    chord_first[map->num_cells] = num_chords;
+}
+
 void K_Graph_Build(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -1096,6 +1270,7 @@ void K_Graph_Build(void)
     BuildLinks(map);
     FindMoverSectors(map);
     FindTeleporters(map);
+    FindChords(map);
     CheckHoles(map);
     CheckConnectivity(map);
 
@@ -1104,9 +1279,9 @@ void K_Graph_Build(void)
                    / SDL_GetPerformanceFrequency();
 
     K_Log(K_LOG_MAP, graph.holes > 0 ? K_LOG_WARN : K_LOG_INFO,
-          "%s graph: %d portals, %d teleporters, %d holes (%.0f units), "
+          "%s graph: %d portals, %d teleporters, %d chords, %d holes (%.0f units), "
           "%d isolated, %d components (largest %d of %d cells), %.1f ms",
-          map->name, graph.num_portals, graph.num_teleports, graph.holes,
+          map->name, graph.num_portals, graph.num_teleports, num_chords, graph.holes,
           graph.hole_length, graph.isolated_cells, graph.components,
           graph.largest_component, map->num_cells, graph.build_ms);
 }
@@ -1204,26 +1379,35 @@ static boolean NearDoor(const standing_t *standing, int sector)
         && BoxGap(standing->b, door_min[sector], door_max[sector]) < standing->reach;
 }
 
+// Whether using the line opens the door behind it: a manual door line,
+// from its front side, and the key it needs, if any.
+static boolean OpensDoor(const line_t *line)
+{
+    int key = K_Specials_LockKey(line->special);
+
+    return IsManualDoor(line->special) && (key < 0 || K_Specials_HasKey(key));
+}
+
 // The ceiling of the sector on one side of a line, as a player beside the
 // line meets it. A door counts as open where the player stands in it, can
-// open it with this line (a manual door line, from its front side), or is
-// near it all along: at a crossing, near enough that the closed door alone
-// would leave no way through, so the player gets there only through the
-// open door (Doom II MAP16 and MAP03: one-way doors leave strips 8 and 16
-// deep behind them). Else a closed door's faces would narrow every
-// crossing near a doorway, its own included. Locked or not: the door's own
-// crossing says whether a key is missing (MAP16's blue door, at the back
-// of an alcove only 16 deep). But not across a face that does not open it,
-// from further off: there the door is a block (MAP16: a red-key pillar in
-// the mouth of the corridor to the exit, opened from two of its four
-// faces, leaves gaps exactly as wide as the player on either side).
+// open it with this line (OpensDoor), or is near it all along: at a
+// crossing, near enough that the closed door alone would leave no way
+// through, so the player gets there only through the open door (Doom II
+// MAP16 and MAP03: one-way doors leave strips 8 and 16 deep behind them;
+// MAP16's blue door, locked, at the back of an alcove only 16 deep). Else
+// a closed door's faces would narrow every crossing near a doorway, its own
+// included. Further off, a door that this face does not open, or that is
+// locked without its key, is a block: MAP16's red-key pillar in the mouth
+// of the corridor to the exit, opened from two of its four faces, leaves
+// gaps exactly as wide as the player on either side; MAP21's yellow bars,
+// doors on all faces, leave a 24-unit gap between two of them.
 static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *standing)
 {
     sector_t *sector = side ? line->backsector : line->frontsector;
     int index = (int) (sector - sectors);
 
     if (index == standing->sector[0] || index == standing->sector[1]
-     || (side == 1 && IsManualDoor(line->special))
+     || (side == 1 && OpensDoor(line))
      || (door_sectors[index] && NearDoor(standing, index)))
     {
         return OpenCeiling(sector);
@@ -1345,6 +1529,8 @@ typedef struct
     fixed_t floor[2];           // [0] before the portal, [1] past it
     fixed_t ceiling[2];
     standing_t standing;        // on the portal, in the cells on either side
+    boolean crossing;           // a real portal: a line along it is the
+                                // crossing, not beside it
 } stance_t;
 
 static void Stance(int portal_index, int from, stance_t *stance)
@@ -1372,6 +1558,7 @@ static void Stance(int portal_index, int from, stance_t *stance)
     stance->standing.a = portal->a;
     stance->standing.b = portal->b;
     stance->standing.reach = CLEARANCE;
+    stance->crossing = true;
 
     if (stance->floor[1] - stance->floor[0] <= MAX_STEP_UP)
     {
@@ -1484,7 +1671,7 @@ static int NearObstacles(const stance_t *stance, double reach, int *found, int m
                 }
 
                 if (i < count || count >= max
-                 || AlongPortal(&map->lines[line], portal))
+                 || (stance->crossing && AlongPortal(&map->lines[line], portal)))
                 {
                     continue;
                 }
@@ -1826,6 +2013,127 @@ int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
     }
 
     return found;
+}
+
+// Whether no point on the chord, nor CHORD_REACH past its ends, is
+// CLEARANCE from every obstacle, for a player standing in the cell: as
+// Narrow judges a crossing, sampled more finely. Once a tic.
+static boolean ChordNarrow(int cell, chord_t *chord)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t dir = Sub(chord->b, chord->a);
+    double length = Length(dir);
+    int found[MAX_NEAR_LINES];
+    k_portal_t across;
+    stance_t stance;
+    int count, samples, s, i;
+
+    if (chord->judged == leveltime + 1)
+    {
+        return chord->narrow;
+    }
+
+    dir.x /= length;
+    dir.y /= length;
+
+    memset(&across, 0, sizeof(across));
+    across.cell[0] = across.cell[1] = cell;
+    across.a.x = chord->a.x - dir.x * CHORD_REACH;
+    across.a.y = chord->a.y - dir.y * CHORD_REACH;
+    across.b.x = chord->b.x + dir.x * CHORD_REACH;
+    across.b.y = chord->b.y + dir.y * CHORD_REACH;
+    across.line = -1;
+    across.teleport_from = -1;
+    length += 2.0 * CHORD_REACH;
+
+    stance.portal = &across;
+    stance.normal.x = -dir.y;
+    stance.normal.y = dir.x;
+    StandingHeights(cell, &stance.floor[0], &stance.ceiling[0]);
+    stance.floor[1] = stance.floor[0];
+    stance.ceiling[1] = stance.ceiling[0];
+    stance.standing.sector[0] = map->subsectors[map->cells[cell].subsector].sector;
+    stance.standing.sector[1] = stance.standing.sector[0];
+    stance.standing.a = across.a;
+    stance.standing.b = across.b;
+    stance.standing.reach = CLEARANCE;
+    stance.crossing = false;
+
+    count = NearObstacles(&stance, CLEARANCE, found, MAX_NEAR_LINES);
+    samples = (int) (length / CHORD_STEP) + 1;
+    chord->narrow = true;
+
+    for (s = 0; s <= samples && chord->narrow; ++s)
+    {
+        k_vec2_t at = PointAlong(across.a, across.b, length * s / samples);
+
+        for (i = 0; i < count; ++i)
+        {
+            if (SegmentDistance(map->lines[found[i]].v1, map->lines[found[i]].v2, at)
+                < CLEARANCE)
+            {
+                break;
+            }
+        }
+
+        if (i == count)
+        {
+            chord->narrow = false;
+        }
+    }
+
+    chord->judged = leveltime + 1;
+    return chord->narrow;
+}
+
+// Which side of a chord's line a stretch of border lies on: 1 or -1, or 0
+// if it reaches across. Its ends may touch the line.
+static int ChordSide(const chord_t *chord, k_vec2_t a, k_vec2_t b)
+{
+    k_vec2_t dir = Sub(chord->b, chord->a);
+    double length = Length(dir);
+    double da = (dir.x * (a.y - chord->a.y) - dir.y * (a.x - chord->a.x)) / length;
+    double db = (dir.x * (b.y - chord->a.y) - dir.y * (b.x - chord->a.x)) / length;
+    int side_a = da > 0.5 ? 1 : da < -0.5 ? -1 : 0;
+    int side_b = db > 0.5 ? 1 : db < -0.5 ? -1 : 0;
+
+    if (side_a == 0 || side_b == 0)
+    {
+        return side_a + side_b;
+    }
+
+    return side_a == side_b ? side_a : 0;
+}
+
+int K_Graph_Pinched(int cell, k_vec2_t from_a, k_vec2_t from_b,
+                    k_vec2_t to_a, k_vec2_t to_b, k_vec2_t *where)
+{
+    const k_map_t *map = K_Map_Get();
+    int i;
+
+    if (cell < 0 || chord_first == NULL || graph.generation != map->generation)
+    {
+        return false;
+    }
+
+    for (i = chord_first[cell]; i < chord_first[cell + 1]; ++i)
+    {
+        chord_t *chord = &chords[i];
+
+        if (ChordSide(chord, from_a, from_b) * ChordSide(chord, to_a, to_b) < 0
+         && ChordNarrow(cell, chord))
+        {
+            if (where != NULL)
+            {
+                where->x = (chord->a.x + chord->b.x) * 0.5;
+                where->y = (chord->a.y + chord->b.y) * 0.5;
+            }
+
+            return true;
+        }
+    }
+
+    return false;
 }
 
 int K_Graph_Passable(k_crossing_t crossing)

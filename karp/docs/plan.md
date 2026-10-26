@@ -397,17 +397,34 @@ for a lift to lower or a ride up). Otherwise stairs whose steps are shallower th
 radius look too narrow: on Doom II MAP03 the steps are 8 high and 16 deep, and from the floor below
 the first one, the second one's riser looked like a wall 16 units from the crossing. A drop is no obstacle (the player can hang over it).
 A closed manual door counts as open where the player opens it on the way (otherwise a door's
-faces, 8 units apart, would narrow every crossing near a doorway), whether or not it is locked
-(the door's own crossing says whether a key is missing). That is: seen across a face that opens
-it (a door line, from its front side); where the player stands in it; or where it is within 17
-units of every point on the crossing, so that, closed, it alone would leave no way through and
-the player gets there only through the open door (one-way doors leave strips 8 and 16 units
-deep behind them on Doom II MAP16 and MAP03). Seen across a plain face from further off, a closed
-door is a block: MAP16's red-key pillar, a door opened from two of its four faces, leaves gaps
-exactly as wide as the player on either side, which first looked 90 units wide with the pillar
-"open", so the bot never went for the red key. Judged live, so bars that lower open the gap.
-`K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the obstacle
-lines), so the brain can look for a line that moves them.
+faces, 8 units apart, would narrow every crossing near a doorway). That is: seen across a face
+that opens it (a door line, from its front side) when the player has the key it needs, if any;
+where the player stands in it; or where it is within 17 units of every point on the crossing,
+locked or not, so that, closed, it alone would leave no way through and the player gets there
+only through the open door (one-way doors leave strips 8 and 16 units deep behind them on Doom II
+MAP16 and MAP03; MAP16's blue door, locked, sits at the back of an alcove 16 deep: the door's own
+crossing says the key is missing). Seen from further off across a face that does not open it, or
+locked without the key, a closed door is a block: MAP16's red-key pillar, a door opened from two
+of its four faces, leaves gaps exactly as wide as the player on either side, which first looked
+90 units wide with the pillar "open", so the bot never went for the red key; MAP21's yellow bars,
+door faces all round, leave a gap of 24 between two of them. Judged live, so bars that lower open
+the gap. `K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the
+obstacle lines), so the brain can look for a line that moves them.
+
+**Gaps inside cells** (`K_Graph_Pinched`). A gap can also be narrower than the player inside a
+cell, between two crossings that are each wide enough: MAP21's yellow bars, a closed block beside
+a wall mid-cell, leave 32 units (exactly the player, so no way through), with the crossings on
+either side 24 units off. In a convex cell the narrowest way across between two obstacles on its
+border starts at the end of one of them: a corner, or the end of a line partway along an edge. So
+at level load each cell gets chords from each such point to the nearest point of every other edge,
+and to each other such point, at most 35 units long (two clearances) and not along an edge; MAP21
+has 83, the regression maps 53-247. A chord is judged like a crossing, live (once a tic): too
+narrow if no point on it is 17 units from every obstacle, sampled every 2 units, and also 16 units
+past its ends, since the player's box can hang over open floor beyond (else every thin cell beside
+a wall would look like a gap). Going through a cell from one stretch of its border to another (a
+portal, or a point: the start, the goal, a teleporter's destination) is pinched if a narrow chord
+has them on opposite sides. Nothing the brain can find fixes a pinch (it is no crossing's): the
+pathfinder costs it as a wall (3.3).
 
 **Where a route crosses a portal** (`K_Graph_PortalPoint`): not always its middle, but the point
 on it that is at least 24 units from every obstacle, the one nearest the middle if several are;
@@ -477,6 +494,10 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
   (`K_Path_SetBlockCost`): 10^6 for a crossing it knows how to get past (a key lies in the level, a
   line moves the sector), 10^8 for one it does not, so blocked routes run through fixable
   crossings. Crossings are judged live (`K_Graph_CanCross`).
+- **Through a cell**: a search node is a portal crossed one way, so expanding it goes through its
+  cell to the next portal; that way is pinched if a narrow chord lies across it (3.2.1). A pinch
+  costs as a crossing with no fix (10^8). It is also reported like a blocked crossing, as "a gap
+  narrower than the player at (x, y)", with no fix for the brain to look for.
 - **Waypoints**: the route's line passes each portal at `K_Graph_PortalPoint` (3.2.1), not exactly
   at the middle the search costed, so it keeps clear of wall corners.
 - **Legs along a wall.** When a route enters and leaves a cell by two portals on the same edge,
@@ -786,8 +807,10 @@ for a walk-over line) and then to stop.
 - a goal whose candidates all fail is marked failed for the rest of the level, never pushed
   again, and the goal below looks for another way;
 - a goal already on the stack is never pushed again (a key behind its own door);
-- at most 8 goals deep; one sector is triggered at most 3 times a level (a door that closes again
-  before the player gets there);
+- at most 8 goals deep; one line is worked at most 3 times a level (the switch of a door that
+  closes again before the player gets there), and a sector is fixable while one of its lines can
+  still be worked. Per line, not per sector: Doom II MAP21 raises a staircase 16 units a press, by
+  four switches in a row (the fourth was refused when the limit was per sector);
 - a failed GO TO EXIT is not added again: no retrying every tic.
 
 **Clicks:** `K_Brain_RequestGoto(x, y)` (from the console) rejects clicks outside a level or off the
@@ -1137,6 +1160,32 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      teleporter back) to the exit. The weapon change was not needed there, so it is untested in
      play. The map load reports 2 small holes (8 units) and 43 cells apart from the rest; they did
      not matter.
+   - MAP19: the route to the exit crosses a river-shaped sector lined by a ring of blue torches
+     that together form a wall: open in the geometry, impassable with the things. The bot sticks
+     on a torch at (-1394,669) and every exit route leads there. **Needs solid things**, and not
+     only steering round them: the pathfinder must plan round them too (follow-up 3). Skipped for
+     now, to come back to.
+   - MAP20: no way to the exit from the start: every route to the raised parts (the walkway with
+     walk-over line 557, tag 15, which lowers the way to the exit; the room with line 271, which
+     opens the door to a teleport pad) climbs out of the big floor at -72 by a step of 144 or
+     264. The way up takes a **jump** over a gap, per the user (follow-up 7). Skipped for now, to
+     come back to. Seen on the way: the pad (lines 874-877, tag 16) sits inside walk-over lines
+     300-303 that lower the block it teleports onto, from 400 (above the walkway's ceiling) to
+     176, so stepping onto the pad does both, in the right order.
+   - MAP21: after the first teleporter the route ran past a yellow-key block (sector 58, doors on
+     three faces, a plain fourth) through a strip exactly 32 units wide, and the bot stuck there.
+     The narrow check only looked at crossings, and those on either side of the block were 24
+     units off: gaps inside cells are now checked too (3.2.1, 3.3). The route then tried the gap
+     between two yellow blocks (24 units diagonally), which looked open because the blocks' faces
+     are door lines: a locked door now counts as open across its face only with the key (3.2.1).
+     Then the bot went for the yellow key: four one-shot stair builders (lines 110-113, tag 18)
+     each raise a staircase 16 units, and the first step (sector 51) is also a lift worked from
+     its side walls (lines 133, 134). The fourth press was refused (at most 3 triggers per sector,
+     now per line, 3.5); with it, the bot called the lift, rode it up the stairs, teleported, took
+     the yellow key (24.2 s) and headed for the exit. A red-key door is in the way, and the red
+     key lies on a raised lift (sector 16) lowered only by a switch on a platform 96 units up
+     (sector 15), reached by a **jump**, per the user (follow-up 7). Skipped for now, to come back
+     to. The regression maps pass at their times.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1158,7 +1207,10 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       it stops dead. By the user's choice this is a **topic of its own**, like jumps, to be
       thought through first: monsters block the player too and move about, and a barrel may be
       easier to shoot than to go round. Doom II MAP03 (a torch on the way to switch 445) and
-      MAP17 (barrels on a staircase) need it now.
+      MAP17 (barrels on a staircase) need it now. Steering round a thing is not enough: things
+      can form walls (MAP19: a ring of torches closes a passage the geometry leaves open), so
+      solid things must go into what the pathfinder plans on, e.g. as blocks cut into the cells
+      and portals, widened by the player's radius.
    4. **Downhill and drops.** Going down stairs the player keeps gaining speed: each step down
       leaves it briefly airborne, with no friction and no control, so it overshoots the target,
       and next to a pit that can mean falling in. Slow down earlier for crossings that drop
@@ -1193,9 +1245,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       straight over the middle of the overlap without cutting corners. Doom II MAP04's red key
       needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
       By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
-      But nine of the first fifteen Doom II maps need them (MAP02, MAP04, MAP06, MAP08, MAP09,
-      MAP11, MAP13, MAP14, MAP15; MAP14's over several gaps in a row), so they will probably have
-      to come sooner.
+      But eleven of the first twenty-one Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
+      MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21; MAP14's over several gaps in a row), so
+      they will probably have to come sooner.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not

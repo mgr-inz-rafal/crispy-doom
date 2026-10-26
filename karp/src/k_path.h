@@ -66,6 +66,13 @@ typedef struct
     double blocked_height;
     int blocked_count;
 
+    // Or a gap inside blocked_from, narrower than the player, on the way
+    // through it (K_Graph_Pinched): blocked_by is K_CROSS_NARROW, the gap is
+    // at blocked_at, and blocked_portal is the way out of the cell (-1 if
+    // the route ends there and began there too). Nothing fixes it.
+    int blocked_pinch;
+    k_vec2_t blocked_at;
+
     int searched;           // search nodes expanded
     double search_ms;
 
