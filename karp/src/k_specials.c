@@ -2,8 +2,8 @@
 // DESCRIPTION:
 //	Karp's knowledge of what lines and things do. The line specials are
 //	the vanilla ones (p_switch.c P_UseSpecialLine, p_spec.c
-//	P_CrossSpecialLine); keys are recognised by sprite, as P_TouchSpecialThing
-//	does.
+//	P_CrossSpecialLine and P_ShootSpecialLine); keys are recognised by
+//	sprite, as P_TouchSpecialThing does.
 //
 
 #include <stdlib.h>
@@ -218,6 +218,11 @@ k_trigger_t K_Specials_MoverTrigger(int special)
         case 10: case 88: case 120: case 121: case 53: case 87: case 8:
         case 100: case 40:
             return K_TRIGGER_CROSS;
+
+        // Gun switches (G1, GR: P_ShootSpecialLine): floors that rise, a
+        // door that opens.
+        case 24: case 46: case 47:
+            return K_TRIGGER_SHOOT;
 
         default:
             return K_TRIGGER_NONE;

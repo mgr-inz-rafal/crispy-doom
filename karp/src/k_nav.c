@@ -24,6 +24,9 @@
 //	down is boarded like any open floor; on it, the crossing off it waits
 //	for the ride up.
 //
+//	Gun switches are worked the same way, but shot: with a hitscan weapon,
+//	brought up first if need be, and only once it is ready to fire.
+//
 //	Teleporters: the player runs across the line, and the route goes on
 //	from the destination. No slowing down: a teleport stops the player
 //	anyway, and freezes it for a moment, which the prediction knows.
@@ -100,6 +103,11 @@
 // up to ACTION_TURN degrees a tic, and holds the spot while waiting.
 #define ACTION_DISTANCE 24.0
 #define USE_REACH 60.0
+
+// How far a hitscan attack reaches (p_local.h): MELEERANGE for the fist and
+// the chainsaw, MISSILERANGE for bullets; a little less, to be sure.
+#define MELEE_REACH 60.0
+#define SHOT_REACH 2000.0
 #define ACTION_TURN 45.0
 #define SPOT_RADIUS 6.0
 #define HOLD_GAIN 0.3
@@ -155,7 +163,7 @@ typedef enum
     PHASE_WAIT,             // waiting for the door or lift
 } phase_t;
 
-static const char *phase_names[] = { "walking up", "pressing use", "waiting" };
+static const char *phase_names[] = { "walking up", "pressing", "waiting" };
 
 typedef struct
 {
@@ -637,10 +645,10 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     }
 }
 
-// Whether use, pressed in the command about to be sent, would work the
-// action's line: the engine traces 64 units straight ahead from where the
-// player is when the tic starts, after the tic's turn.
-static boolean UseReaches(const body_t *body, const k_command_t *command)
+// Whether use or an attack, pressed in the command about to be sent, would
+// reach the action's line: the engine traces straight ahead from where the
+// player is when the tic starts, after the tic's turn (64 units for use).
+static boolean LineReaches(const body_t *body, const k_command_t *command, double reach)
 {
     double angle = body->angle + command->turn / ANGLETURN_PER_RADIAN;
     double dx = cos(angle), dy = sin(angle);
@@ -657,7 +665,63 @@ static boolean UseReaches(const body_t *body, const k_command_t *command)
     t = ((action.a.x - body->x) * ey - (action.a.y - body->y) * ex) / denominator;
     u = ((action.a.x - body->x) * dy - (action.a.y - body->y) * dx) / denominator;
 
-    return t > 0.0 && t <= USE_REACH && u > 0.02 && u < 0.98;
+    return t > 0.0 && t <= reach && u > 0.02 && u < 0.98;
+}
+
+// Only a hitscan attack sets off a gun switch: P_LineAttack calls
+// P_ShootSpecialLine for each line its trace crosses. That is the fist, the
+// chainsaw and the bullet and shell weapons; the rockets, plasma and BFG
+// balls are projectiles, which never do.
+static boolean Hitscan(weapontype_t weapon)
+{
+    return weapon == wp_fist || weapon == wp_chainsaw || weapon == wp_pistol
+        || weapon == wp_shotgun || weapon == wp_supershotgun || weapon == wp_chaingun;
+}
+
+static boolean CanFire(const player_t *player, weapontype_t weapon)
+{
+    ammotype_t ammo = weaponinfo[weapon].ammo;
+
+    // The shotgun's slot brings up the super shotgun when the player has
+    // it, which fires two shells.
+    int need = weapon == wp_supershotgun
+            || (weapon == wp_shotgun && player->weaponowned[wp_supershotgun]) ? 2 : 1;
+
+    return player->weaponowned[weapon] && (ammo == am_noammo || player->ammo[ammo] >= need);
+}
+
+// The weapon to shoot a gun switch with: the one in hand if it will do,
+// else a bullet or shell weapon with ammo, else the fist (its slot brings
+// up the chainsaw when the player has it). Melee reaches 64 units, enough
+// from the spot in front of the line. Each is picked by the slot of its
+// own number.
+static weapontype_t ShootingWeapon(const player_t *player)
+{
+    static const weapontype_t choices[] = { wp_pistol, wp_chaingun, wp_shotgun };
+    int i;
+
+    if (Hitscan(player->readyweapon) && CanFire(player, player->readyweapon))
+    {
+        return player->readyweapon;
+    }
+
+    for (i = 0; i < arrlen(choices); ++i)
+    {
+        if (CanFire(player, choices[i]))
+        {
+            return choices[i];
+        }
+    }
+
+    return wp_fist;
+}
+
+// Up, and in its ready state, where pressing fire fires (A_WeaponReady).
+static boolean WeaponReady(const player_t *player)
+{
+    return player->pendingweapon == wp_nochange
+        && player->psprites[ps_weapon].state
+           == &states[weaponinfo[player->readyweapon].readystate];
 }
 
 // Pressing use on a door that is opening (or open) closes it, and on a
@@ -666,7 +730,7 @@ static boolean WorthPressing(void)
 {
     k_mover_t mover;
 
-    if (action.kind == K_ACTION_USE)
+    if (action.kind == K_ACTION_USE || action.kind == K_ACTION_SHOOT)
     {
         return true;
     }
@@ -696,10 +760,38 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
 
     SteerToHold(body, action.spot, &action.face, command);
 
+    // A hitscan weapon first, and fire only once it is up: never a rocket
+    // fired while switching.
+    if (action.phase == PHASE_AIM && action.kind == K_ACTION_SHOOT)
+    {
+        const player_t *player = &players[consoleplayer];
+        weapontype_t weapon = ShootingWeapon(player);
+
+        if (player->readyweapon != weapon)
+        {
+            command->change = 1;
+            command->weapon = weapon;
+            return;
+        }
+
+        if (tic - action.press_tic > 1 && speed < 4.0 && WeaponReady(player)
+         && LineReaches(body, command, weapon == wp_fist || weapon == wp_chainsaw
+                                       ? MELEE_REACH : SHOT_REACH))
+        {
+            command->attack = 1;
+            action.phase = PHASE_WAIT;
+            action.tics = 0;
+            action.press_tic = tic;
+            ++action.presses;
+        }
+
+        return;
+    }
+
     // Use is released for a tic between presses, or the engine ignores it.
     if (action.phase == PHASE_AIM && action.kind != K_ACTION_RIDE
      && tic - action.press_tic > 1 && speed < 4.0
-     && WorthPressing() && UseReaches(body, command))
+     && WorthPressing() && LineReaches(body, command, USE_REACH))
     {
         command->use = 1;
         action.phase = PHASE_WAIT;
@@ -747,7 +839,7 @@ static void Fail(const char *problem)
 
 static void ActionText(void)
 {
-    static const char *kinds[] = { "", "door", "lift", "lift ride", "switch" };
+    static const char *kinds[] = { "", "door", "lift", "lift ride", "switch", "gun switch" };
 
     if (action.line >= 0)
     {
@@ -914,14 +1006,14 @@ static void FailAction(const char *what)
     Fail(problem);
 }
 
-// At the goal: press the switch the player was sent to.
+// At the goal: press, or shoot, the switch the player was sent to.
 static void StartUseAction(void)
 {
     const k_line_t *line = &K_Map_Get()->lines[status.goal_line];
     k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
 
     memset(&action, 0, sizeof(action));
-    action.kind = K_ACTION_USE;
+    action.kind = status.goal_kind == K_GOAL_SHOOT_LINE ? K_ACTION_SHOOT : K_ACTION_USE;
     action.route_cell = -1;
     action.sector = -1;
     action.line = status.goal_line;
@@ -936,8 +1028,9 @@ static void StartUseAction(void)
     status.action_line = action.line;
     SetPhase(PHASE_AIM);
 
-    K_Log(K_LOG_NAV, K_LOG_INFO, "pressing the switch at line %d (%.0f,%.0f)",
-          action.line, middle.x, middle.y);
+    K_Log(K_LOG_NAV, K_LOG_INFO, "%s the switch at line %d (%.0f,%.0f)",
+          action.kind == K_ACTION_SHOOT ? "shooting" : "pressing", action.line,
+          middle.x, middle.y);
 }
 
 // What a switch does is up to whoever sent the player (an exit ends the
@@ -948,7 +1041,8 @@ static boolean UpdateUseAction(void)
 
     if (action.phase == PHASE_AIM && action.tics > AIM_TICS)
     {
-        FailAction("could not use the line");
+        FailAction(action.kind == K_ACTION_SHOOT ? "could not shoot the line"
+                                                 : "could not use the line");
         return false;
     }
 
@@ -956,7 +1050,8 @@ static boolean UpdateUseAction(void)
     {
         if (action.presses >= MAX_PRESSES)
         {
-            FailAction("using the line does nothing");
+            FailAction(action.kind == K_ACTION_SHOOT ? "shooting the line does nothing"
+                                                     : "using the line does nothing");
             return false;
         }
 
@@ -978,7 +1073,7 @@ static boolean UpdateAction(k_vec2_t at, double speed)
     double height;
     char why[96];
 
-    if (action.kind == K_ACTION_USE)
+    if (action.kind == K_ACTION_USE || action.kind == K_ACTION_SHOOT)
     {
         return UpdateUseAction();
     }
@@ -1355,7 +1450,7 @@ k_navstate_t K_Nav_Tick(void)
     if (status.target == path.num_points - 1 && Distance(at, goal) < ARRIVE_RADIUS
      && status.speed < ARRIVE_SPEED && action.kind == K_ACTION_NONE)
     {
-        if (status.goal_kind == K_GOAL_USE_LINE)
+        if (status.goal_kind == K_GOAL_USE_LINE || status.goal_kind == K_GOAL_SHOOT_LINE)
         {
             StartUseAction();
         }

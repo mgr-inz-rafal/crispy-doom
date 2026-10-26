@@ -610,6 +610,18 @@ the caller (an exit ends the level). A walk-over line works only if the player c
 the route to the spot past it can go round the line's end instead (Doom II MAP05); then the
 player first goes to the spot just as far before the line, and from there across.
 
+**Gun switches** (specials 24, 46, 47; `P_ShootSpecialLine`) are worked from the same spot, but
+shot: fire instead of use. Only a hitscan attack sets one off (`P_LineAttack` calls it for each
+line its trace crosses, whatever lies beyond): the fist, the chainsaw, the pistol, the shotguns
+and the chaingun, not rockets, plasma or the BFG, which are projectiles. So the player shoots with
+the weapon in hand if it is one of those and has ammo, else brings up the pistol, chaingun or
+shotgun (whichever has ammo, in that order; the shotgun's slot brings up the super shotgun if the
+player has it, so it needs 2 shells), else the fist (whose slot brings up the chainsaw if the
+player has it). The fist reaches 64 units, enough from the spot. Fire is pressed only once that
+weapon is up and in its ready state (`A_WeaponReady`), so nothing is fired while switching, and
+only when the trace would reach the line (2048 units for bullets). As with use, a shot after
+which nothing happens within 15 tics is repeated, 3 times at most.
+
 **Doors and lifts on the route** (`UpdateAction` in Think, `SteerAction` in Act). The target never
 moves past the way out of a cell whose crossing is not open yet, and the speed profile treats
 that waypoint as a stop. "The" crossing is the first one from the player's route cell on that is
@@ -714,7 +726,7 @@ it cannot be reached):
 |---|---|---|
 | GO TO EXIT | the level ends (`gameaction == ga_completed`) | every exit line: 11 and 51 pressed, 52 and 124 crossed (secret exits too) |
 | GET <colour> KEY | the player holds the keycard or skull of that colour, however it got it | every key of that colour lying in the level (cards and skulls, by sprite); the player goes to a pickup spot (below) |
-| USE TRIGGER (sector) | the crossing it was pushed for is open, or will be after a wait (a door opening, a lift on its way, a floor to ride up); else the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed; a stair builder (7, 8, 100, 127) also moves every step of its chain, found at level load as `EV_BuildStairs` finds them (through two-sided lines with the step in front, to the sector behind with the first step's floor texture), though only the first is tagged. Shown as `USE TRIGGER for sector N (tag T)`, then `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` with the line's tag once one is chosen |
+| USE TRIGGER (sector) | the crossing it was pushed for is open, or will be after a wait (a door opening, a lift on its way, a floor to ride up); else the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed, gun switches shot (3.4); a stair builder (7, 8, 100, 127) also moves every step of its chain, found at level load as `EV_BuildStairs` finds them (through two-sided lines with the step in front, to the sector behind with the first step's floor texture), though only the first is tagged. Shown as `USE TRIGGER for sector N (tag T)`, then `USE SWITCH line N (tag T)`, `SHOOT SWITCH line N (tag T)` or `CROSS LINE N (tag T)` with the line's tag once one is chosen |
 | GO TO (x, y) | the player arrived | the point (a console click) |
 
 **Planning a goal** (`PlanGoal`) scores every candidate not yet tried by route
@@ -804,8 +816,10 @@ the human command is left untouched (intermissions, menus and so on behave norma
 1. Compute the command (`K_Nav_BuildCommand(maketic)`, prediction included); nav records it in its
    ring of sent commands.
 2. Always write `forwardmove`, `sidemove` and `angleturn`; set `lookfly`, `arti`, `lookdir` to 0.
-3. If `cmd->buttons & BT_SPECIAL` (pause/unpause, save), keep `buttons`; otherwise clear them.
-   Movement is still overwritten in that case, so no human movement leaks through.
+3. If `cmd->buttons & BT_SPECIAL` (pause/unpause, save), keep `buttons`; otherwise replace them
+   with the bot's: `BT_USE`, `BT_ATTACK` (gun switches), and `BT_CHANGE` with a weapon slot, as
+   the number keys send it. Movement is still overwritten in that case, so no human movement
+   leaks through.
 4. If `lowres_turn` (demo recording without `-longtics`), nav has already rounded the turn to a
    multiple of 256 (section 3.4).
 5. Set `localview.ticangleturn = cmd->angleturn`, the same thing crispy's keyboard turning does
@@ -1115,6 +1129,14 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      careful approach the bot no longer slides past it at the old speed and angle. An expected
      regression: **needs solid things** (follow-up 3). MAP01 8.1 s, MAP05 31.0 s, MAP10 45.5 s,
      MAP12 80.5 s, MAP16 40.9 s still pass.
+   - MAP18: passed, 32.5 s. The way on starts behind a door opened by **shooting** its face (line
+     39, special 46, GR door open stay), which Karp did not know: the passage in front looked
+     "too narrow" (the closed door 8 units in), with nothing to fix it. Gun switches are now
+     triggers like switches, shot with a hitscan weapon (3.4). The bot shot it with the pistol in
+     hand, then took the yellow and blue keys (a teleporter, a stair switch, a lift ride and a
+     teleporter back) to the exit. The weapon change was not needed there, so it is untested in
+     play. The map load reports 2 small holes (8 units) and 43 cells apart from the rest; they did
+     not matter.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

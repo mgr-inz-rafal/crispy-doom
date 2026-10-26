@@ -32,6 +32,7 @@ typedef enum
     K_ACTION_LIFT,          // calling a lift down
     K_ACTION_RIDE,          // on a lift, waiting for it to rise
     K_ACTION_USE,           // pressing the switch at the goal
+    K_ACTION_SHOOT,         // shooting the gun switch at the goal
 } k_navaction_t;
 
 // What to do at the goal.
@@ -40,6 +41,8 @@ typedef enum
     K_GOAL_POINT,           // just get there
     K_GOAL_USE_LINE,        // press use on a line (a switch)
     K_GOAL_CROSS_LINE,      // walk across a line (a walk-over trigger)
+    K_GOAL_SHOOT_LINE,      // shoot a line (a gun switch), with a hitscan
+                            // weapon
 } k_goalkind_t;
 
 // Controller settings, adjustable in the console's Bot tab.
@@ -83,6 +86,9 @@ typedef struct
     int side;
     int turn;               // angleturn: 65536 is a full circle
     int use;                // press use (BT_USE)
+    int attack;             // fire (BT_ATTACK)
+    int change;             // switch to `weapon` (BT_CHANGE)
+    int weapon;             // a weapon slot, as the number keys pick it
 } k_command_t;
 
 // Drops the goal and its route; called on every level load.
@@ -93,9 +99,9 @@ void K_Nav_Reset(void);
 // none, either way.
 int K_Nav_SetGoal(double x, double y);
 
-// Where to stand to work a line: in front of a switch (its front side,
-// where use works), or just past a line to walk across, on the side away
-// from the player. Returns 0 if there is no floor there.
+// Where to stand to work a line: in front of a switch or gun switch (its
+// front side, where use works), or just past a line to walk across, on the
+// side away from the player. Returns 0 if there is no floor there.
 int K_Nav_LineGoalPoint(int line, k_goalkind_t kind, double *x, double *y);
 
 // Like K_Nav_SetGoal, to the point K_Nav_LineGoalPoint gives; on arrival

@@ -167,6 +167,11 @@ static void GoalName(const goal_t *goal, char *buf, int len)
                 M_snprintf(buf, len, "USE SWITCH line %d (tag %d)", goal->chosen.line,
                            lines[goal->chosen.line].tag);
             }
+            else if (goal->planned && goal->chosen.kind == K_GOAL_SHOOT_LINE)
+            {
+                M_snprintf(buf, len, "SHOOT SWITCH line %d (tag %d)", goal->chosen.line,
+                           lines[goal->chosen.line].tag);
+            }
             else if (goal->planned)
             {
                 M_snprintf(buf, len, "CROSS LINE %d (tag %d)", goal->chosen.line,
@@ -386,7 +391,8 @@ static k_vec2_t PickupSpot(k_vec2_t at)
 static int LineCandidate(int line, k_trigger_t trigger, const char *what,
                          candidate_t *candidate)
 {
-    candidate->kind = trigger == K_TRIGGER_USE ? K_GOAL_USE_LINE : K_GOAL_CROSS_LINE;
+    candidate->kind = trigger == K_TRIGGER_USE ? K_GOAL_USE_LINE
+                    : trigger == K_TRIGGER_SHOOT ? K_GOAL_SHOOT_LINE : K_GOAL_CROSS_LINE;
     candidate->line = line;
     M_snprintf(candidate->what, sizeof(candidate->what), "%s at line %d", what, line);
     return K_Nav_LineGoalPoint(line, candidate->kind, &candidate->at.x,
@@ -445,8 +451,9 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 
                 // One-shot lines lose their special once used.
                 if (trigger != K_TRIGGER_NONE
-                 && LineCandidate(line, trigger, trigger == K_TRIGGER_USE
-                                  ? "switch" : "walk-over line", &out[count]))
+                 && LineCandidate(line, trigger, trigger == K_TRIGGER_USE ? "switch"
+                                  : trigger == K_TRIGGER_SHOOT ? "gun switch"
+                                  : "walk-over line", &out[count]))
                 {
                     ++count;
                 }

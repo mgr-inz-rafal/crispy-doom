@@ -30,6 +30,7 @@ typedef enum
     K_TRIGGER_NONE,
     K_TRIGGER_USE,          // a switch: press use on its front side
     K_TRIGGER_CROSS,        // a walk-over line: cross it
+    K_TRIGGER_SHOOT,        // a gun switch: hit it with a hitscan attack
 } k_trigger_t;
 
 // A key lying in the level.
@@ -48,8 +49,7 @@ k_trigger_t K_Specials_ExitTrigger(int special, int *secret);
 
 // Lines that move the sectors with their tag in a way that can open a way:
 // doors that open, floors, lifts, stairs, ceilings that rise. K_TRIGGER_NONE
-// for anything else (doors that close, crushers, lights, teleporters,
-// lines worked by shooting them).
+// for anything else (doors that close, crushers, lights, teleporters).
 k_trigger_t K_Specials_MoverTrigger(int special);
 
 // A line's live special: one-shot lines lose theirs once used.
