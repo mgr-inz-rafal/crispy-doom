@@ -612,7 +612,13 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
    a step of 16 down) threw the bot off at full speed, still turning as it left a step. Running
    straight past an edge needs no slowing (MAP03's straight run to the blue key). An always-on
    limit near edges was tried first; it hid the early turn at the advance radius, and slowed
-   stairways for nothing.
+   stairways for nothing. Braking for a careful waypoint counts on only half the usual figure:
+   the controller lags a tic or more, and on Doom II MAP24's 8-unit ledges at right angles over
+   a pit the full figure brought the bot to the corner at 7 units/tic instead of 1. And into and
+   out of a careful waypoint, when the controls cannot give all the thrust wanted, the momentum
+   across the way on is cancelled first and only what is left speeds the player up along it
+   (slowing down along it is not held back): after that corner the bot had spent most of its
+   thrust running up the next ledge and drifted 23 units over the side.
 4. **Heading:** turn toward the desired velocity, at most 11.25 degrees per tic (2048 angleturn
    units, tunable). Cosmetic for now; later stages need it for aiming and using. When recording a
    demo without `-longtics`, the turn is rounded to a multiple of 256; no remainder needs carrying,
@@ -1186,6 +1192,30 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      key lies on a raised lift (sector 16) lowered only by a switch on a platform 96 units up
      (sector 15), reached by a **jump**, per the user (follow-up 7). Skipped for now, to come back
      to. The regression maps pass at their times.
+   - MAP22: ten switches, two teleporters and two lift rides went well, and the bot had the blue
+     key after 17 s. The red key's door opens from switch 299 (tag 12) on a ledge (sector 16,
+     floor -136) 88 units above a room; the lift in the room (sector 25, tag 11, lowered by switch
+     289 behind door 23, tag 10) rises to -136 too, but 16 units short of the ledge, with room
+     floor in between. The player's box walks across such a gap (its floor is the highest under
+     it); Karp has no link there, so the ledge looked out of reach. The brain kept opening door 23
+     and lowering the lift, found no way from the lift to the switch, and gave up once switch 276
+     had been used three times. **Needs gap links** (follow-up 7). Skipped for now, to come back
+     to.
+   - MAP23: the starting area is full of barrels, and the bot sticks among them within 2 seconds,
+     on its way to the first switch (line 9, tag 2). **Needs solid things**: going round barrels,
+     or blowing them up (follow-up 3). Skipped for now, to come back to.
+   - MAP24: blue key after 8 s, then a long run over 8-unit ledges at right angles above a nukage
+     pit (sector 24 over sector 0, 512 lower), where the bot fell at a corner, rode a pad in the pit
+     back to the start and fell again, round and round. Careful corners now brake earlier and
+     cancel drift first (3.4): the bot takes the corners within a unit of the ledge's middle, and
+     had the red key at 40 s, past two teleporters and switches 1004 and 990. Then it loops at
+     the red key's two lifts, side by side: sector 83 (tag 24, floor 64, lowered by switch 990 and
+     walk-over lines 1028, 1040 and 1042, the last inside 83 itself) and sector 86 (tag 25, floor
+     128, the key's, lowered by line 984 on their border). With both moving, the step over line
+     984 keeps changing; each trigger goal ends as soon as its crossing turns "opening", the brain
+     plans again instead of crossing, the lift goes back up, and round it goes. To look into:
+     goals finishing early around lifts. MAP01 8.2 s, MAP05 31.0 s, MAP10 45.9 s, MAP12 75.1 s,
+     MAP16 42.2 s, MAP18 32.9 s pass, and MAP17's bridge still gets its red key.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1206,8 +1236,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       height (no heights are checked), and the player does not slide along it as along a wall:
       it stops dead. By the user's choice this is a **topic of its own**, like jumps, to be
       thought through first: monsters block the player too and move about, and a barrel may be
-      easier to shoot than to go round. Doom II MAP03 (a torch on the way to switch 445) and
-      MAP17 (barrels on a staircase) need it now. Steering round a thing is not enough: things
+      easier to shoot than to go round. Doom II MAP03 (a torch on the way to switch 445), MAP17
+      (barrels on a staircase), MAP19 (a ring of torches) and MAP23 (a starting area full of
+      barrels) need it now. Steering round a thing is not enough: things
       can form walls (MAP19: a ring of torches closes a passage the geometry leaves open), so
       solid things must go into what the pathfinder plans on, e.g. as blocks cut into the cells
       and portals, widened by the player's radius.
@@ -1221,8 +1252,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       ledges only 4-8 units wide over the nukage. Entering a narrow portal or cell, slow down
       enough to stay on it. Doom II MAP03's raised strip to the teleporter is exactly the
       player's width: once the bot drifted a unit off it (and still stood on it), once it fell
-      off and had to go round. Partly done (3.4): careful corners near edges, and wall avoidance
-      no longer pushes the player off a ledge it hangs over (likely MAP03's fall too).
+      off and had to go round. Partly done (3.4): careful corners near edges, braked for early and
+      taken drift first (MAP24's 8-unit ledges now hold), and wall avoidance no longer pushes the
+      player off a ledge it hangs over (likely MAP03's fall too).
    6. **Stuck recovery.** Before replanning when stuck, block the crossing ahead for a while, so
       the new route really differs. If the player stays stuck too long, try semi-random moves in
       different directions, strafing included, to work free. Also loops that are not stuck:
@@ -1244,10 +1276,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       portal (far floor within 24, headroom; a lift that is down rides up first), crossed
       straight over the middle of the overlap without cutting corners. Doom II MAP04's red key
       needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
+      So does MAP22: from a raised lift to a ledge at the same height, 16 units away.
       By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
-      But eleven of the first twenty-one Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
-      MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21; MAP14's over several gaps in a row), so
-      they will probably have to come sooner.
+      But twelve of the first twenty-two Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
+      MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21, MAP22; MAP14's over several gaps in a
+      row), so they will probably have to come sooner.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not

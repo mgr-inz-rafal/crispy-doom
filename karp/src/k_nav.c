@@ -94,6 +94,12 @@
 #define CAREFUL_TURN 20.0
 #define CAREFUL_ADVANCE 8.0
 
+// Slowing down for a careful waypoint, only this fraction of the usual
+// braking is counted on: the controller lags a tic or more behind, and on
+// an 8-unit ledge (Doom II MAP24) the full figure got the player to a right
+// angle at 7 units a tic instead of 1.
+#define CAREFUL_BRAKING 0.5
+
 // Commands sent, by tic, for prediction.
 #define SENT_SIZE 16
 
@@ -469,8 +475,9 @@ static double SpeedLimit(const body_t *body, int target)
     for (k = target; k <= last && along < LOOKAHEAD; ++k)
     {
         double corner = k == last ? 0.0 : CornerSpeed(k);
+        double braking = careful[k] ? tuning.braking * CAREFUL_BRAKING : tuning.braking;
 
-        limit = SDL_min(limit, sqrt(corner * corner + 2.0 * tuning.braking * along));
+        limit = SDL_min(limit, sqrt(corner * corner + 2.0 * braking * along));
 
         // Past a stop, or a teleporter, nothing ahead needs slowing for now.
         if (corner == 0.0 || path.jumps[k])
@@ -487,13 +494,26 @@ static double SpeedLimit(const body_t *body, int target)
     return limit;
 }
 
+// How far a thrust is beyond what the controls give (1 at the limit),
+// facing `angle`.
+static double ControlScale(double angle, double thrust_x, double thrust_y)
+{
+    double forward = (thrust_x * cos(angle) + thrust_y * sin(angle)) / THRUST_SCALE;
+    double side = (thrust_x * sin(angle) - thrust_y * cos(angle)) / THRUST_SCALE;
+
+    return SDL_max(fabs(forward) / MAX_FORWARD, fabs(side) / MAX_SIDE);
+}
+
 // Thrusts whatever turns the momentum into the desired velocity
 // (desired_x, desired_y), and turns toward it - or toward the angle face,
-// if given.
+// if given. With drift_first, when that is more than the controls give,
+// the momentum across the desired way is cancelled first, and only what
+// is left speeds the player up along it; else both are scaled alike.
 static void Steer(const body_t *body, double desired_x, double desired_y,
-                  const double *face, k_command_t *command)
+                  const double *face, boolean drift_first, k_command_t *command)
 {
     double max_turn = (face != NULL ? ACTION_TURN : tuning.max_turn) * K_PI / 180.0;
+    double desired = sqrt(desired_x * desired_x + desired_y * desired_y);
     double turn = 0.0;
     double angle, thrust_x, thrust_y, forward, side, scale;
 
@@ -529,6 +549,39 @@ static void Steer(const body_t *body, double desired_x, double desired_y,
     angle = body->angle + command->turn / ANGLETURN_PER_RADIAN;
     thrust_x = desired_x - body->momx;
     thrust_y = desired_y - body->momy;
+
+    // Speeding up along the way waits for the drift across it; slowing
+    // down along it does not.
+    if (drift_first && desired > 1e-6 && ControlScale(angle, thrust_x, thrust_y) > 1.0)
+    {
+        double ux = desired_x / desired, uy = desired_y / desired;
+        double along = thrust_x * ux + thrust_y * uy;
+        double across_x = thrust_x - along * ux, across_y = thrust_y - along * uy;
+        double low = 0.0, high = 1.0;
+        int i;
+
+        if (along > 0.0)
+        {
+            for (i = 0; i < 12; ++i)
+            {
+                double f = (low + high) * 0.5;
+
+                if (ControlScale(angle, across_x + along * f * ux, across_y + along * f * uy)
+                    > 1.0)
+                {
+                    high = f;
+                }
+                else
+                {
+                    low = f;
+                }
+            }
+
+            thrust_x = across_x + along * low * ux;
+            thrust_y = across_y + along * low * uy;
+        }
+    }
+
     forward = (thrust_x * cos(angle) + thrust_y * sin(angle)) / THRUST_SCALE;
     side = (thrust_x * sin(angle) - thrust_y * cos(angle)) / THRUST_SCALE;
 
@@ -550,12 +603,12 @@ static void SteerToStop(const body_t *body, k_vec2_t to, const double *face,
 
     if (distance < 1e-6)
     {
-        Steer(body, 0.0, 0.0, face, command);
+        Steer(body, 0.0, 0.0, face, false, command);
         return;
     }
 
     Steer(body, (to.x - at.x) / distance * speed, (to.y - at.y) / distance * speed,
-          face, command);
+          face, false, command);
 }
 
 // Stays near `to`, without hurrying.
@@ -572,7 +625,7 @@ static void SteerToHold(const body_t *body, k_vec2_t to, const double *face,
         y *= HOLD_SPEED / length;
     }
 
-    Steer(body, x, y, face, command);
+    Steer(body, x, y, face, false, command);
 }
 
 // The route keeps its legs inside cells, but not clear of the corners
@@ -615,6 +668,7 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     int last = path.num_points - 1;
     k_vec2_t at = { body->x, body->y };
     double distance, speed, vx, vy;
+    boolean steady;
 
     // The waypoint may be reached during the tics still waiting to run.
     if (target < TargetLimit()
@@ -632,16 +686,22 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
         speed = SDL_min(speed, distance);
     }
 
+    // Into and out of a careful corner: off a ledge's turn, the momentum
+    // of the leg before must not carry the player over the side while it
+    // speeds up along the next (Doom II MAP24, 8-unit ledges at right
+    // angles over a pit).
+    steady = careful[target] || (target > 0 && careful[target - 1]);
+
     if (distance > 1e-6)
     {
         vx = (path.points[target].x - at.x) / distance * speed;
         vy = (path.points[target].y - at.y) / distance * speed;
         AvoidWalls(body, &vx, &vy);
-        Steer(body, vx, vy, NULL, command);
+        Steer(body, vx, vy, NULL, steady, command);
     }
     else
     {
-        Steer(body, 0.0, 0.0, NULL, command);
+        Steer(body, 0.0, 0.0, NULL, steady, command);
     }
 }
 
