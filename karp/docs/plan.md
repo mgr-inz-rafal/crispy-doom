@@ -482,8 +482,11 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
 - **Legs along a wall.** When a route enters and leaves a cell by two portals on the same edge,
   the leg between them runs along that edge. That is common and harmless along a partition line,
   where the edge is all portals, but between two doorways in one wall it would scrape the wall. A
-  leg that runs along a stretch of border that is not a portal (sampled at 1/4, 1/2 and 3/4) goes
-  through the cell's centroid instead.
+  leg that runs along a stretch of border that is not a way on (sampled at 1/4, 1/2 and 3/4) goes
+  through the cell's centroid instead. Not a way on: a wall, or a portal to a floor more than 24
+  higher, or more than 24 lower, a ledge's edge the player would fall off. On Doom II MAP16 both
+  crossings of a landing lay on its open edge; followed at careful speed (3.4), the leg along it
+  dropped the bot back to the start, and the route sent it up again, round and round.
 - **Output** (`k_path_t`): the result, the route's cells and the portals between them (for
   progress tracking in M6), the points to follow (start, portal middles, the occasional centroid,
   goal), the length, the first blocked crossing with its kind and height, nodes searched and time.
@@ -574,7 +577,21 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
    touching at 16 * sqrt(2) units. The direction away is from the line's nearest point, so a wall
    end caught by the side of the box turns the player round it. Measured as a circle, the end of
    an 8-unit wall stub at the top of Doom II MAP16's first staircase was 20 units off, and the
-   bot pushed into it until it gave up.
+   bot pushed into it until it gave up. Obstacles are judged from the floor the player stands on
+   (`K_Map_StandingCell`), not the one under its centre: with the centre past a ledge's edge, the
+   ledge looked like a wall to climb from the pit, and the player was pushed off it (MAP17).
+
+   **Careful near edges.** A waypoint within 40 units of an edge the player could drop over but
+   not climb back (`K_Graph_DropDistance`: a floor more than 24 below), where the route turns by
+   more than 20 degrees or steps down, is taken at no more than 6 units/tic, less for a sharp
+   corner (the corner factor applied to 6 instead of full speed). The target moves on from it
+   only within 8 units, not 24, so the player really slows to that speed before turning. Turning
+   at speed swings the player wide, and each step down leaves it airborne for about 5 tics, with
+   no friction and no control: Doom II MAP17's zig-zag bridge over a pit (46 units wide, each zig
+   a step of 16 down) threw the bot off at full speed, still turning as it left a step. Running
+   straight past an edge needs no slowing (MAP03's straight run to the blue key). An always-on
+   limit near edges was tried first; it hid the early turn at the advance radius, and slowed
+   stairways for nothing.
 4. **Heading:** turn toward the desired velocity, at most 11.25 degrees per tic (2048 angleturn
    units, tunable). Cosmetic for now; later stages need it for aiming and using. When recording a
    demo without `-longtics`, the turn is rounded to a multiple of 256; no remainder needs carrying,
@@ -720,10 +737,13 @@ it cannot be reached):
     does may not last until the player gets there: on Doom II MAP12 the bot ran 11,000 units to
     lower a lift, fetched the yellow key while it went back up, and had to lower it again;
   - USE TRIGGER only for a sector some line still moves (one-shot lines lose their special);
-- if nothing can be fixed, but sectors are still moving (`K_Graph_MoversActive`: a floor,
+- if nothing can be fixed, but sectors are still moving (`K_Graph_MovingSector`: a floor,
   ceiling, door or lift on its way; perpetual lifts and crushers do not count), the goal
   **waits**: the player stands still and the goal is planned again every second, for up to 15
-  seconds. Stairs being built (Doom II MAP15) or a floor going down (MAP13) can still open a way;
+  seconds. Stairs being built (Doom II MAP15) or a floor going down (MAP13) can still open a way.
+  Only if some candidate has no way now: candidates already tried stay given up on, so waiting
+  cannot bring them back (Doom II MAP17 stood 15 s for a walk-over line it had failed to reach).
+  The log names one of the moving sectors;
 - otherwise the goal **fails**, with the reason for the last candidate tried; the log first
   gives the reason for each candidate (up to 8).
 
@@ -1078,6 +1098,23 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      Also seen: having ridden one tag-18 lift up, the bot found the second one back up and
      pressed another tag-18 switch for it, which works out. Wall avoidance is now box-measured on
      every map; the regression maps pass at their earlier times (MAP12 79.9 s, lift timing).
+   - MAP17: the red key lies past a zig-zag bridge over a pit, each zig a step of 16 down; at full
+     speed the bot flew off a turn into the pit, with no way back. That led to careful speed near
+     edges (3.4), which first broke MAP16 (a leg along a landing's open edge, now routed through
+     the cell, 3.3) and showed that wall avoidance steered the player off ledges (now judged from
+     the floor it stands on, 3.4). The bot now crosses the bridge, takes the red key and works
+     through five switches and two lift rides. Also fixed: after a walk-over line it could not
+     reach (line 375 is only crossable from its high side, 144 up), the goal waited 15 s for
+     moving sectors that could not bring the line back (3.5); it now gives up at once. Then the
+     bot sticks on a **barrel** on a staircase (four barrels, a way past them 12 units wide), and
+     the engine does not slide the player along things. **Needs solid things** (follow-up 3).
+     Skipped for now, to come back to. Also seen: walk-over line 375 counted as reachable because
+     the route to the spot past it went round its end; only nav found the near side out of reach.
+     Falls and push-backs are now logged: "dropped N units", "back in route cell".
+   - MAP03, again: now stuck at a torch on the way to switch 445, at (3572,3424). With the slower,
+     careful approach the bot no longer slides past it at the old speed and angle. An expected
+     regression: **needs solid things** (follow-up 3). MAP01 8.1 s, MAP05 31.0 s, MAP10 45.5 s,
+     MAP12 80.5 s, MAP16 40.9 s still pass.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1094,19 +1131,30 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    3. **Solid things.** Torches, lamps, barrels, columns, trees and the like block the player but
       are not part of the geometry. Read the solid non-monster things at level load and block the
       parts of portals and cells they cover, widened by the player's radius; barrels can be
-      destroyed, so check those live.
+      destroyed, so check those live. In the engine a solid thing is a box of its radius, of any
+      height (no heights are checked), and the player does not slide along it as along a wall:
+      it stops dead. By the user's choice this is a **topic of its own**, like jumps, to be
+      thought through first: monsters block the player too and move about, and a barrel may be
+      easier to shoot than to go round. Doom II MAP03 (a torch on the way to switch 445) and
+      MAP17 (barrels on a staircase) need it now.
    4. **Downhill and drops.** Going down stairs the player keeps gaining speed: each step down
       leaves it briefly airborne, with no friction and no control, so it overshoots the target,
       and next to a pit that can mean falling in. Slow down earlier for crossings that drop
-      (like a corner), and brake harder where it matters.
+      (like a corner), and brake harder where it matters. Partly done (3.4): near an edge, the
+      waypoints where the route turns or steps down are taken carefully. Not yet: braking that
+      knows it cannot brake while airborne, on a long stairway down.
    5. **Narrow paths.** Some maps need narrow walkways and bridges, e.g. Doom II MAP24's long
       ledges only 4-8 units wide over the nukage. Entering a narrow portal or cell, slow down
       enough to stay on it. Doom II MAP03's raised strip to the teleporter is exactly the
       player's width: once the bot drifted a unit off it (and still stood on it), once it fell
-      off and had to go round.
+      off and had to go round. Partly done (3.4): careful corners near edges, and wall avoidance
+      no longer pushes the player off a ledge it hangs over (likely MAP03's fall too).
    6. **Stuck recovery.** Before replanning when stuck, block the crossing ahead for a while, so
       the new route really differs. If the player stays stuck too long, try semi-random moves in
-      different directions, strafing included, to work free.
+      different directions, strafing included, to work free. Also loops that are not stuck:
+      dropped back into an earlier route cell, the player follows the same route again
+      ("back in route cell" in the log), so a fall that repeats repeats forever (MAP16 before
+      the ledge fix in 3.3). Count them, and plan round the place after a few.
    7. **Running jumps.** Some maps can only be finished by running off a ledge at full speed and
       clearing a gap to a floor on the other side (at least one Doom II map; which one will turn up
       in playtesting). The graph then needs "jump" links between cells that share no border,

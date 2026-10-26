@@ -671,6 +671,8 @@ static void PlanGoal(goal_t *goal)
     static candidate_t candidates[MAX_CANDIDATES];
     int count = Candidates(goal, candidates, MAX_CANDIDATES);
     int best_open = -1, best_blocked = -1, reachable = 0;
+    int waitable = 0;   // candidates with no way now, which a move may open
+    int moving;
     double open_length = 0.0, blocked_score = 0.0;
     goal_type_t fix_type = GOAL_GOTO;
     int fix_param = 0, fix_portal = -1, fix_from = -1;
@@ -727,6 +729,7 @@ static void PlanGoal(goal_t *goal)
                     M_snprintf(reason, sizeof(reason), "no way to the %s: %s",
                                candidates[i].what, text);
                     KeepReason(reason);
+                    ++waitable;
                 }
                 else if (keys_lying[key] > 0 && Allowed(GOAL_KEY, key))
                 {
@@ -798,6 +801,7 @@ static void PlanGoal(goal_t *goal)
             M_snprintf(reason, sizeof(reason), "no way to the %s: %s",
                        candidates[i].what, text);
             KeepReason(reason);
+            ++waitable;
         }
     }
 
@@ -827,14 +831,18 @@ static void PlanGoal(goal_t *goal)
             ++trigger_uses[fix_param];
         }
     }
-    else if (K_Graph_MoversActive() && goal->waited < MAX_WAIT_TICS)
+    else if (waitable > 0 && (moving = K_Graph_MovingSector()) >= 0
+          && goal->waited < MAX_WAIT_TICS)
     {
         // The way may still open (stairs being built, a floor going down,
         // Doom II MAP15 and MAP13): stand still and plan again shortly.
+        // Not for candidates already tried: they stay given up on, so
+        // nothing that moves brings them back (MAP17 stood 15 s for a
+        // walk-over line it could not get to).
         if (goal->waited == 0)
         {
-            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: no way yet (%s), but sectors are "
-                  "moving - waiting", name, reason);
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: no way yet (%s), but sector %d is "
+                  "moving - waiting", name, reason, moving);
         }
 
         M_snprintf(goal->note, sizeof(goal->note), "waiting while sectors move - %s",

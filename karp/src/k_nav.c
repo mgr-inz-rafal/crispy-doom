@@ -30,6 +30,7 @@
 //
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "SDL.h"
@@ -76,6 +77,20 @@
 // How far along the route the speed profile looks for corners.
 #define LOOKAHEAD 400.0
 
+// Near an edge the player could fall over but not climb back (a bridge
+// over a pit, a ledge), within CAREFUL_REACH of it, a waypoint where the
+// route turns by more than CAREFUL_TURN degrees, or steps down, is taken
+// at no more than CAREFUL_SPEED, less for a sharp corner. Turning at speed
+// swings the player wide, and stepping down leaves it airborne for a few
+// tics, with no friction and no control: at full speed it would still be
+// turning as it left a step, and fly on straight off the edge (Doom II
+// MAP17: a zig-zag bridge over a pit, 46 wide, each zig a step of 16 down
+// from the last). Straight on, past an edge, there is no need to slow.
+#define CAREFUL_REACH 40.0
+#define CAREFUL_SPEED 6.0
+#define CAREFUL_TURN 20.0
+#define CAREFUL_ADVANCE 8.0
+
 // Commands sent, by tic, for prediction.
 #define SENT_SIZE 16
 
@@ -105,6 +120,9 @@
 // teleported.
 #define TELEPORT_JUMP 64.0
 
+// The highest step the player climbs (P_TryMove).
+#define MAX_CLIMB 24.0
+
 // Sliding along walls: within AVOID_DISTANCE of anything that stops the
 // player (its radius is 16), the part of the velocity toward it is
 // dropped; touching it, the player eases away at AVOID_PUSH.
@@ -120,6 +138,7 @@ typedef struct
     double angle;
     boolean onground;
     int frozen;
+    double floor;           // the floor it stands on (now, not predicted)
 } body_t;
 
 typedef struct
@@ -157,6 +176,8 @@ typedef struct
 } action_t;
 
 static k_path_t path;
+static unsigned char *careful;  // per route point: near an edge (CAREFUL_REACH)
+static int careful_capacity;
 static boolean have_goal;
 static k_vec2_t goal;
 static k_navstatus_t status;
@@ -176,6 +197,7 @@ static int history_count;
 static int history_next;
 static k_vec2_t stuck_at;
 static k_vec2_t last_at;    // after the previous tic
+static double last_floor;   // the floor stood on then
 
 static double Distance(k_vec2_t a, k_vec2_t b)
 {
@@ -254,6 +276,7 @@ static boolean Predict(int tic, body_t *body)
     body->angle = pose.angle;
     body->onground = pose.onground != 0;
     body->frozen = pose.frozen;
+    body->floor = pose.floor;
 
     for (t = SDL_max(gametic, tic - SENT_SIZE); t < tic; ++t)
     {
@@ -386,13 +409,15 @@ static int TargetLimit(void)
 // Controller
 //
 
-// The speed to take a waypoint at, from how sharply the route turns there.
-// 0 in front of a door or lift; full speed into a teleporter, which stops
-// the player anyway, and out of one, where there is no corner.
+// The speed to take a waypoint at, from how sharply the route turns there,
+// out of the top speed there (careful near an edge). 0 in front of a door
+// or lift; full speed into a teleporter, which stops the player anyway,
+// and out of one, where there is no corner.
 static double CornerSpeed(int k)
 {
     k_vec2_t a = path.points[k - 1], b = path.points[k], c = path.points[k + 1];
     double in = Distance(a, b), out = Distance(b, c);
+    double top = careful[k] ? SDL_min(CAREFUL_SPEED, tuning.max_speed) : tuning.max_speed;
     double turn_cos = 1.0;
     int r = path.leg_cells[k - 1];
 
@@ -412,7 +437,15 @@ static double CornerSpeed(int k)
                  / (in * out);
     }
 
-    return tuning.max_speed * SDL_max(MIN_CORNER_SPEED, SDL_min(turn_cos, 1.0));
+    return top * SDL_max(MIN_CORNER_SPEED, SDL_min(turn_cos, 1.0));
+}
+
+// How near a waypoint the target moves on to the next: a careful one is
+// driven right up to, at its corner speed, before turning; cutting it
+// short would turn at the speed of the approach, and swing wide.
+static double AdvanceRadius(int k)
+{
+    return careful[k] ? CAREFUL_ADVANCE : tuning.advance_radius;
 }
 
 // The fastest the player may go now and still slow down in time for the
@@ -547,7 +580,7 @@ static void AvoidWalls(const body_t *body, double *vx, double *vy)
 {
     k_nearline_t walls[MAX_AVOID];
     k_vec2_t at = { body->x, body->y };
-    int count = K_Graph_ObstaclesNear(at, AVOID_DISTANCE, walls, MAX_AVOID);
+    int count = K_Graph_ObstaclesNear(at, body->floor, AVOID_DISTANCE, walls, MAX_AVOID);
     int i;
 
     for (i = 0; i < count; ++i)
@@ -577,7 +610,7 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
 
     // The waypoint may be reached during the tics still waiting to run.
     if (target < TargetLimit()
-     && Distance(at, path.points[target]) < tuning.advance_radius)
+     && Distance(at, path.points[target]) < AdvanceRadius(target))
     {
         ++target;
     }
@@ -1110,8 +1143,53 @@ static int RouteNeighbor(int cell)
     return -1;
 }
 
+static double CellFloor(int cell)
+{
+    const k_map_t *map = K_Map_Get();
+    double floor, ceiling;
+
+    K_Map_SectorHeights(map->subsectors[map->cells[cell].subsector].sector,
+                        &floor, &ceiling);
+    return floor;
+}
+
+// Which route points to take carefully: near an edge, where the route
+// turns or steps down. The edge is judged from the floor before the point.
+static void MarkCareful(void)
+{
+    double turn_cos = cos(CAREFUL_TURN * K_PI / 180.0);
+    int k;
+
+    if (path.num_points > careful_capacity)
+    {
+        careful_capacity = path.num_points * 2;
+        careful = realloc(careful, careful_capacity);
+    }
+
+    memset(careful, 0, path.num_points);
+
+    for (k = 1; k < path.num_points - 1; ++k)
+    {
+        k_vec2_t a = path.points[k - 1], b = path.points[k], c = path.points[k + 1];
+        double in = Distance(a, b), out = Distance(b, c);
+        double before = CellFloor(path.cells[path.leg_cells[k - 1]]);
+        double after = CellFloor(path.cells[path.leg_cells[k]]);
+        boolean turns = in > 1e-6 && out > 1e-6
+                     && ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y))
+                        / (in * out) < turn_cos;
+
+        if (path.jumps[k] || path.jumps[k - 1] || (!turns && after >= before))
+        {
+            continue;
+        }
+
+        careful[k] = K_Graph_DropDistance(b, before, CAREFUL_REACH) < CAREFUL_REACH;
+    }
+}
+
 static void StartRoute(void)
 {
+    MarkCareful();
     status.target = 1;
     status.route_cell = 0;
     status.remaining = path.length;
@@ -1172,6 +1250,8 @@ static boolean Progress(k_vec2_t at, int cell, boolean teleported)
     else if (r >= 0 && r < status.route_cell)
     {
         // Pushed back: drive out of this cell again.
+        K_Log(K_LOG_NAV, K_LOG_INFO, "back in route cell %d of %d at (%.0f,%.0f) - "
+              "going on from there", r, path.num_cells, at.x, at.y);
         status.target = FirstPointIn(r);
         status.route_cell = r;
     }
@@ -1185,7 +1265,7 @@ static boolean Progress(k_vec2_t at, int cell, boolean teleported)
     limit = TargetLimit();
 
     while (status.target < limit
-        && Distance(at, path.points[status.target]) < tuning.advance_radius)
+        && Distance(at, path.points[status.target]) < AdvanceRadius(status.target))
     {
         ++status.target;
     }
@@ -1255,9 +1335,17 @@ k_navstate_t K_Nav_Tick(void)
     else
     {
         CheckPrediction(at);
+
+        // Off a ledge, on purpose or not: no way back up the same way.
+        if (last_floor - pose.floor > MAX_CLIMB)
+        {
+            K_Log(K_LOG_NAV, K_LOG_INFO, "dropped %.0f units at (%.0f,%.0f), into cell %d",
+                  last_floor - pose.floor, at.x, at.y, pose.cell);
+        }
     }
 
     last_at = at;
+    last_floor = pose.floor;
 
     if (!Progress(at, pose.cell, teleported) || !UpdateAction(at, status.speed))
     {
@@ -1398,6 +1486,7 @@ static int StartGoal(double x, double y, k_goalkind_t kind, int line)
     goal.x = x;
     goal.y = y;
     last_at = start;
+    last_floor = player.floor;
     cross_first = false;
 
     K_Path_Find(&path, start, player.cell, goal);

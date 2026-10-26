@@ -1920,10 +1920,11 @@ static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
     return best;
 }
 
-int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int max)
+// K_Graph_ObstaclesNear for a player standing in the given cell.
+static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *found,
+                           int max)
 {
     const k_map_t *map = K_Map_Get();
-    int cell = K_Map_CellAt(at.x, at.y);
     k_vec2_t min = { at.x - reach, at.y - reach };
     k_vec2_t max_ = { at.x + reach, at.y + reach };
     int lines_seen[MAX_NEAR_LINES];
@@ -2004,14 +2005,81 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int ma
     return count;
 }
 
+int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
+                          int max)
+{
+    return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max);
+}
+
+double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t min = { at.x - reach, at.y - reach };
+    k_vec2_t max_ = { at.x + reach, at.y + reach };
+    fixed_t standing = (fixed_t) (floor * FRACUNIT);
+    double nearest = reach;
+    int x, y, x0, y0, x1, y1, k;
+
+    if (graph.generation != map->generation)
+    {
+        return reach;
+    }
+
+    CellRange(min, max_, &x0, &y0, &x1, &y1);
+
+    for (y = y0; y <= y1; ++y)
+    {
+        for (x = x0; x <= x1; ++x)
+        {
+            int grid = y * grid_width + x;
+
+            // A line spanning several grid cells comes up more than once,
+            // which does not change the nearest.
+            for (k = cell_first[grid]; k < cell_first[grid + 1]; ++k)
+            {
+                int line = cell_items[k] - num_edges;
+                const line_t *l;
+                fixed_t low, high;
+
+                if (line < 0)
+                {
+                    continue;
+                }
+
+                l = &lines[line];
+
+                if (l->backsector == NULL || (l->flags & ML_BLOCKING))
+                {
+                    continue;
+                }
+
+                low = SDL_min(l->frontsector->floorheight, l->backsector->floorheight);
+                high = SDL_max(l->frontsector->floorheight, l->backsector->floorheight);
+
+                if (standing - low <= MAX_STEP_UP || high - standing > MAX_STEP_UP)
+                {
+                    continue;
+                }
+
+                nearest = SDL_min(nearest, BoxDistance(at, map->lines[line].v1,
+                                                       Sub(map->lines[line].v2,
+                                                           map->lines[line].v1)));
+            }
+        }
+    }
+
+    return nearest;
+}
+
 double K_Graph_Clearance(k_vec2_t at, double reach)
 {
     k_nearline_t found[MAX_NEAR_LINES];
-    int count = K_Graph_ObstaclesNear(at, reach, found, MAX_NEAR_LINES);
+    int cell = K_Map_CellAt(at.x, at.y);
+    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES);
     double clearance = reach;
     int i;
 
-    if (K_Map_CellAt(at.x, at.y) < 0)
+    if (cell < 0)
     {
         return 0.0;
     }
@@ -2024,7 +2092,7 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
     return clearance;
 }
 
-int K_Graph_MoversActive(void)
+int K_Graph_MovingSector(void)
 {
     const thinker_t *thinker;
 
@@ -2032,30 +2100,35 @@ int K_Graph_MoversActive(void)
     {
         actionf_p1 function = thinker->function.acp1;
 
-        if (function == (actionf_p1) T_MoveFloor || function == (actionf_p1) T_VerticalDoor)
+        if (function == (actionf_p1) T_MoveFloor)
         {
-            return true;
+            return (int) (((const floormove_t *) thinker)->sector - sectors);
+        }
+
+        if (function == (actionf_p1) T_VerticalDoor)
+        {
+            return (int) (((const vldoor_t *) thinker)->sector - sectors);
         }
 
         if (function == (actionf_p1) T_PlatRaise
          && ((const plat_t *) thinker)->type != perpetualRaise)
         {
-            return true;
+            return (int) (((const plat_t *) thinker)->sector - sectors);
         }
 
         if (function == (actionf_p1) T_MoveCeiling)
         {
-            ceiling_e type = ((const ceiling_t *) thinker)->type;
+            const ceiling_t *ceiling = (const ceiling_t *) thinker;
 
-            if (type != crushAndRaise && type != fastCrushAndRaise
-             && type != silentCrushAndRaise)
+            if (ceiling->type != crushAndRaise && ceiling->type != fastCrushAndRaise
+             && ceiling->type != silentCrushAndRaise)
             {
-                return true;
+                return (int) (ceiling->sector - sectors);
             }
         }
     }
 
-    return false;
+    return -1;
 }
 
 k_mover_t K_Graph_SectorMover(int sector)

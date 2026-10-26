@@ -47,8 +47,11 @@
 // A leg between two portals on the same edge of a cell runs along that
 // edge. That is common and harmless along a partition line, where the
 // edge is all portals, but between two doorways in one wall it would
-// scrape along the wall; such a leg goes through the cell's centroid.
+// scrape along the wall, and along a ledge's edge (a floor more than
+// LEDGE_HEIGHT lower) the player would fall off; such a leg goes through
+// the cell's centroid.
 #define BORDER_DISTANCE 1.0
+#define LEDGE_HEIGHT 24.0
 
 // The route goes this far past a teleport line, so the player crosses it.
 #define TELEPORT_OVERSHOOT 32.0
@@ -479,13 +482,18 @@ static void Reconstruct(k_path_t *path)
     }
 }
 
-// Whether a point lies on a stretch of a cell's border that is not a
-// portal: a wall.
+static void CellHeights(int cell, double *floor, double *ceiling);
+
+// Whether a point lies on a stretch of a cell's border that is not a way
+// on: a wall, or a portal to a floor more than 24 higher or lower. Not a
+// ledge's edge either: the player would fall off it (Doom II MAP16: both
+// crossings of a landing on its open edge, the leg between them along it).
 static boolean OnWall(int cell, k_vec2_t point)
 {
     const k_cell_t *c = &map->cells[cell];
     const k_vec2_t *poly = &map->points[c->first_point];
     boolean on_border = false;
+    double floor, ceiling;
     int i, end;
 
     for (i = 0; i < c->num_points && !on_border; ++i)
@@ -499,13 +507,18 @@ static boolean OnWall(int cell, k_vec2_t point)
         return false;
     }
 
+    CellHeights(cell, &floor, &ceiling);
     end = graph->first_link[cell] + graph->link_count[cell];
 
     for (i = graph->first_link[cell]; i < end; ++i)
     {
         const k_portal_t *portal = &graph->portals[graph->links[i].portal];
+        double neighbor_floor, neighbor_ceiling;
 
-        if (SegmentDistance(portal->a, portal->b, point) < BORDER_DISTANCE)
+        CellHeights(graph->links[i].neighbor, &neighbor_floor, &neighbor_ceiling);
+
+        if (SegmentDistance(portal->a, portal->b, point) < BORDER_DISTANCE
+         && fabs(neighbor_floor - floor) <= LEDGE_HEIGHT)
         {
             return false;
         }

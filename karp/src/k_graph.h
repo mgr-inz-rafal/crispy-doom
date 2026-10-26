@@ -166,15 +166,25 @@ typedef struct
     double distance;        // box distance (K_Graph_Clearance)
 } k_nearline_t;
 
-// The lines within reach of a point on the floor that a player standing
-// there could not overlap, up to max. Returns how many.
-int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int max);
+// The lines within reach of a point that a player standing there, on the
+// given floor, could not overlap, up to max. Returns how many. Judged from
+// the floor the player stands on, not the one under its centre: over a
+// ledge's edge, the ledge would look like a wall to climb, and the player
+// would be steered off it (Doom II MAP17's bridge over a pit).
+int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
+                          int max);
+
+// How far a point is from the nearest edge within reach that a player
+// standing there on the given floor could drop over but not climb back: a
+// two-sided line it can get onto, with the other side's floor more than
+// 24 below. Box distance, as K_Graph_Clearance; reach if none is nearer.
+double K_Graph_DropDistance(k_vec2_t at, double floor, double reach);
 
 k_mover_t K_Graph_SectorMover(int sector);
 
-// Whether any floor, ceiling, door or lift in the level is on its way
-// somewhere. Perpetual lifts and crushers, which never stop, do not count.
-int K_Graph_MoversActive(void);
+// A sector whose floor, ceiling, door or lift is on its way somewhere, or
+// -1 if none. Perpetual lifts and crushers, which never stop, do not count.
+int K_Graph_MovingSector(void);
 
 #ifdef __cplusplus
 }
