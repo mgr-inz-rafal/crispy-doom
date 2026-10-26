@@ -540,6 +540,9 @@ static void SteerToHold(const body_t *body, k_vec2_t to, const double *face,
 // along (Doom II MAP03, leaving a switch alcove past a pillar). So near
 // anything that stops the player, the part of the velocity toward it is
 // dropped: the player slides along instead, and eases away when touching.
+// Near is measured with the player's square box, and away is from the
+// nearest point: a wall end caught by the side of the box turns the player
+// round it (MAP16, a wall stub at the top of a staircase).
 static void AvoidWalls(const body_t *body, double *vx, double *vy)
 {
     k_nearline_t walls[MAX_AVOID];

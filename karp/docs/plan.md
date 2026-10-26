@@ -395,9 +395,17 @@ line wholly past it is reached with the box over the cell beyond too, so it is j
 higher of the two floors and the lower of the two ceilings (only for a real step of up to 24, not
 for a lift to lower or a ride up). Otherwise stairs whose steps are shallower than the player's
 radius look too narrow: on Doom II MAP03 the steps are 8 high and 16 deep, and from the floor below
-the first one, the second one's riser looked like a wall 16 units from the crossing. A drop is no obstacle (the player can hang over it), and manual doors count as open,
-since the player opens any it gets to (otherwise a closed door's faces, 8 units apart, would
-narrow every crossing near a doorway). Judged live, so bars that lower open the gap.
+the first one, the second one's riser looked like a wall 16 units from the crossing. A drop is no obstacle (the player can hang over it).
+A closed manual door counts as open where the player opens it on the way (otherwise a door's
+faces, 8 units apart, would narrow every crossing near a doorway), whether or not it is locked
+(the door's own crossing says whether a key is missing). That is: seen across a face that opens
+it (a door line, from its front side); where the player stands in it; or where it is within 17
+units of every point on the crossing, so that, closed, it alone would leave no way through and
+the player gets there only through the open door (one-way doors leave strips 8 and 16 units
+deep behind them on Doom II MAP16 and MAP03). Seen across a plain face from further off, a closed
+door is a block: MAP16's red-key pillar, a door opened from two of its four faces, leaves gaps
+exactly as wide as the player on either side, which first looked 90 units wide with the pillar
+"open", so the bot never went for the red key. Judged live, so bars that lower open the gap.
 `K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the obstacle
 lines), so the brain can look for a line that moves them.
 
@@ -561,7 +569,12 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
    that stops the player (`K_Graph_ObstaclesNear`: walls, impassable lines, steps too high, too
    little headroom), the part of `v_des` toward it is dropped, and touching it (closer than 17),
    the player eases away at 1 unit/tic. Drops are not obstacles, so this never steers toward a
-   ledge's edge on purpose.
+   ledge's edge on purpose. Distances are measured as the engine collides the player, a 32x32
+   square: the larger of the x and y distances, so a wall end level with the box's corner is
+   touching at 16 * sqrt(2) units. The direction away is from the line's nearest point, so a wall
+   end caught by the side of the box turns the player round it. Measured as a circle, the end of
+   an 8-unit wall stub at the top of Doom II MAP16's first staircase was 20 units off, and the
+   bot pushed into it until it gave up.
 4. **Heading:** turn toward the desired velocity, at most 11.25 degrees per tic (2048 angleturn
    units, tunable). Cosmetic for now; later stages need it for aiming and using. When recording a
    demo without `-longtics`, the turn is rounded to a multiple of 256; no remainder needs carrying,
@@ -716,7 +729,8 @@ it cannot be reached):
 
 **Pickup spots.** A key is picked up when the player's box touches the key's (radius 20), so
 within 36 units on each axis, not only at the key itself. If the player cannot stand at the key
-(less than 17 units from anything that stops it: `K_Graph_Clearance`), the candidate is the
+(less than 17 units from anything that stops it, measured with its square box:
+`K_Graph_Clearance`), the candidate is the
 nearest spot within 28 units on each axis where it can (searched in 4-unit steps). Doom II MAP05's
 red key lies on an impassable line, at the end of a shaft, and is picked up from the room beside.
 
@@ -1048,6 +1062,22 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      open for the way out of it (MAP12's route went on through a door still rising), rides work
      on any rising floor and are judged for width on arrival (MAP03's strip), and a teleporter
      reached by a ride waits for the ride first.
+   - MAP16: passed, 40.3 s: blue key (top of the spiral staircase in the nukage), the blue door,
+     the red key, two tag-18 lifts and the red-key pillar to the exit. Three fixes:
+     - At the top of the first staircase the bot pushed into the end of an 8-unit wall stub
+       beside it: wall avoidance now measures with the player's square box (3.4).
+     - The red-key pillar (a 32x32 door, sector 109) in the mouth of the corridor to the exit
+       counted as open, like every manual door, so the gaps beside it looked wide and the bot
+       went for the exit without the red key. Doors now count as open only where the player opens
+       them on the way (3.2.1): the gaps are exactly 32, too narrow, and the pillar is a locked
+       door, so the red key comes first.
+     - The red key's room lies behind the blue door, a one-way door with a strip 8 deep behind it
+       that then looked too narrow, so the red key looked out of reach. A door the player
+       would be standing over all along a crossing now counts as open there (3.2.1), and the
+       brain goes for the blue key first.
+     Also seen: having ridden one tag-18 lift up, the bot found the second one back up and
+     pressed another tag-18 switch for it, which works out. Wall avoidance is now box-measured on
+     every map; the regression maps pass at their earlier times (MAP12 79.9 s, lift timing).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

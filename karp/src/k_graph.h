@@ -153,7 +153,9 @@ const char *K_Graph_LockName(int portal);
 // How far a point on the floor is from the nearest line a player standing
 // there could not overlap (a wall, an impassable line, a side too high to
 // step onto or too low to fit under), up to reach; reach if none is
-// nearer, 0 off the floor.
+// nearer, 0 off the floor. Distances are measured as the engine collides
+// the player's square box: the larger of the x and y distances, so a box
+// of radius r overlaps what is nearer than r.
 double K_Graph_Clearance(k_vec2_t at, double reach);
 
 // A line near a point that stops the player.
@@ -161,7 +163,7 @@ typedef struct
 {
     k_vec2_t away;          // unit vector from the line's nearest point to
                             // the point
-    double distance;
+    double distance;        // box distance (K_Graph_Clearance)
 } k_nearline_t;
 
 // The lines within reach of a point on the floor that a player standing

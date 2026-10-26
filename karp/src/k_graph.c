@@ -56,6 +56,7 @@
 // Player movement limits (p_map.c: P_TryMove, PIT_CheckLine).
 #define MAX_STEP_UP (24 * FRACUNIT)
 #define PLAYER_HEIGHT (56 * FRACUNIT)
+#define PLAYER_RADIUS 16.0
 
 // Movers (p_doors.c, p_plats.c), in map units per tic: doors move at 2,
 // blazing ones at 8; lifts at 4, blazing ones at 8. A lift waits 3 seconds
@@ -130,6 +131,7 @@ static const char *crossing_names[K_NUM_CROSSINGS] =
 // sector), or moved by a lift line (it has the line's tag).
 static unsigned char *door_sectors;
 static unsigned char *lift_sectors;
+static k_vec2_t *door_min, *door_max;   // per door sector, its bounding box
 
 // Per line: the teleporter it belongs to, -1 if none.
 static int *line_teleports;
@@ -902,6 +904,36 @@ static void FindMoverSectors(const k_map_t *map)
             }
         }
     }
+
+    free(door_min);
+    free(door_max);
+    door_min = malloc(count * sizeof(*door_min));
+    door_max = malloc(count * sizeof(*door_max));
+
+    for (s = 0; s < count; ++s)
+    {
+        door_min[s].x = door_min[s].y = HUGE_VAL;
+        door_max[s].x = door_max[s].y = -HUGE_VAL;
+    }
+
+    for (i = 0; i < numlines; ++i)
+    {
+        const k_line_t *line = &map->lines[i];
+        int side;
+
+        for (side = 0; side < 2; ++side)
+        {
+            s = side ? line->back_sector : line->front_sector;
+
+            if (s >= 0 && door_sectors[s])
+            {
+                door_min[s].x = SDL_min(door_min[s].x, SDL_min(line->v1.x, line->v2.x));
+                door_min[s].y = SDL_min(door_min[s].y, SDL_min(line->v1.y, line->v2.y));
+                door_max[s].x = SDL_max(door_max[s].x, SDL_max(line->v1.x, line->v2.x));
+                door_max[s].y = SDL_max(door_max[s].y, SDL_max(line->v1.y, line->v2.y));
+            }
+        }
+    }
 }
 
 //
@@ -1115,19 +1147,12 @@ static fixed_t DoorTop(sector_t *sector)
     return P_FindLowestCeilingSurrounding(sector) - 4 * FRACUNIT;
 }
 
-// The ceiling of a sector, taking doors as open: a manual door, because
-// the player opens any it gets to, and any door already opening (a switch
-// opened it), to where it is going. Standing in a door means it is open;
-// and a closed door's faces would narrow every crossing near a doorway.
-static fixed_t OpenCeiling(sector_t *sector)
+// The ceiling of a sector, taking a door already opening (a switch opened
+// it) as open, to where it is going.
+static fixed_t OpeningCeiling(sector_t *sector)
 {
     const vldoor_t *door = DoorOf(sector);
     fixed_t top = sector->ceilingheight;
-
-    if (door_sectors[sector - sectors])
-    {
-        top = SDL_max(top, DoorTop(sector));
-    }
 
     if (door != NULL && door->direction == 1)
     {
@@ -1135,6 +1160,76 @@ static fixed_t OpenCeiling(sector_t *sector)
     }
 
     return top;
+}
+
+// The ceiling of a sector the player stands in: standing in a door means
+// it is open.
+static fixed_t OpenCeiling(sector_t *sector)
+{
+    fixed_t top = OpeningCeiling(sector);
+
+    if (door_sectors[sector - sectors])
+    {
+        top = SDL_max(top, DoorTop(sector));
+    }
+
+    return top;
+}
+
+// Where the player is, for judging doors: in up to two sectors (-1 for
+// none), its centre somewhere on the segment from a to b. A door nearer
+// than reach all along it is open (FaceCeiling).
+typedef struct
+{
+    int sector[2];
+    k_vec2_t a, b;
+    double reach;
+} standing_t;
+
+// The larger of the x and y distances from a point to a box, 0 inside.
+static double BoxGap(k_vec2_t at, k_vec2_t min, k_vec2_t max)
+{
+    double dx = SDL_max(0.0, SDL_max(min.x - at.x, at.x - max.x));
+    double dy = SDL_max(0.0, SDL_max(min.y - at.y, at.y - max.y));
+
+    return SDL_max(dx, dy);
+}
+
+// Whether the door sector's bounding box is within reach of the player
+// wherever its centre is on the segment: the gap is convex along it, so
+// both ends tell.
+static boolean NearDoor(const standing_t *standing, int sector)
+{
+    return BoxGap(standing->a, door_min[sector], door_max[sector]) < standing->reach
+        && BoxGap(standing->b, door_min[sector], door_max[sector]) < standing->reach;
+}
+
+// The ceiling of the sector on one side of a line, as a player beside the
+// line meets it. A door counts as open where the player stands in it, can
+// open it with this line (a manual door line, from its front side), or is
+// near it all along: at a crossing, near enough that the closed door alone
+// would leave no way through, so the player gets there only through the
+// open door (Doom II MAP16 and MAP03: one-way doors leave strips 8 and 16
+// deep behind them). Else a closed door's faces would narrow every
+// crossing near a doorway, its own included. Locked or not: the door's own
+// crossing says whether a key is missing (MAP16's blue door, at the back
+// of an alcove only 16 deep). But not across a face that does not open it,
+// from further off: there the door is a block (MAP16: a red-key pillar in
+// the mouth of the corridor to the exit, opened from two of its four
+// faces, leaves gaps exactly as wide as the player on either side).
+static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *standing)
+{
+    sector_t *sector = side ? line->backsector : line->frontsector;
+    int index = (int) (sector - sectors);
+
+    if (index == standing->sector[0] || index == standing->sector[1]
+     || (side == 1 && IsManualDoor(line->special))
+     || (door_sectors[index] && NearDoor(standing, index)))
+    {
+        return OpenCeiling(sector);
+    }
+
+    return OpeningCeiling(sector);
 }
 
 // Where a lift goes down to (EV_DoPlat): the lowest surrounding floor.
@@ -1249,6 +1344,7 @@ typedef struct
     k_vec2_t normal;            // unit, pointing past the portal
     fixed_t floor[2];           // [0] before the portal, [1] past it
     fixed_t ceiling[2];
+    standing_t standing;        // on the portal, in the cells on either side
 } stance_t;
 
 static void Stance(int portal_index, int from, stance_t *stance)
@@ -1271,6 +1367,11 @@ static void Stance(int portal_index, int from, stance_t *stance)
 
     StandingHeights(from, &stance->floor[0], &stance->ceiling[0]);
     StandingHeights(to, &stance->floor[1], &stance->ceiling[1]);
+    stance->standing.sector[0] = map->subsectors[map->cells[from].subsector].sector;
+    stance->standing.sector[1] = map->subsectors[map->cells[to].subsector].sector;
+    stance->standing.a = portal->a;
+    stance->standing.b = portal->b;
+    stance->standing.reach = CLEARANCE;
 
     if (stance->floor[1] - stance->floor[0] <= MAX_STEP_UP)
     {
@@ -1281,6 +1382,7 @@ static void Stance(int portal_index, int from, stance_t *stance)
     {
         stance->floor[1] = stance->floor[0];
         stance->ceiling[1] = stance->ceiling[0];
+        stance->standing.sector[1] = stance->standing.sector[0];
     }
 }
 
@@ -1298,10 +1400,9 @@ static int StanceSide(const stance_t *stance, const k_line_t *line)
 // given ceiling from overlapping it (PIT_CheckLine): a wall, an impassable
 // line, or a two-sided line with a side too high to step onto or too low
 // to fit under. A drop is no obstacle: the player can hang over it.
-// Manual doors count as open: the player opens any it gets to (else a
-// closed door's faces would narrow every crossing near a doorway, its own
-// included).
-static boolean Obstacle(int index, fixed_t floor, fixed_t ceiling)
+// Doors as FaceCeiling takes them.
+static boolean Obstacle(int index, fixed_t floor, fixed_t ceiling,
+                        const standing_t *standing)
 {
     const line_t *line = &lines[index];
     int side;
@@ -1314,7 +1415,7 @@ static boolean Obstacle(int index, fixed_t floor, fixed_t ceiling)
     for (side = 0; side < 2; ++side)
     {
         sector_t *sector = side ? line->backsector : line->frontsector;
-        fixed_t top = OpenCeiling(sector);
+        fixed_t top = FaceCeiling(line, side, standing);
 
         if (sector->floorheight - floor > MAX_STEP_UP
          || !Headroom(floor, ceiling, sector->floorheight, top))
@@ -1390,7 +1491,8 @@ static int NearObstacles(const stance_t *stance, double reach, int *found, int m
 
                 side = StanceSide(stance, &map->lines[line]);
 
-                if (!Obstacle(line, stance->floor[side], stance->ceiling[side]))
+                if (!Obstacle(line, stance->floor[side], stance->ceiling[side],
+                              &stance->standing))
                 {
                     continue;
                 }
@@ -1699,12 +1801,12 @@ int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
         }
 
         // The side that is too high or too low is what narrows the gap
-        // (manual doors count as open, as in Obstacle).
+        // (doors as in Obstacle).
         for (side = 0; side < 2; ++side)
         {
             sector_t *sector = side ? line->backsector : line->frontsector;
             int index = (int) (sector - sectors);
-            fixed_t top = OpenCeiling(sector);
+            fixed_t top = FaceCeiling(line, side, &stance.standing);
 
             if (sector->floorheight - floor <= MAX_STEP_UP
              && Headroom(floor, ceiling, sector->floorheight, top))
@@ -1775,6 +1877,49 @@ const char *K_Graph_LockName(int portal)
     return key >= 0 ? K_Specials_KeyName(key) : NULL;
 }
 
+// The distance from a point to a segment as the engine's collisions see
+// it: the player is a square, so the larger of the x and y distances. A
+// wall corner level with the box's corner is 16 * sqrt(2) units away, but
+// touching.
+// The minimum of max(|u|, |v|), both linear along the segment, is at an
+// end or where one of |u|, |v| bottoms out or they cross.
+static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
+{
+    double u0 = a.x - at.x, v0 = a.y - at.y;
+    double candidates[6];
+    double best = HUGE_VAL;
+    int count = 0, i;
+
+    candidates[count++] = 0.0;
+    candidates[count++] = 1.0;
+
+    if (fabs(ab.x) > 1e-12)
+    {
+        candidates[count++] = -u0 / ab.x;
+    }
+    if (fabs(ab.y) > 1e-12)
+    {
+        candidates[count++] = -v0 / ab.y;
+    }
+    if (fabs(ab.x - ab.y) > 1e-12)
+    {
+        candidates[count++] = (v0 - u0) / (ab.x - ab.y);
+    }
+    if (fabs(ab.x + ab.y) > 1e-12)
+    {
+        candidates[count++] = -(u0 + v0) / (ab.x + ab.y);
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        double t = SDL_max(0.0, SDL_min(1.0, candidates[i]));
+
+        best = SDL_min(best, SDL_max(fabs(u0 + t * ab.x), fabs(v0 + t * ab.y)));
+    }
+
+    return best;
+}
+
 int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int max)
 {
     const k_map_t *map = K_Map_Get();
@@ -1784,6 +1929,7 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int ma
     int lines_seen[MAX_NEAR_LINES];
     int seen = 0, count = 0;
     fixed_t floor, ceiling;
+    standing_t standing;
     int x, y, x0, y0, x1, y1, k, i;
 
     if (cell < 0 || graph.generation != map->generation)
@@ -1792,6 +1938,10 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int ma
     }
 
     StandingHeights(cell, &floor, &ceiling);
+    standing.sector[0] = map->subsectors[map->cells[cell].subsector].sector;
+    standing.sector[1] = -1;
+    standing.a = standing.b = at;
+    standing.reach = PLAYER_RADIUS;     // only a door the box is in
     CellRange(min, max_, &x0, &y0, &x1, &y1);
 
     for (y = y0; y <= y1; ++y)
@@ -1804,7 +1954,7 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int ma
             {
                 int line = cell_items[k] - num_edges;
                 k_vec2_t a, ab, closest;
-                double t, distance;
+                double t, length, distance;
 
                 if (line < 0 || count >= max)
                 {
@@ -1832,16 +1982,19 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int ma
                                               / SDL_max(Dot(ab, ab), 1e-12)));
                 closest.x = a.x + ab.x * t;
                 closest.y = a.y + ab.y * t;
-                distance = Length(Sub(at, closest));
+                length = Length(Sub(at, closest));
+                distance = BoxDistance(at, a, ab);
 
-                if (distance >= reach || distance < 1e-6
-                 || !Obstacle(line, floor, ceiling))
+                if (distance >= reach || length < 1e-6
+                 || !Obstacle(line, floor, ceiling, &standing))
                 {
                     continue;
                 }
 
-                found[count].away.x = (at.x - closest.x) / distance;
-                found[count].away.y = (at.y - closest.y) / distance;
+                // Away from the nearest point: straight off a wall, round a
+                // corner.
+                found[count].away.x = (at.x - closest.x) / length;
+                found[count].away.y = (at.y - closest.y) / length;
                 found[count].distance = distance;
                 ++count;
             }
