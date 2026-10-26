@@ -13,6 +13,12 @@
 //	search still finds the one with the fewest blocked crossings, and the
 //	first of them tells why the goal cannot be reached.
 //
+//	A teleport line crossed from its front side leads to the teleporter's
+//	destination instead of the cell beyond. The straight line to the goal
+//	would then overestimate what is left, so the heuristic also allows for
+//	flying to any teleporter and on from its destination: still never more
+//	than any route costs, so A* still finds the shortest one.
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -44,6 +50,9 @@
 // scrape along the wall; such a leg goes through the cell's centroid.
 #define BORDER_DISTANCE 1.0
 
+// The route goes this far past a teleport line, so the player crosses it.
+#define TELEPORT_OVERSHOOT 32.0
+
 typedef struct
 {
     double f;
@@ -72,6 +81,10 @@ static const k_graph_t *graph;
 static k_vec2_t start_point, goal_point;
 static int start_cell, goal_cell;
 static int start_node, goal_node;
+
+// Per teleporter: the heuristic at its destination.
+static double *teleport_rest;
+static int teleport_capacity;
 
 static const char *result_names[] =
 {
@@ -105,8 +118,17 @@ static k_vec2_t PortalMiddle(const k_graph_t *g, int portal)
     return result;
 }
 
+// The teleporter a portal node arrives by, or -1: crossing a teleport line
+// into its back side lands the player at the destination instead.
+static int NodeTeleport(int node)
+{
+    return K_Graph_Teleport(node / 2, graph->portals[node / 2].cell[1 - node % 2]);
+}
+
 static k_vec2_t NodePosition(int node)
 {
+    int teleport;
+
     if (node == start_node)
     {
         return start_point;
@@ -117,12 +139,16 @@ static k_vec2_t NodePosition(int node)
         return goal_point;
     }
 
-    return PortalMiddle(graph, node / 2);
+    teleport = NodeTeleport(node);
+    return teleport >= 0 ? graph->teleports[teleport].to : PortalMiddle(graph, node / 2);
 }
 
-// The cell a node is in: the one its portal leads into.
+// The cell a node is in: the one its portal leads into, or a teleporter's
+// destination.
 static int NodeCell(int node)
 {
+    int teleport;
+
     if (node == start_node)
     {
         return start_cell;
@@ -133,7 +159,83 @@ static int NodeCell(int node)
         return goal_cell;
     }
 
-    return graph->portals[node / 2].cell[node % 2];
+    teleport = NodeTeleport(node);
+    return teleport >= 0 ? graph->teleports[teleport].cell
+                         : graph->portals[node / 2].cell[node % 2];
+}
+
+// Distance of point p from the box min-max (0 inside it).
+static double BoxDistance(k_vec2_t min, k_vec2_t max, k_vec2_t p)
+{
+    double dx = SDL_max(0.0, SDL_max(min.x - p.x, p.x - max.x));
+    double dy = SDL_max(0.0, SDL_max(min.y - p.y, p.y - max.y));
+
+    return sqrt(dx * dx + dy * dy);
+}
+
+// The least a route from `at` to the goal can cost: the straight line, or
+// a straight line to a teleporter's lines plus the least from its
+// destination on, whichever is less. A route costs at least the straight
+// line between any two of its points, and a teleporter is entered on its
+// lines, so this never overestimates; and it changes by no more than the
+// point moves, so it is consistent.
+static double Heuristic(k_vec2_t at)
+{
+    double h = Distance(at, goal_point);
+    int t;
+
+    for (t = 0; t < graph->num_teleports; ++t)
+    {
+        const k_teleport_t *teleport = &graph->teleports[t];
+
+        if (teleport->cell >= 0 && teleport_rest[t] < h)
+        {
+            h = SDL_min(h, BoxDistance(teleport->min, teleport->max, at)
+                         + teleport_rest[t]);
+        }
+    }
+
+    return h;
+}
+
+// The heuristic at each destination, which can itself go on by teleporter:
+// relaxed until nothing changes (Bellman-Ford; a map has few teleporters).
+static void PrepareTeleports(void)
+{
+    int t, round;
+
+    if (graph->num_teleports > teleport_capacity)
+    {
+        teleport_capacity = graph->num_teleports;
+        free(teleport_rest);
+        teleport_rest = malloc(teleport_capacity * sizeof(*teleport_rest));
+    }
+
+    for (t = 0; t < graph->num_teleports; ++t)
+    {
+        teleport_rest[t] = Distance(graph->teleports[t].to, goal_point);
+    }
+
+    for (round = 0; round < graph->num_teleports; ++round)
+    {
+        boolean changed = false;
+
+        for (t = 0; t < graph->num_teleports; ++t)
+        {
+            double h = Heuristic(graph->teleports[t].to);
+
+            if (h < teleport_rest[t])
+            {
+                teleport_rest[t] = h;
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            break;
+        }
+    }
 }
 
 //
@@ -252,17 +354,17 @@ static void Relax(int node, int from, double step)
         seen[node] = search;
         cost[node] = g;
         came_from[node] = from;
-        Push(g + Distance(NodePosition(node), goal_point), node);
+        Push(g + Heuristic(NodePosition(node)), node);
     }
 }
 
-// The heuristic is the straight line to the goal, which no route can beat.
 static boolean Search(k_path_t *path)
 {
+    PrepareTeleports();
     seen[start_node] = search;
     cost[start_node] = 0.0;
     came_from[start_node] = -1;
-    Push(Distance(start_point, goal_point), start_node);
+    Push(Heuristic(start_point), start_node);
 
     while (heap_size > 0)
     {
@@ -344,11 +446,13 @@ static void EnsureCapacity(k_path_t *path, int cells)
                             path->capacity * sizeof(*path->portals));
 
     // The start, the middle of each portal, at most one centroid per cell,
-    // the goal.
+    // past each teleporter and its destination, the goal.
     path->points = realloc(path->points,
-                           (2 * path->capacity + 2) * sizeof(*path->points));
+                           (4 * path->capacity + 2) * sizeof(*path->points));
     path->leg_cells = realloc(path->leg_cells,
-                              (2 * path->capacity + 2) * sizeof(*path->leg_cells));
+                              (4 * path->capacity + 2) * sizeof(*path->leg_cells));
+    path->jumps = realloc(path->jumps,
+                          (4 * path->capacity + 2) * sizeof(*path->jumps));
 }
 
 static void Reconstruct(k_path_t *path)
@@ -429,6 +533,27 @@ static boolean LegAlongWall(int cell, k_vec2_t a, k_vec2_t b)
     return false;
 }
 
+// Adds a point; the leg to it is in route cell `cell`.
+static void AddPoint(k_path_t *path, k_vec2_t point, int cell, boolean jump)
+{
+    path->leg_cells[path->num_points - 1] = cell;
+    path->jumps[path->num_points - 1] = jump;
+    path->points[path->num_points++] = point;
+}
+
+// Just past the teleport line a portal runs along: on its back side, the
+// left of v1 -> v2.
+static k_vec2_t PastLine(int portal, k_vec2_t at)
+{
+    const k_line_t *line = &map->lines[graph->portals[portal].line];
+    double length = Distance(line->v1, line->v2);
+    k_vec2_t result;
+
+    result.x = at.x - (line->v2.y - line->v1.y) / length * TELEPORT_OVERSHOOT;
+    result.y = at.y + (line->v2.x - line->v1.x) / length * TELEPORT_OVERSHOOT;
+    return result;
+}
+
 static void BuildPoints(k_path_t *path)
 {
     int i;
@@ -441,27 +566,35 @@ static void BuildPoints(k_path_t *path)
         // Not quite the middle the search costed: as clear of walls as the
         // portal allows, so the player does not clip corners.
         k_vec2_t middle = K_Graph_PortalPoint(path->portals[i], path->cells[i]);
+        int teleport = K_Graph_Teleport(path->portals[i], path->cells[i]);
 
         // Between two portals (the first leg starts wherever the player
         // stands).
         if (i > 0 && LegAlongWall(path->cells[i],
                                   path->points[path->num_points - 1], middle))
         {
-            path->leg_cells[path->num_points - 1] = i;
-            path->points[path->num_points++] = map->cells[path->cells[i]].centroid;
+            AddPoint(path, map->cells[path->cells[i]].centroid, i, false);
         }
 
-        path->leg_cells[path->num_points - 1] = i;
-        path->points[path->num_points++] = middle;
+        AddPoint(path, middle, i, false);
+
+        if (teleport >= 0)
+        {
+            AddPoint(path, PastLine(path->portals[i], middle), i, false);
+            AddPoint(path, graph->teleports[teleport].to, i + 1, true);
+        }
     }
 
-    path->leg_cells[path->num_points - 1] = path->num_cells - 1;
-    path->points[path->num_points++] = goal_point;
+    AddPoint(path, goal_point, path->num_cells - 1, false);
+    path->jumps[path->num_points - 1] = false;
     path->length = 0.0;
 
     for (i = 0; i < path->num_points - 1; ++i)
     {
-        path->length += Distance(path->points[i], path->points[i + 1]);
+        if (!path->jumps[i])
+        {
+            path->length += Distance(path->points[i], path->points[i + 1]);
+        }
     }
 }
 
@@ -477,6 +610,7 @@ static void FindBlocked(k_path_t *path)
 
     for (i = 0; i < path->num_cells - 1; ++i)
     {
+        const k_portal_t *portal = &graph->portals[path->portals[i]];
         k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
         double from_floor, from_ceiling, to_floor, to_ceiling;
 
@@ -485,8 +619,10 @@ static void FindBlocked(k_path_t *path)
             continue;
         }
 
+        // The cell beyond the portal: not cells[i + 1] past a teleporter.
         CellHeights(path->cells[i], &from_floor, &from_ceiling);
-        CellHeights(path->cells[i + 1], &to_floor, &to_ceiling);
+        CellHeights(portal->cell[portal->cell[0] == path->cells[i] ? 1 : 0],
+                    &to_floor, &to_ceiling);
 
         path->result = K_PATH_BLOCKED;
         path->blocked_portal = path->portals[i];
@@ -581,6 +717,7 @@ void K_Path_Free(k_path_t *path)
     free(path->portals);
     free(path->points);
     free(path->leg_cells);
+    free(path->jumps);
     memset(path, 0, sizeof(*path));
 }
 
@@ -614,8 +751,8 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
             return;
 
         case K_PATH_UNCONNECTED:
-            M_snprintf(buf, buf_len, "nothing connects the start to the goal "
-                       "(an area reached only by teleporter?)");
+            M_snprintf(buf, buf_len, "nothing connects the start to the goal, "
+                       "no portal nor teleporter");
             return;
 
         case K_PATH_BLOCKED:

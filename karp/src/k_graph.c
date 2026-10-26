@@ -5,6 +5,10 @@
 //	counter-clockwise) and overlap; each overlap becomes a portal. Edges
 //	are bucketed in a uniform grid so large maps stay fast.
 //
+//	Teleporters are not portals: a portal along a teleport line is crossed
+//	from the line's front side into the teleporter's destination, wherever
+//	that is, not into the cell beyond (K_Graph_Teleport).
+//
 //	Sanity check: every cell edge should be covered by portals and
 //	one-sided walls. Whatever is left borders nothing - a hole in the
 //	navigation mesh.
@@ -25,6 +29,8 @@
 #include "k_graph.h"
 #include "k_log.h"
 #include "k_specials.h"
+
+#define K_PI 3.14159265358979323846
 
 // Vanilla nodebuilders round split vertices to whole map units, so the
 // edges two neighbours share do not line up exactly: they can be off by
@@ -58,6 +64,10 @@
 
 // Tics to stop in front of a line, face it and press use.
 #define ACTION_OVERHEAD 35.0
+
+// A teleported player can neither move nor turn for this many tics
+// (EV_Teleport).
+#define TELEPORT_FREEZE 18.0
 
 // A crossing is a way through only if some point on it is this far from
 // anything that stops the player: its radius (16), plus a unit. A gap
@@ -110,13 +120,17 @@ static int *cell_items;
 static const char *crossing_names[K_NUM_CROSSINGS] =
 {
     "open", "wall", "blocking line", "step too high", "no headroom",
-    "locked door", "too narrow", "door", "lift", "lift ride",
+    "locked door", "too narrow", "door", "lift", "lift ride", "teleporter",
 };
 
 // Per sector: opened by a manual door line (it is the line's back
 // sector), or moved by a lift line (it has the line's tag).
 static unsigned char *door_sectors;
 static unsigned char *lift_sectors;
+
+// Per line: the teleporter it belongs to, -1 if none.
+static int *line_teleports;
+static int teleports_capacity;
 
 //
 // Vector helpers
@@ -353,6 +367,7 @@ static void AddPortal(int e, int f, double t0, double t1)
     portal->a = PointAlong(edges[e].a, edges[e].b, t0);
     portal->b = PointAlong(edges[e].a, edges[e].b, t1);
     portal->line = -1;
+    portal->teleport_from = -1;
 
     AddCover(e, t0, t1);
 
@@ -759,6 +774,151 @@ static void FindMoverSectors(const k_map_t *map)
     }
 }
 
+//
+// Teleporters
+//
+
+// Walk-over lines that teleport the player (W1, WR); 125 and 126 teleport
+// only monsters.
+static boolean IsTeleportLine(int special)
+{
+    return special == 39 || special == 97;
+}
+
+// Where crossing a teleport line with this tag sends the player, as
+// EV_Teleport finds it: the first teleport destination, in thinker order,
+// in the first sector with the tag.
+static const mobj_t *FindDestination(int tag)
+{
+    const thinker_t *thinker;
+    int s;
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        if (sectors[s].tag != tag)
+        {
+            continue;
+        }
+
+        for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
+        {
+            const mobj_t *mo;
+
+            if (thinker->function.acp1 != (actionf_p1) P_MobjThinker)
+            {
+                continue;
+            }
+
+            mo = (const mobj_t *) thinker;
+
+            if (mo->type == MT_TELEPORTMAN && mo->subsector->sector == &sectors[s])
+            {
+                return mo;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static int AddTeleporter(int tag)
+{
+    const mobj_t *to = FindDestination(tag);
+    k_teleport_t *teleport;
+
+    if (graph.num_teleports == teleports_capacity)
+    {
+        teleports_capacity = SDL_max(teleports_capacity * 2, 16);
+        graph.teleports = realloc(graph.teleports,
+                                  teleports_capacity * sizeof(*graph.teleports));
+    }
+
+    teleport = &graph.teleports[graph.num_teleports];
+    teleport->tag = tag;
+    teleport->to.x = teleport->to.y = 0.0;
+    teleport->angle = 0.0;
+    teleport->cell = -1;
+
+    if (to != NULL)
+    {
+        teleport->to.x = (double) to->x / FRACUNIT;
+        teleport->to.y = (double) to->y / FRACUNIT;
+        teleport->angle = to->angle * (2.0 * K_PI / 4294967296.0);
+        teleport->cell = K_Map_CellAt(teleport->to.x, teleport->to.y);
+    }
+
+    if (teleport->cell < 0)
+    {
+        K_Log(K_LOG_MAP, K_LOG_WARN, "teleport lines with tag %d lead nowhere: %s",
+              tag, to == NULL ? "no destination in a sector with the tag"
+                              : "the destination is on no floor");
+    }
+
+    return graph.num_teleports++;
+}
+
+// From the specials at level load: a one-shot line loses its special when
+// used, but stays part of its teleporter. The destination does not move.
+static void FindTeleporters(const k_map_t *map)
+{
+    int i, t;
+
+    free(line_teleports);
+    line_teleports = malloc(SDL_max(numlines, 1) * sizeof(*line_teleports));
+    graph.num_teleports = 0;
+
+    for (i = 0; i < numlines; ++i)
+    {
+        const k_line_t *line = &map->lines[i];
+        k_teleport_t *teleport;
+
+        line_teleports[i] = -1;
+
+        if (!IsTeleportLine(lines[i].special) || line->back_sector < 0)
+        {
+            continue;
+        }
+
+        for (t = 0; t < graph.num_teleports && graph.teleports[t].tag != lines[i].tag; ++t)
+        {
+        }
+
+        if (t == graph.num_teleports)
+        {
+            t = AddTeleporter(lines[i].tag);
+            graph.teleports[t].min = graph.teleports[t].max = line->v1;
+        }
+
+        // Padded: the portals along the lines are rounded off them a little.
+        teleport = &graph.teleports[t];
+        teleport->min.x = SDL_min(teleport->min.x, SDL_min(line->v1.x, line->v2.x) - 2.0 * MATCH_TOLERANCE);
+        teleport->min.y = SDL_min(teleport->min.y, SDL_min(line->v1.y, line->v2.y) - 2.0 * MATCH_TOLERANCE);
+        teleport->max.x = SDL_max(teleport->max.x, SDL_max(line->v1.x, line->v2.x) + 2.0 * MATCH_TOLERANCE);
+        teleport->max.y = SDL_max(teleport->max.y, SDL_max(line->v1.y, line->v2.y) + 2.0 * MATCH_TOLERANCE);
+        line_teleports[i] = t;
+    }
+
+    // The front side of a line is on the right of v1 -> v2.
+    for (i = 0; i < graph.num_portals; ++i)
+    {
+        k_portal_t *portal = &graph.portals[i];
+        const k_line_t *line;
+        k_vec2_t c;
+
+        if (portal->line < 0 || line_teleports[portal->line] < 0)
+        {
+            continue;
+        }
+
+        line = &map->lines[portal->line];
+        c = map->cells[portal->cell[0]].centroid;
+        portal->teleport_from =
+            (line->v2.x - line->v1.x) * (c.y - line->v1.y)
+          - (line->v2.y - line->v1.y) * (c.x - line->v1.x) < 0.0
+            ? portal->cell[0] : portal->cell[1];
+    }
+}
+
 void K_Graph_Build(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -779,6 +939,7 @@ void K_Graph_Build(void)
 
     BuildLinks(map);
     FindMoverSectors(map);
+    FindTeleporters(map);
     CheckHoles(map);
     CheckConnectivity(map);
 
@@ -787,11 +948,11 @@ void K_Graph_Build(void)
                    / SDL_GetPerformanceFrequency();
 
     K_Log(K_LOG_MAP, graph.holes > 0 ? K_LOG_WARN : K_LOG_INFO,
-          "%s graph: %d portals, %d holes (%.0f units), %d isolated, "
-          "%d components (largest %d of %d cells), %.1f ms", map->name,
-          graph.num_portals, graph.holes, graph.hole_length,
-          graph.isolated_cells, graph.components, graph.largest_component,
-          map->num_cells, graph.build_ms);
+          "%s graph: %d portals, %d teleporters, %d holes (%.0f units), "
+          "%d isolated, %d components (largest %d of %d cells), %.1f ms",
+          map->name, graph.num_portals, graph.num_teleports, graph.holes,
+          graph.hole_length, graph.isolated_cells, graph.components,
+          graph.largest_component, map->num_cells, graph.build_ms);
 }
 
 const k_graph_t *K_Graph_Get(void)
@@ -1149,7 +1310,8 @@ static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
 }
 
 // The heights decide first; a crossing they let through is still no way
-// if it is narrower than the player.
+// if it is narrower than the player. An open one over a teleport line
+// takes the player elsewhere.
 static k_crossing_t Judge(int portal_index, int from, double *wait)
 {
     k_crossing_t crossing = JudgeHeights(portal_index, from, wait);
@@ -1166,6 +1328,12 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
     {
         *wait = 0.0;
         return K_CROSS_NARROW;
+    }
+
+    if (crossing == K_CROSS_OPEN && K_Graph_Teleport(portal_index, from) >= 0)
+    {
+        *wait = TELEPORT_FREEZE;
+        return K_CROSS_TELEPORT;
     }
 
     return crossing;
@@ -1282,7 +1450,23 @@ int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
 int K_Graph_Passable(k_crossing_t crossing)
 {
     return crossing == K_CROSS_OPEN || crossing == K_CROSS_DOOR
-        || crossing == K_CROSS_LIFT || crossing == K_CROSS_RIDE;
+        || crossing == K_CROSS_LIFT || crossing == K_CROSS_RIDE
+        || crossing == K_CROSS_TELEPORT;
+}
+
+int K_Graph_Teleport(int portal, int from)
+{
+    const k_portal_t *p = &graph.portals[portal];
+    int teleport;
+
+    if (from < 0 || p->teleport_from != from
+     || !IsTeleportLine(lines[p->line].special))
+    {
+        return -1;
+    }
+
+    teleport = line_teleports[p->line];
+    return graph.teleports[teleport].cell >= 0 ? teleport : -1;
 }
 
 double K_Graph_CrossingWait(int portal, int from)

@@ -24,6 +24,10 @@
 //	down is boarded like any open floor; on it, the crossing off it waits
 //	for the ride up.
 //
+//	Teleporters: the player runs across the line, and the route goes on
+//	from the destination. No slowing down: a teleport stops the player
+//	anyway, and freezes it for a moment, which the prediction knows.
+//
 
 #include <math.h>
 #include <string.h>
@@ -97,12 +101,17 @@
 #define MAX_PRESSES 3
 #define STALL_TICS 175
 
+// Further than the player can move in a tic (MAXMOVE on each axis): it
+// teleported.
+#define TELEPORT_JUMP 64.0
+
 typedef struct
 {
     double x, y;
     double momx, momy;
     double angle;
     boolean onground;
+    int frozen;
 } body_t;
 
 typedef struct
@@ -153,6 +162,7 @@ static k_vec2_t history[STUCK_TICS];
 static int history_count;
 static int history_next;
 static k_vec2_t stuck_at;
+static k_vec2_t last_at;    // after the previous tic
 
 static double Distance(k_vec2_t a, k_vec2_t b)
 {
@@ -168,19 +178,27 @@ static int Round(double value)
 // Prediction
 //
 
-// One tic of player movement, as P_MovePlayer and P_XYMovement do it,
-// without walls.
+// One tic of player movement, as P_PlayerThink, P_MovePlayer and
+// P_XYMovement do it, without walls. Just after a teleport, the player
+// neither turns nor thrusts.
 static void Step(body_t *body, const k_command_t *command)
 {
-    body->angle += command->turn / ANGLETURN_PER_RADIAN;
-
-    if (body->onground)
+    if (body->frozen > 0)
     {
-        double forward = command->forward * THRUST_SCALE;
-        double side = command->side * THRUST_SCALE;
+        --body->frozen;
+    }
+    else
+    {
+        body->angle += command->turn / ANGLETURN_PER_RADIAN;
 
-        body->momx += forward * cos(body->angle) + side * sin(body->angle);
-        body->momy += forward * sin(body->angle) - side * cos(body->angle);
+        if (body->onground)
+        {
+            double forward = command->forward * THRUST_SCALE;
+            double side = command->side * THRUST_SCALE;
+
+            body->momx += forward * cos(body->angle) + side * sin(body->angle);
+            body->momy += forward * sin(body->angle) - side * cos(body->angle);
+        }
     }
 
     body->momx = SDL_max(-MAXMOVE, SDL_min(body->momx, MAXMOVE));
@@ -222,6 +240,7 @@ static boolean Predict(int tic, body_t *body)
     body->momy = pose.momy;
     body->angle = pose.angle;
     body->onground = pose.onground != 0;
+    body->frozen = pose.frozen;
 
     for (t = SDL_max(gametic, tic - SENT_SIZE); t < tic; ++t)
     {
@@ -261,12 +280,23 @@ static void CheckPrediction(k_vec2_t at)
 // The route
 //
 
-// The position of a cell in the route, or -1. A route visits a cell once.
+// The position of a cell in the route, or -1. A teleporter can bring the
+// route back to a cell it went through before: the visit from the
+// player's route cell on wins.
 static int RouteIndex(int cell)
 {
+    int from = SDL_max(status.route_cell, 0);
     int i;
 
-    for (i = 0; i < path.num_cells; ++i)
+    for (i = from; i < path.num_cells; ++i)
+    {
+        if (path.cells[i] == cell)
+        {
+            return i;
+        }
+    }
+
+    for (i = 0; i < SDL_min(from, path.num_cells); ++i)
     {
         if (path.cells[i] == cell)
         {
@@ -304,17 +334,24 @@ static k_crossing_t CrossingOut(int r)
     return K_Graph_CanCross(path.portals[r], path.cells[r]);
 }
 
+// Whether the route leaves cell r by teleporter, as planned: the leg
+// after the point past its line is the jump.
+static boolean TeleportOut(int r)
+{
+    return path.jumps[ExitPoint(r)];
+}
+
 // The first crossing from the player's route cell on that is not open yet
-// (a door, a lift...), or -1. Not just the next one: the player can stand
-// just off the route, in a cell beside it, while the route cell it last
-// was in leads on openly.
+// (a door, a lift, a teleporter...), or -1. Not just the next one: the
+// player can stand just off the route, in a cell beside it, while the
+// route cell it last was in leads on openly.
 static int NextClosedCrossing(void)
 {
     int r;
 
     for (r = SDL_max(status.route_cell, 0); r < path.num_cells - 1; ++r)
     {
-        if (CrossingOut(r) != K_CROSS_OPEN)
+        if (CrossingOut(r) != K_CROSS_OPEN || TeleportOut(r))
         {
             return r;
         }
@@ -337,13 +374,19 @@ static int TargetLimit(void)
 //
 
 // The speed to take a waypoint at, from how sharply the route turns there.
-// 0 in front of a door or lift.
+// 0 in front of a door or lift; full speed into a teleporter, which stops
+// the player anyway, and out of one, where there is no corner.
 static double CornerSpeed(int k)
 {
     k_vec2_t a = path.points[k - 1], b = path.points[k], c = path.points[k + 1];
     double in = Distance(a, b), out = Distance(b, c);
     double turn_cos = 1.0;
     int r = path.leg_cells[k - 1];
+
+    if (path.jumps[k] || path.jumps[k - 1])
+    {
+        return tuning.max_speed;
+    }
 
     if (path.leg_cells[k] != r && CrossingOut(r) != K_CROSS_OPEN)
     {
@@ -375,7 +418,8 @@ static double SpeedLimit(const body_t *body, int target)
 
         limit = SDL_min(limit, sqrt(corner * corner + 2.0 * tuning.braking * along));
 
-        if (corner == 0.0)
+        // Past a stop, or a teleporter, nothing ahead needs slowing for now.
+        if (corner == 0.0 || path.jumps[k])
         {
             break;
         }
@@ -398,6 +442,12 @@ static void Steer(const body_t *body, double desired_x, double desired_y,
     double max_turn = (face != NULL ? ACTION_TURN : tuning.max_turn) * K_PI / 180.0;
     double turn = 0.0;
     double angle, thrust_x, thrust_y, forward, side, scale;
+
+    // Just teleported: the command would do nothing.
+    if (body->frozen > 0)
+    {
+        return;
+    }
 
     // Facing is cosmetic while driving: strafing moves the player just as
     // well.
@@ -859,12 +909,34 @@ static boolean UpdateAction(k_vec2_t at, double speed)
         }
     }
 
-    if (r < 0 || status.target < ExitPoint(r))
+    if (r < 0)
     {
         return true;
     }
 
     crossing = CrossingOut(r);
+
+    // A teleporter needs nothing but running over its line, as long as it
+    // still works: a one-shot one is used up once crossed.
+    if (TeleportOut(r))
+    {
+        if (crossing == K_CROSS_TELEPORT)
+        {
+            return true;
+        }
+
+        EndAction();
+        M_snprintf(why, sizeof(why), "the teleporter at line %d is %s%s",
+                   K_Graph_Get()->portals[path.portals[r]].line,
+                   crossing == K_CROSS_OPEN ? "used up" : "blocked: ",
+                   crossing == K_CROSS_OPEN ? "" : K_Graph_CrossingName(crossing));
+        return Replan(at, why);
+    }
+
+    if (status.target < ExitPoint(r))
+    {
+        return true;
+    }
 
     // The way ahead closed since the route was planned, e.g. a door that
     // no longer opens high enough.
@@ -1009,8 +1081,9 @@ static boolean Replan(k_vec2_t at, const char *why)
 }
 
 // Moves the target along as the player goes. Returns false if the route
-// was replaced or failed.
-static boolean Progress(k_vec2_t at)
+// was replaced or failed. Teleported off the route, it replans even next
+// to it: the route cell it last was in is far away.
+static boolean Progress(k_vec2_t at, boolean teleported)
 {
     int cell = K_Map_CellAt(at.x, at.y);
     int r = RouteIndex(cell);
@@ -1029,7 +1102,7 @@ static boolean Progress(k_vec2_t at)
         status.target = FirstPointIn(r);
         status.route_cell = r;
     }
-    else if (r < 0 && cell >= 0 && !NextToRoute(cell))
+    else if (r < 0 && cell >= 0 && (teleported || !NextToRoute(cell)))
     {
         M_snprintf(why, sizeof(why), "off the route in cell %d at (%.0f,%.0f)",
                    cell, at.x, at.y);
@@ -1071,7 +1144,10 @@ static double Remaining(k_vec2_t at)
 
     for (k = status.target; k < path.num_points - 1; ++k)
     {
-        remaining += Distance(path.points[k], path.points[k + 1]);
+        if (!path.jumps[k])
+        {
+            remaining += Distance(path.points[k], path.points[k + 1]);
+        }
     }
 
     return remaining;
@@ -1081,6 +1157,7 @@ k_navstate_t K_Nav_Tick(void)
 {
     k_pose_t pose;
     k_vec2_t at;
+    boolean teleported;
     char text[96];
 
     if (status.state != K_NAV_DRIVING || !K_Map_GetPlayer(&pose))
@@ -1092,9 +1169,24 @@ k_navstate_t K_Nav_Tick(void)
     at.y = pose.y;
     ++status.tics;
     status.speed = sqrt(pose.momx * pose.momx + pose.momy * pose.momy);
-    CheckPrediction(at);
+    teleported = Distance(at, last_at) > TELEPORT_JUMP;
 
-    if (!Progress(at) || !UpdateAction(at, status.speed))
+    if (teleported)
+    {
+        // No misprediction, and no progress to measure from before.
+        K_Log(K_LOG_NAV, K_LOG_INFO, "teleported from (%.0f,%.0f) to (%.0f,%.0f)",
+              last_at.x, last_at.y, at.x, at.y);
+        history_count = 0;
+        history_next = 0;
+    }
+    else
+    {
+        CheckPrediction(at);
+    }
+
+    last_at = at;
+
+    if (!Progress(at, teleported) || !UpdateAction(at, status.speed))
     {
         return status.state;
     }
@@ -1188,6 +1280,7 @@ static int StartGoal(double x, double y, k_goalkind_t kind, int line)
     start.y = player.y;
     goal.x = x;
     goal.y = y;
+    last_at = start;
 
     K_Path_Find(&path, start, goal);
     have_goal = true;

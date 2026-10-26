@@ -540,6 +540,49 @@ static void DrawCentroids(ImDrawList *draw, const k_map_t *map,
     }
 }
 
+static const ImU32 teleport_color = IM_COL32(200, 100, 255, 255);
+
+static void DrawDashedLine(ImDrawList *draw, const ImVec2 &a, const ImVec2 &b,
+                           ImU32 color, float thickness)
+{
+    float dx = b.x - a.x, dy = b.y - a.y;
+    float length = sqrtf(dx * dx + dy * dy);
+    float dash = 6.0f * ui_scale;
+
+    for (float t = 0.0f; t < length; t += 2.0f * dash)
+    {
+        float t1 = SDL_min(t + dash, length);
+
+        draw->AddLine(ImVec2(a.x + dx * t / length, a.y + dy * t / length),
+                      ImVec2(a.x + dx * t1 / length, a.y + dy * t1 / length),
+                      color, thickness);
+    }
+}
+
+// Each teleporter: a dashed line from its lines to its destination.
+static void DrawTeleporters(ImDrawList *draw, const k_graph_t *graph,
+                            const ImVec2 &center)
+{
+    float thickness = SDL_max(1.0f, ui_scale);
+
+    for (int i = 0; i < graph->num_teleports; ++i)
+    {
+        const k_teleport_t *teleport = &graph->teleports[i];
+
+        if (teleport->cell < 0)
+        {
+            continue;
+        }
+
+        ImVec2 to = MapToScreen(center, teleport->to.x, teleport->to.y);
+
+        DrawDashedLine(draw, MapToScreen(center, (teleport->min.x + teleport->max.x) * 0.5,
+                                         (teleport->min.y + teleport->max.y) * 0.5),
+                       to, teleport_color, thickness);
+        draw->AddCircle(to, 5.0f * ui_scale, teleport_color, 0, thickness);
+    }
+}
+
 static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
                          const k_graph_t *graph, const ImVec2 &center)
 {
@@ -552,9 +595,12 @@ static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
         k_crossing_t backward_crossing = K_Graph_CanCross(i, portal->cell[1]);
         bool forward = K_Graph_Passable(forward_crossing) != 0;
         bool backward = K_Graph_Passable(backward_crossing) != 0;
+        bool teleport = forward_crossing == K_CROSS_TELEPORT
+                     || backward_crossing == K_CROSS_TELEPORT;
         bool action = (forward && forward_crossing != K_CROSS_OPEN)
                    || (backward && backward_crossing != K_CROSS_OPEN);
-        ImU32 color = action ? IM_COL32(70, 150, 255, 255)
+        ImU32 color = teleport ? teleport_color
+                    : action ? IM_COL32(70, 150, 255, 255)
                     : forward && backward ? IM_COL32(80, 200, 90, 255)
                     : forward || backward ? IM_COL32(235, 200, 50, 255)
                     : IM_COL32(230, 60, 60, 255);
@@ -592,6 +638,8 @@ static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
             }
         }
     }
+
+    DrawTeleporters(draw, graph, center);
 }
 
 // "4 neighbours: 3 open, 1 step too high"
@@ -709,12 +757,13 @@ static void DrawRouteCells(ImDrawList *draw, const k_map_t *map,
 }
 
 // The line to follow, its waypoints, and on a blocked route the crossing
-// that blocks it, in red.
+// that blocks it, in red. A teleport is dashed.
 static void DrawRoute(ImDrawList *draw, const k_path_t *path,
                       const ImVec2 &center)
 {
     float thickness = SDL_max(1.0f, ui_scale);
     ImU32 color = RouteColor(path, 255);
+    int first = 0;
 
     screen_points.clear();
 
@@ -724,10 +773,27 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
                                             path->points[i].y));
     }
 
-    if (path->num_points >= 2)
+    // The walked stretches between the jumps.
+    for (int i = 0; i < path->num_points; ++i)
     {
-        draw->AddPolyline(screen_points.data(), path->num_points, color,
-                          ImDrawFlags_None, 2.0f * thickness);
+        if (i < path->num_points - 1 && !path->jumps[i])
+        {
+            continue;
+        }
+
+        if (i > first)
+        {
+            draw->AddPolyline(&screen_points[first], i - first + 1, color,
+                              ImDrawFlags_None, 2.0f * thickness);
+        }
+
+        if (i < path->num_points - 1)
+        {
+            DrawDashedLine(draw, screen_points[i], screen_points[i + 1],
+                           teleport_color, thickness);
+        }
+
+        first = i + 1;
     }
 
     for (int i = 1; i < path->num_points - 1; ++i)

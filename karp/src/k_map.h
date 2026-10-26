@@ -111,6 +111,8 @@ typedef struct
     double angle;           // radians, counter-clockwise from east
     double momx, momy;      // momentum, map units per tic
     int onground;           // movement input only works on the ground
+    int frozen;             // tics left that it can neither move nor turn
+                            // (just teleported)
 } k_pose_t;
 
 // Called by Karp at the end of every P_SetupLevel.

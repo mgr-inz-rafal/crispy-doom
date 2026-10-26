@@ -1,7 +1,7 @@
 # Karp - Stage 1 Plan: "Go To Location"
 
-> Status: approved; M0-M6 implemented, plus doors and lifts, GO TO EXIT and the goal stack; now
-> playing through Doom II map by map (section 4).
+> Status: approved; M0-M6 implemented, plus doors and lifts, GO TO EXIT, the goal stack and
+> teleporters; now playing through Doom II map by map (section 4).
 > All Karp code lives under `karp/`; engine edits are single-line hooks tagged `// [Karp]`.
 
 ## 1. Context
@@ -371,6 +371,23 @@ on it that is at least 24 units from every obstacle, the one nearest the middle 
 where no point is that clear, the clearest one. In open rooms that is the middle; next to a wall
 corner it moves away from the corner, so the player does not clip it (Doom II MAP02 again).
 
+**Teleporters** (`K_CROSS_TELEPORT`). Lines 39 (once) and 97 (repeatable) teleport the player
+when crossed from their front side (125 and 126 are for monsters only). At level load the lines
+are grouped by tag into **teleporters**, each with its destination found as `EV_Teleport` finds
+it (the first teleport destination thing, in thinker order, in the first sector with the tag),
+the way the player faces on arrival, the destination's cell and the bounding box of its lines. A
+tag whose destination is missing or off the floor is logged; crossing its lines does nothing.
+- A portal along a teleport line records the cell on the line's front side. Crossing out of that
+  cell is a teleport if the heights and the clearance let the player across (judged as for any
+  crossing, into the cell beyond the line) and the line still has its special: a once-only
+  teleporter loses it when used, so this is judged live. Its "wait" is the 18 tics the player
+  stands frozen on arrival.
+- The player lands at the destination, not in the cell beyond the line: the search treats the
+  crossing that way even when the heights block it (a teleporter on a raised ledge still leads to
+  its destination once the ledge is lowered).
+- The graph log counts teleporters; the graph overlay draws teleport crossings in purple and a
+  dashed line from each teleporter to its destination, with a ring there.
+
 **Hole check.** Every stretch of every cell's border should border a neighbour (a portal) or lie
 along a one-sided wall. A stretch that does neither, is at least 4 units long and more than 2 units
 from any wall is a **hole** in the navigation mesh (shorter gaps are rounding at corners, gaps
@@ -401,6 +418,13 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
 - The heuristic is the straight line to the goal, which no route can beat (consistent, so an
   expanded node is final). Binary-heap open set; per-node arrays sized to the portal count, reset
   with a search stamp.
+- **Teleporters.** The node "crossed a teleport line into its back side" stands at the
+  teleporter's destination, in the destination's cell, and the search goes on from there. A
+  teleporter is a shortcut the straight line does not know about, so the heuristic becomes the
+  lesser of the straight line to the goal and, for each teleporter, the straight line to the box
+  around its lines plus the heuristic at its destination (those are worked out per search, letting
+  one teleporter lead to another, until they settle). It still never overestimates and stays
+  consistent, so the search still finds the shortest route.
 - **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
   search then gives the shortest open route if there is one, and otherwise the route with the
   cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
@@ -418,9 +442,12 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
 - **Output** (`k_path_t`): the result, the route's cells and the portals between them (for
   progress tracking in M6), the points to follow (start, portal middles, the occasional centroid,
   goal), the length, the first blocked crossing with its kind and height, nodes searched and time.
+  At a teleporter the points go on from the point on its line to one 32 units past it (so the
+  player surely crosses it), then to the destination; that last leg is marked as a jump
+  (`k_path_t.jumps`), is not walked and does not count in the length.
 - **Results:** `FOUND`; `BLOCKED` (every route crosses something the player cannot cross now: a
-  step too high, a closed door, a blocking line); `UNCONNECTED` (nothing connects them, e.g. an
-  area reached only by teleporter); `NO_START` / `NO_GOAL` (not on any floor).
+  step too high, a closed door, a blocking line); `UNCONNECTED` (nothing connects them, no portal
+  nor teleporter, e.g. a closed-off area); `NO_START` / `NO_GOAL` (not on any floor).
   `K_Path_Describe` turns a result into one line for the log and the status line, e.g. `a step
   64 units high at line 312 (1024,-320) - the player climbs at most 24` or `only 0 units of
   headroom at line 151 (1520,-3264) - the player needs 56`.
@@ -546,6 +573,20 @@ action in blue. The player presses use only through the ticcmd's `BT_USE`, like 
 
 `K_Nav_Clear` drops the goal so the player stands still, e.g. while a sector the brain just moved
 settles.
+
+**Teleporters on the route.** A teleporter needs no action: the target stops at the point past
+its line, as at a door, but the speed profile does not slow down for it, since the teleport stops
+the player anyway, nor for the corner at the destination. The bot runs across the line, lands at
+the destination, and progress picks up from there (the destination's cell is the next route cell).
+A route can come back to a cell it went through before a teleporter, so the route cell is looked
+up from the player's current one on first.
+- A position jump no step could make (over 64 units in a tic) is a teleport: logged ("teleported
+  from (x,y) to (x,y)"), and neither a misprediction nor progress for the stuck check. Teleported
+  somewhere off the route, the bot replans at once.
+- For 18 tics after a teleport the player can neither move nor turn (`reactiontime`). The pose
+  reports it, the prediction replays it, and the bot sends empty commands meanwhile.
+- If the teleporter on the route stops working before the bot gets there (a once-only one used
+  up, or blocked), the route is replanned.
 
 **Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
 before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
@@ -736,8 +777,8 @@ the config; Karp simply ignores it while it owns the controls.
     way with an arrow, red blocked).
   - The route, whenever there is a goal: its cells faintly filled, the line to follow with a dot
     per waypoint, and a goal ring. Blue line and green ring when the route is open; orange line,
-    the blocking crossing as a thick red line, and a red ring when it is blocked. While the bot
-    drives, a white ring marks the waypoint it is driving to.
+    the blocking crossing as a thick red line, and a red ring when it is blocked. A teleport is a
+    dashed purple line. While the bot drives, a white ring marks the waypoint it is driving to.
   - Player arrow (live position and heading).
   - Hover tooltip: subsector # (and which of its cells), sector #, live floor/ceiling, area,
     neighbours by crossing ("4 neighbours: 3 open, 1 step too high").
@@ -844,8 +885,17 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      wall corners it clipped led to the clearance checks (3.2.1). It then stops at the red key:
      the key is reached by a **running jump** (follow-up 7). Skipped for now, to come back to.
    - MAP03: the exit is reached through a **teleporter** (line 418, a walk-over teleport to sector
-     7); Karp has no teleport links yet, so every route to the exit looks blocked. Next:
-     teleporters (follow-up 8).
+     7), which led to teleporters (follow-up 8). A run on Doom E4M3 (by accident) showed the bot
+     teleporting and carrying on, until it got stuck on a torch (follow-up 3). On MAP03 the
+     teleporter sits in a wall niche 112 units up, reached once switch 431 raises the strip in
+     front of it; the switch is behind the blue door. The bot works that chain out, but the blue
+     key looks out of reach behind "a gap narrower than the player" at the foot of a staircase
+     (line 98). That gap is false: the steps are 8 units high but only 16 deep, and the clearance
+     check judges every line near a crossing from the floor the player starts on (32), so the
+     second step (64) counts as a wall 16 units from the first riser. In the engine the player
+     stands on the highest floor under its box: once on the first step (56), the next one is only
+     8 higher. Next: judge the lines that lie wholly past a crossing from the higher of its two
+     floors.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -882,14 +932,10 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       player need no jump at all: its floor is the highest one under its 32x32 box, so it walks
       across. Following a jump link means a straight, full-speed run-up and no braking. Doom II
       MAP02's red key needs one.
-   8. **Teleporters.** Lines 39 (once) and 97 (repeatable) teleport the player when crossed from
-      the front side (125 and 126 are for monsters only). The player lands on the teleport
-      destination thing in a sector with the line's tag, facing its angle, standing still. The
-      graph needs one-way teleport links from the cells on the line's front side to the
-      destination's cell (costing the walk to the line); nav walks across the line from the front
-      and carries on from the destination, which must not count as being pushed off the route. A
-      once-only teleporter loses its special after use, so its link goes (judged live). Doom II
-      MAP03 needs one.
+   8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
+      to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
+      runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
+      yet: a route that only passes near a teleport line can still clip it by accident.
    9. **Walk-over lifts and timing.** A lift lowered by crossing a line (Doom II MAP03 has fast
       ones, special 120) goes down, waits 3 seconds and comes back up, so the bot must head for it
       right after crossing: finish the lower-the-lift goal as soon as the lift starts moving, and

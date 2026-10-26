@@ -976,5 +976,6 @@ int K_Map_GetPlayer(k_pose_t *pose)
     pose->momx = FixedToMap(mo->momx);
     pose->momy = FixedToMap(mo->momy);
     pose->onground = mo->z <= mo->floorz;
+    pose->frozen = mo->reactiontime;
     return 1;
 }

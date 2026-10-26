@@ -24,7 +24,23 @@ typedef struct
     k_vec2_t a, b;          // the shared stretch of their boundary
     int line;               // the linedef along it, -1 if none (the two
                             // cells are in the same sector)
+    int teleport_from;      // along a teleport line: the cell on its front
+                            // side, crossing out of which teleports the
+                            // player; -1 otherwise
 } k_portal_t;
+
+// A teleporter: the walk-over lines with one tag that teleport the player
+// when crossed from their front side, and where to (EV_Teleport: the first
+// teleport destination in the first sector with the tag).
+typedef struct
+{
+    int tag;
+    k_vec2_t to;            // the destination
+    double angle;           // the way the player faces on arrival, radians
+    int cell;               // the cell the destination is in, -1 if there
+                            // is none (crossing the lines does nothing)
+    k_vec2_t min, max;      // bounding box of its lines
+} k_teleport_t;
 
 typedef struct
 {
@@ -53,6 +69,10 @@ typedef enum
                             // line from this side, then step on
     K_CROSS_RIDE,           // off a lift that is down: wait on it until it
                             // rises
+
+    // Passable, but not into the cell beyond:
+    K_CROSS_TELEPORT,       // a teleport line, from its front side: the
+                            // player lands at the teleporter's destination
     K_NUM_CROSSINGS
 } k_crossing_t;
 
@@ -77,6 +97,9 @@ typedef struct
     int *first_link;            // per cell, into links
     int *link_count;            // per cell
 
+    int num_teleports;
+    k_teleport_t *teleports;
+
     // Load-time sanity checks.
     int holes;                  // stretches of cell border, away from walls,
                                 // that border no neighbour
@@ -100,12 +123,19 @@ k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 // middle as possible.
 k_vec2_t K_Graph_PortalPoint(int portal, int from_cell);
 
-// Open, or passable after an action (a door, a lift).
+// Open, passable after an action (a door, a lift), or a teleporter.
 int K_Graph_Passable(k_crossing_t crossing);
 
 // How long the action a crossing needs is expected to take, in tics: 0
-// for an open one.
+// for an open one. For a teleporter, the time the player stands frozen
+// on arrival.
 double K_Graph_CrossingWait(int portal, int from_cell);
+
+// The teleporter (index into teleports) that crossing the portal out of
+// the given cell sends the player to, or -1. Live: a one-shot teleport
+// line loses its special once used. Whatever the heights say: a crossing
+// too high to step onto still leads there once it is fixed.
+int K_Graph_Teleport(int portal, int from_cell);
 
 const char *K_Graph_CrossingName(k_crossing_t crossing);
 
