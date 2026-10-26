@@ -310,9 +310,12 @@ floor under its 32x32 box (`mo->floorz`), not on the floor under its centre: wit
 over the edge of a ledge, it still stands on the ledge. The cell containing the centre is then the
 one below, and judged from there the ledge is a step too high, so every route from it looked
 blocked (Doom II MAP03: the bot drifted a unit off a 32-wide strip on its way to a teleporter, and
-every goal failed). So when the floor under the centre is not the player's floor, the player's
-cell is the nearest cell under its box that has that floor. Route progress and the start of every
-plan use this cell, and the Bot tab shows it.
+every goal failed). So when the player's floor is more than a step (24) above the floor under its
+centre, the player's cell is the nearest cell under its box that has that floor. Up to a step,
+the centre's cell is kept: the player can step back up from it, and a cell under the box can be
+too small to plan from (Doom II MAP05: an 8-unit ledge in front of a door, with every way out of
+it too narrow). Route progress and the start of every plan use this cell, and the Bot tab shows
+it.
 
 #### 3.2.1 `k_graph.c` - navigation graph
 
@@ -549,7 +552,9 @@ switch's front side (use only works from there), or just past a walk-over line o
 from the player; 32, 16 and 40 units are tried in turn until the spot is on floor. On arriving at
 a switch's spot the player presses use as for a door (below), facing the line; a press after
 which nothing happens within 15 tics is repeated, 3 times at most. What the switch does is up to
-the caller (an exit ends the level).
+the caller (an exit ends the level). A walk-over line works only if the player crosses it, but
+the route to the spot past it can go round the line's end instead (Doom II MAP05); then the
+player first goes to the spot just as far before the line, and from there across.
 
 **Doors and lifts on the route** (`UpdateAction` in Think, `SteerAction` in Act). The target never
 moves past the way out of a cell whose crossing is not open yet, and the speed profile treats
@@ -653,7 +658,7 @@ it cannot be reached):
 | Goal | Done when | Candidates (what the player does there) |
 |---|---|---|
 | GO TO EXIT | the level ends (`gameaction == ga_completed`) | every exit line: 11 and 51 pressed, 52 and 124 crossed (secret exits too) |
-| GET <colour> KEY | the player holds the keycard or skull of that colour, however it got it | every key of that colour lying in the level (cards and skulls, by sprite) |
+| GET <colour> KEY | the player holds the keycard or skull of that colour, however it got it | every key of that colour lying in the level (cards and skulls, by sprite); the player goes to a pickup spot (below) |
 | USE TRIGGER (sector) | the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed. Shown as `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` once one is chosen |
 | GO TO (x, y) | the player arrived | the point (a console click) |
 
@@ -667,10 +672,18 @@ it cannot be reached):
   - a **step too high or too little headroom** -> USE TRIGGER for the sector beyond, or the one
     the player stands in, if some line moves it;
   - a **gap too narrow** -> USE TRIGGER for a sector that narrows it (`K_Graph_NarrowSectors`),
-    e.g. bars that lower;
+    e.g. bars that lower; else for the sector on either side of the crossing, e.g. a lift that
+    takes the player down to where the way on has headroom (Doom II MAP05: a passage whose
+    ceiling is level with the floor in front of it until that floor, a lift, comes down);
   - a **switch that needs a key** the player lacks (remote locked doors 99 and 133-137, e.g.
     Doom II MAP02's red bars) -> GET KEY of that colour, before going to press it;
 - if nothing can be fixed, the goal **fails**, with the reason for the last candidate tried.
+
+**Pickup spots.** A key is picked up when the player's box touches the key's (radius 20), so
+within 36 units on each axis, not only at the key itself. If the player cannot stand at the key
+(less than 17 units from anything that stops it: `K_Graph_Clearance`), the candidate is the
+nearest spot within 28 units on each axis where it can (searched in 4-unit steps). Doom II MAP05's
+red key lies on an impassable line, at the end of a shaft, and is picked up from the room beside.
 
 When a goal is done it comes off the stack and the goal below is planned again, from wherever the
 player is: the world has changed. Fixes are optimistic: the switch that targets a sector is used
@@ -923,6 +936,24 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      strip: still standing on it, but Karp placed it in the cell below, from which nothing was
      reachable. Fixed: the player's cell is the one it stands on (3.2). Finished in 36.3 s:
      blue key, switch 431, teleporter, switches 445 and 498, red key, lift, red door, exit switch.
+   - MAP04: the exit is behind bars opened by red key switches, and the red key lies on
+     **stepping stones**: pillars 64 high (sectors 38, 42, 44) with 24-unit gaps of floor 0
+     between them. The first pillar is a lift, lowered by walking over a 16x16 box elsewhere
+     (sector 78, lines 408 and 409, walk-over lift, tag 15). Gaps narrower than the player need
+     no jump, but the graph has no links between cells that share no border, so a route over the
+     lift never reaches the key and the bot never goes for the box (follow-up 7). Skipped for
+     now, to come back to.
+   - MAP05: finished in 39.0 s (two keys, five walk-over lines for lifts and a rising floor, two
+     switches, four doors, exit switch). Fixes it took (3.2, 3.4, 3.5):
+     - a passage whose ceiling is level with the floor in front of it looked too narrow, with
+       nothing to fix it; the floor in front is a lift that takes the player down to it, so for
+       a gap too narrow the brain now also tries the sectors on either side of the crossing;
+     - pressing a switch, the bot's box touched an 8-unit ledge in front of the door, which the
+       standing cell from MAP03 then picked, and every way out of it was too narrow: the cell
+       under the box now counts only when more than a step above the one under the centre;
+     - the red key lies on an impassable line: the bot goes to a pickup spot beside it;
+     - a walk-over line was "crossed" by going round its end: when the route does not cross the
+       line, the bot walks up to it first.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -959,6 +990,13 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       player need no jump at all: its floor is the highest one under its 32x32 box, so it walks
       across. Following a jump link means a straight, full-speed run-up and no braking. Doom II
       MAP02's red key needs one.
+      **Gap links** are the simpler half: two cells whose edges face each other across a gap
+      narrower than the player (say up to 28 units, leaving margin), overlapping along the edge,
+      with nothing in between that stops the player and a lower floor there. Judged live like a
+      portal (far floor within 24, headroom; a lift that is down rides up first), crossed
+      straight over the middle of the overlap without cutting corners. Doom II MAP04's red key
+      needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
+      By the user's choice, gaps and jumps come **last**, after the other follow-ups.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not

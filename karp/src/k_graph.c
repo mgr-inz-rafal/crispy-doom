@@ -1564,6 +1564,53 @@ const char *K_Graph_LockName(int portal)
     return key >= 0 ? K_Specials_KeyName(key) : NULL;
 }
 
+double K_Graph_Clearance(k_vec2_t at, double reach)
+{
+    const k_map_t *map = K_Map_Get();
+    int cell = K_Map_CellAt(at.x, at.y);
+    k_vec2_t min = { at.x - reach, at.y - reach };
+    k_vec2_t max = { at.x + reach, at.y + reach };
+    double clearance = reach;
+    fixed_t floor, ceiling;
+    int x, y, x0, y0, x1, y1, k;
+
+    if (cell < 0 || graph.generation != map->generation)
+    {
+        return 0.0;
+    }
+
+    StandingHeights(cell, &floor, &ceiling);
+    CellRange(min, max, &x0, &y0, &x1, &y1);
+
+    for (y = y0; y <= y1; ++y)
+    {
+        for (x = x0; x <= x1; ++x)
+        {
+            int grid = y * grid_width + x;
+
+            for (k = cell_first[grid]; k < cell_first[grid + 1]; ++k)
+            {
+                int line = cell_items[k] - num_edges;
+                double distance;
+
+                if (line < 0)
+                {
+                    continue;
+                }
+
+                distance = SegmentDistance(map->lines[line].v1, map->lines[line].v2, at);
+
+                if (distance < clearance && Obstacle(line, floor, ceiling))
+                {
+                    clearance = distance;
+                }
+            }
+        }
+    }
+
+    return clearance;
+}
+
 k_mover_t K_Graph_SectorMover(int sector)
 {
     const sector_t *s = &sectors[sector];

@@ -136,9 +136,10 @@ int K_Map_NearestCell(double x, double y, double max_distance);
 
 // The cell a player at (x, y) standing on the given floor stands on. The
 // engine stands the player on the highest floor under its box, so with its
-// centre just over the edge of a ledge it still stands on the ledge: then
-// this is the ledge's cell under its box nearest the centre, not the cell
-// below. Otherwise the cell containing the point (K_Map_CellAt).
+// centre just over the edge of a ledge it still stands on the ledge: if
+// that is more than a step above the floor under the centre, this is the
+// ledge's cell under its box nearest the centre, not the cell below.
+// Otherwise the cell containing the point (K_Map_CellAt).
 int K_Map_StandingCell(double x, double y, double floor);
 
 // The subsector containing the point, or -1 when it is on no floor.

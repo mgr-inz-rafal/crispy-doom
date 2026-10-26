@@ -66,6 +66,9 @@
 // The player's radius (MT_PLAYER): its box is twice that wide.
 #define PLAYER_RADIUS 16.0
 
+// The highest step the player climbs (P_TryMove).
+#define MAX_STEP_UP 24.0
+
 // A convex polygon being split into cells.
 typedef struct
 {
@@ -998,7 +1001,11 @@ int K_Map_StandingCell(double x, double y, double floor)
     int best = -1;
     int i;
 
-    if (cell >= 0 && fabs(CellFloor(cell) - floor) < 0.5)
+    // Up to a step above the floor under the centre (the edge of a stair
+    // under the box, say), the centre's cell is as good to plan from: the
+    // player can step up again from there. A tiny cell under the box would
+    // be worse, e.g. a ledge in front of a door, too shallow for the player.
+    if (cell >= 0 && floor - CellFloor(cell) <= MAX_STEP_UP)
     {
         return cell;
     }

@@ -152,6 +152,11 @@ static k_path_t path;
 static boolean have_goal;
 static k_vec2_t goal;
 static k_navstatus_t status;
+
+// K_GOAL_CROSS_LINE, when the route to the point past the line went round
+// its end: first to the point before it, then across to cross_to.
+static boolean cross_first;
+static k_vec2_t cross_to;
 static k_navtuning_t tuning = { 16.7, 1.5, 24.0, 11.25 };
 static action_t action;
 
@@ -1208,6 +1213,18 @@ k_navstate_t K_Nav_Tick(void)
         {
             StartUseAction();
         }
+        else if (cross_first)
+        {
+            cross_first = false;
+            goal = cross_to;
+            M_snprintf(text, sizeof(text), "in front of line %d, walking across",
+                       status.goal_line);
+
+            if (!Replan(at, text))
+            {
+                return status.state;
+            }
+        }
         else
         {
             have_goal = false;
@@ -1263,6 +1280,7 @@ void K_Nav_Reset(void)
     int i;
 
     have_goal = false;
+    cross_first = false;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     EndAction();
@@ -1271,6 +1289,37 @@ void K_Nav_Reset(void)
     {
         sent[i].tic = -1;
     }
+}
+
+// Whether the route crosses the line.
+static boolean RouteCrosses(int line)
+{
+    const k_graph_t *graph = K_Graph_Get();
+    int i;
+
+    for (i = 0; i < path.num_cells - 1; ++i)
+    {
+        if (graph->portals[path.portals[i]].line == line)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The point as far on the other side of the line.
+static k_vec2_t Mirror(int line_index, k_vec2_t point)
+{
+    const k_line_t *line = &K_Map_Get()->lines[line_index];
+    double dx = line->v2.x - line->v1.x, dy = line->v2.y - line->v1.y;
+    double t = ((point.x - line->v1.x) * dx + (point.y - line->v1.y) * dy)
+             / SDL_max(dx * dx + dy * dy, 1e-12);
+    k_vec2_t result;
+
+    result.x = 2.0 * (line->v1.x + dx * t) - point.x;
+    result.y = 2.0 * (line->v1.y + dy * t) - point.y;
+    return result;
 }
 
 static int StartGoal(double x, double y, k_goalkind_t kind, int line)
@@ -1291,8 +1340,28 @@ static int StartGoal(double x, double y, k_goalkind_t kind, int line)
     goal.x = x;
     goal.y = y;
     last_at = start;
+    cross_first = false;
 
     K_Path_Find(&path, start, player.cell, goal);
+
+    // A walk-over line works only if the player crosses it, but the route
+    // to the point past it can go round its end (Doom II MAP05). Then walk
+    // up to the point before it first.
+    if (kind == K_GOAL_CROSS_LINE && path.result == K_PATH_FOUND && !RouteCrosses(line))
+    {
+        k_vec2_t before = Mirror(line, goal);
+
+        if (K_Map_CellAt(before.x, before.y) >= 0)
+        {
+            K_Log(K_LOG_NAV, K_LOG_INFO, "the way past line %d goes round it - "
+                  "walking up to it first", line);
+            cross_first = true;
+            cross_to = goal;
+            goal = before;
+            K_Path_Find(&path, start, player.cell, goal);
+        }
+    }
+
     have_goal = true;
 
     memset(&status, 0, sizeof(status));
@@ -1387,6 +1456,7 @@ int K_Nav_SetLineGoal(int line, k_goalkind_t kind)
 void K_Nav_Clear(void)
 {
     have_goal = false;
+    cross_first = false;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     status.goal_line = -1;

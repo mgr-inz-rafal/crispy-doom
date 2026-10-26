@@ -150,6 +150,12 @@ int K_Graph_NarrowSectors(int portal, int from_cell, int *sectors, int max);
 // Its name ("blue", "yellow", "red"), or NULL.
 const char *K_Graph_LockName(int portal);
 
+// How far a point on the floor is from the nearest line a player standing
+// there could not overlap (a wall, an impassable line, a side too high to
+// step onto or too low to fit under), up to reach; reach if none is
+// nearer, 0 off the floor.
+double K_Graph_Clearance(k_vec2_t at, double reach);
+
 k_mover_t K_Graph_SectorMover(int sector);
 
 #ifdef __cplusplus

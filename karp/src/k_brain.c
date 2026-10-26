@@ -57,6 +57,15 @@
 #define MOVE_TICS (15 * TICRATE)
 #define MAX_TRIGGERS 3
 
+// A key is picked up when the player's box touches the key's (radius 20):
+// within 36 on each axis. Where the player cannot stand at the key, it
+// goes to the nearest point within PICKUP_REACH on each axis (some margin)
+// that is on floor and STAND_CLEARANCE from anything that stops it, its
+// radius plus one. Searched in steps of PICKUP_STEP.
+#define PICKUP_REACH 28.0
+#define PICKUP_STEP 4.0
+#define STAND_CLEARANCE 17.0
+
 typedef enum
 {
     GOAL_GOTO,              // a point (a click)
@@ -318,6 +327,41 @@ static boolean WasTried(const goal_t *goal, k_vec2_t at)
     return false;
 }
 
+// Where to go to pick up a key lying at `at`: there, if the player can
+// stand there, else the nearest spot it can stand at that still touches
+// the key. A key can lie on an impassable line, to be picked up from one
+// side only (Doom II MAP05).
+static k_vec2_t PickupSpot(k_vec2_t at)
+{
+    int steps = (int) (PICKUP_REACH / PICKUP_STEP);
+    k_vec2_t best = at;
+    int best_distance = -1;
+    int i, j;
+
+    if (K_Graph_Clearance(at, STAND_CLEARANCE) >= STAND_CLEARANCE)
+    {
+        return at;
+    }
+
+    for (i = -steps; i <= steps; ++i)
+    {
+        for (j = -steps; j <= steps; ++j)
+        {
+            k_vec2_t spot = { at.x + i * PICKUP_STEP, at.y + j * PICKUP_STEP };
+            int distance = i * i + j * j;
+
+            if ((best_distance < 0 || distance < best_distance)
+             && K_Graph_Clearance(spot, STAND_CLEARANCE) >= STAND_CLEARANCE)
+            {
+                best = spot;
+                best_distance = distance;
+            }
+        }
+    }
+
+    return best;
+}
+
 static int LineCandidate(int line, k_trigger_t trigger, const char *what,
                          candidate_t *candidate)
 {
@@ -360,7 +404,7 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 
                 for (i = 0; i < found; ++i)
                 {
-                    out[count].at = keys[i].at;
+                    out[count].at = PickupSpot(keys[i].at);
                     out[count].kind = K_GOAL_POINT;
                     out[count].line = -1;
                     M_snprintf(out[count].what, sizeof(out[count].what), "%s %s at "
@@ -409,13 +453,16 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 // for a locked door; for a step too high or too little headroom, a line
 // that moves the sector beyond, or the one the player is in; for a gap too
 // narrow, a line that moves one of the sectors that narrow it (bars that
-// lower).
+// lower), or else either side's (a lift the player rides down to where the
+// way on has headroom, Doom II MAP05).
 static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *type,
                       int *param)
 {
     const k_map_t *map = K_Map_Get();
     const k_portal_t *p = &K_Graph_Get()->portals[portal];
     int to = p->cell[0] == from ? p->cell[1] : p->cell[0];
+    int from_sector = map->subsectors[map->cells[from].subsector].sector;
+    int to_sector = map->subsectors[map->cells[to].subsector].sector;
     int sectors_[8];
     int count = 2;
     int i;
@@ -436,12 +483,14 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
 
     if (crossing == K_CROSS_NARROW)
     {
-        count = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_));
+        count = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_) - 2);
+        sectors_[count++] = from_sector;
+        sectors_[count++] = to_sector;
     }
     else if (crossing == K_CROSS_STEP || crossing == K_CROSS_HEADROOM)
     {
-        sectors_[0] = map->subsectors[map->cells[to].subsector].sector;
-        sectors_[1] = map->subsectors[map->cells[from].subsector].sector;
+        sectors_[0] = to_sector;
+        sectors_[1] = from_sector;
     }
     else
     {
