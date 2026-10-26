@@ -358,8 +358,11 @@ become passable after an action, also judged live, with the engine's own rules:
 - **Lift:** a step too high, but the line is a lift switch (21, 62, 122, 123) tagged with the
   sector beyond, the player is on its front side, and the lift's bottom (the lowest surrounding
   floor, as `EV_DoPlat` computes it) is within 24 of the player's floor.
-- **Lift ride:** a step too high off a lift that is down, but within 24 once it is back up (an
-  active lift remembers its top; an idle one is at it).
+- **Lift ride:** a step too high off a floor that will rise to within 24: a lift that is down or
+  coming back up (an active lift or plat remembers its top), or any floor on its way up (a plat
+  raising it, a floor mover going up: Doom II MAP03's strip to the teleporter). A ride is not
+  judged for width at the height it starts from, where the sides of the way off can be walls,
+  but when it gets there.
 - **Lifts that come down by themselves:** a perpetual lift (53, 87; a stopped one has no
   thinker), or one on its way down. A lift too high now to step onto, or to fit over, is a lift
   crossing if its bottom works: wait for it (no press), step on. On one that is too high to fit
@@ -367,7 +370,9 @@ become passable after an action, also judged live, with the engine's own rules:
   the lift's state (`T_PlatRaise`: still to go up, the wait at the top, the way down). Doom II
   MAP12's exit area is reached over perpetual lifts that go up and down all the time.
 - Standing in a door sector means its door is open, so crossings out of one are judged with the
-  door's open height.
+  door's open height: a manual door's, and that of any door already opening (a switch opened it,
+  and the route goes on through it before it is fully up). The clearance check takes them as
+  open too. Going in is still a door crossing to wait at.
 - Each also gives the time it is expected to take: stopping and pressing (~1 second), plus the
   door's travel at 2 units/tic (8 blazing), or for a lift the trip down and up at 4 (8) and its
   3-second wait at the bottom. The pathfinder charges that time as distance (16 units a tic), so
@@ -679,7 +684,7 @@ it cannot be reached):
 |---|---|---|
 | GO TO EXIT | the level ends (`gameaction == ga_completed`) | every exit line: 11 and 51 pressed, 52 and 124 crossed (secret exits too) |
 | GET <colour> KEY | the player holds the keycard or skull of that colour, however it got it | every key of that colour lying in the level (cards and skulls, by sprite); the player goes to a pickup spot (below) |
-| USE TRIGGER (sector) | the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed. Shown as `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` once one is chosen |
+| USE TRIGGER (sector) | the crossing it was pushed for is open, or will be after a wait (a door opening, a lift on its way, a floor to ride up); else the sector moved and stopped (or after 15 s: perpetual lifts never stop) | every line with the sector's tag whose special moves sectors (`K_Specials_MoverTrigger`): switches pressed, walk-over lines crossed. Shown as `USE SWITCH line N (tag T)` or `CROSS LINE N (tag T)` once one is chosen |
 | GO TO (x, y) | the player arrived | the point (a console click) |
 
 **Planning a goal** (`PlanGoal`) scores every candidate not yet tried by route
@@ -713,9 +718,16 @@ red key lies on an impassable line, at the end of a shaft, and is picked up from
 When a goal is done it comes off the stack and the goal below is planned again, from wherever the
 player is: the world has changed. Fixes are optimistic: the switch that targets a sector is used
 without working out exactly where it moves the sector; after it moves, planning again shows
-whether the way is open, and if not, the next blocker is pushed. A USE TRIGGER goal waits, with
-the player standing still, for the sector to start moving after its line is used (2 seconds for a
-walk-over line) and then to stop.
+whether the way is open, and if not, the next blocker is pushed.
+
+**Setting off at once.** A USE TRIGGER goal remembers the blocked crossing it was pushed for. As
+soon as that crossing is open, or passable after a wait (a door opening, a lift on its way down,
+a floor to ride up), the goal is done and the goal below is planned again: the player sets off
+right after the press, as a human would, and waits at the door or lift instead of at the switch.
+Doom II MAP03 got 6 seconds faster: switch 431 raises a strip slowly, and the bot now drops onto
+it from the walkway while it rises and rides it up to the teleporter. Otherwise the goal waits,
+with the player standing still, for the sector to start moving after its line is used (2 seconds
+for a walk-over line) and then to stop.
 
 **Guards against loops and early give-ups:**
 - a candidate that does not work out (nav fails, the press moves nothing, the key was not picked
@@ -736,7 +748,8 @@ stand somewhere that changes things.
 **Log and console.** Every push, choice, done and failure goes to the log, e.g. `GO TO EXIT: the
 exit switch at line 495 is blocked by a door at line 350 (600,1528) that needs the blue key -
 added GET BLUE KEY`, `USE SWITCH line 101 (tag 5) done - sector 30 moved (floor 48, ceiling
-124)`, `GO TO EXIT done - level finished in 8.0 s through the normal exit`. The status line
+124)`, `USE SWITCH line 498 (tag 17) done - the way on is open, or opening (lift)`, `GO TO EXIT
+done - level finished in 8.0 s through the normal exit`. The status line
 shows the top goal (with waypoints left while driving); the console's Priorities tab shows the
 whole stack, top first, and the goals that failed this level in red. `K_Brain_Reset()` empties
 the stack on every level load and puts GO TO EXIT back under `-autoplay`.
@@ -1002,6 +1015,13 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        still moves.
      The new key order sent MAP03's bot out of a switch alcove past a pillar, where it stuck
      against the corner: the controller now slides along walls (3.4).
+   - **Setting off right after a press** (3.5): the bot no longer stands at a switch until what
+     it moved has stopped, but heads for the door, lift or rising floor at once and waits there.
+     Times: MAP03 40.0 -> 34.2 s, MAP05 33.0 -> 30.7 s, MAP12 84.9 -> 77.1 s (MAP01 and MAP10
+     have no switches on the way). It took three more changes: a door already opening counts as
+     open for the way out of it (MAP12's route went on through a door still rising), rides work
+     on any rising floor and are judged for width on arrival (MAP03's strip), and a teleporter
+     reached by a ride waits for the ride first.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1058,8 +1078,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       right after crossing: finish the lower-the-lift goal as soon as the lift starts moving, and
       treat a lift on its way down, or waiting at the bottom, as a crossing to wait at (like a door
       that is already opening). Missing the window makes it cross the line again (3 times at most).
-      Partly done (3.2.1): a lift on its way down, or a perpetual one, is waited for. Still open:
-      finishing the goal as soon as the lift starts moving.
+      Done (3.2.1, 3.5): a lift on its way down, or a perpetual one, is waited for, and a trigger
+      goal ends as soon as the way it was pushed for opens or starts opening, so the bot heads
+      for the lift right away.
    10. **Boss-death triggers** (needs monsters and combat, so a later stage). Some levels move
        sectors when the last monster of a kind dies, not from any line (`A_BossDeath` and
        `A_KeenDie` in `p_enemy.c`):

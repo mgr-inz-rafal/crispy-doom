@@ -970,15 +970,21 @@ static boolean UpdateAction(k_vec2_t at, double speed)
 
     crossing = CrossingOut(r);
 
-    // A teleporter needs nothing but running over its line, as long as it
+    // A teleporter needs nothing but running over its line, once anything
+    // it waits for is over (a ride up to it, Doom II MAP03), as long as it
     // still works: a one-shot one is used up once crossed.
-    if (TeleportOut(r))
+    if (TeleportOut(r) && crossing == K_CROSS_TELEPORT)
     {
-        if (crossing == K_CROSS_TELEPORT)
+        if (action.kind != K_ACTION_NONE)
         {
-            return true;
+            FinishAction();
         }
 
+        return true;
+    }
+
+    if (TeleportOut(r) && (crossing == K_CROSS_OPEN || !K_Graph_Passable(crossing)))
+    {
         EndAction();
         M_snprintf(why, sizeof(why), "the teleporter at line %d is %s%s",
                    K_Graph_Get()->portals[path.portals[r]].line,

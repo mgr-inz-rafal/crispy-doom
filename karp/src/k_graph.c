@@ -1115,20 +1115,69 @@ static fixed_t DoorTop(sector_t *sector)
     return P_FindLowestCeilingSurrounding(sector) - 4 * FRACUNIT;
 }
 
+// The ceiling of a sector, taking doors as open: a manual door, because
+// the player opens any it gets to, and any door already opening (a switch
+// opened it), to where it is going. Standing in a door means it is open;
+// and a closed door's faces would narrow every crossing near a doorway.
+static fixed_t OpenCeiling(sector_t *sector)
+{
+    const vldoor_t *door = DoorOf(sector);
+    fixed_t top = sector->ceilingheight;
+
+    if (door_sectors[sector - sectors])
+    {
+        top = SDL_max(top, DoorTop(sector));
+    }
+
+    if (door != NULL && door->direction == 1)
+    {
+        top = SDL_max(top, door->topheight);
+    }
+
+    return top;
+}
+
 // Where a lift goes down to (EV_DoPlat): the lowest surrounding floor.
 static fixed_t LiftBottom(sector_t *sector)
 {
     return SDL_min(P_FindLowestFloorSurrounding(sector), sector->floorheight);
 }
 
-// Where a lift comes back up to: an active one remembers it, an idle one
-// is there.
-static fixed_t LiftTop(const sector_t *sector)
+static const floormove_t *FloorMoverOf(const sector_t *sector)
+{
+    const thinker_t *thinker = sector->specialdata;
+
+    if (thinker != NULL && thinker->function.acp1 == (actionf_p1) T_MoveFloor)
+    {
+        return (const floormove_t *) thinker;
+    }
+
+    return NULL;
+}
+
+// How high a floor will rise, and how fast: an active lift or plat goes
+// (back) up to its top, a floor moving up to where it is going; anything
+// else stays where it is.
+static fixed_t RisingTop(const sector_t *sector, fixed_t *speed)
 {
     const plat_t *plat = PlatOf(sector);
+    const floormove_t *floor = FloorMoverOf(sector);
 
-    return plat != NULL ? SDL_max(plat->high, sector->floorheight)
-                        : sector->floorheight;
+    *speed = LIFT_SPEED;
+
+    if (plat != NULL)
+    {
+        *speed = plat->speed;
+        return SDL_max(plat->high, sector->floorheight);
+    }
+
+    if (floor != NULL && floor->direction == 1)
+    {
+        *speed = floor->speed;
+        return SDL_max(floor->floordestheight, sector->floorheight);
+    }
+
+    return sector->floorheight;
 }
 
 // Whether a lift will come down without being worked: a perpetual one
@@ -1182,12 +1231,7 @@ static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
     sector_t *sector = &sectors[index];
 
     *floor = sector->floorheight;
-    *ceiling = sector->ceilingheight;
-
-    if (door_sectors[index])
-    {
-        *ceiling = SDL_max(*ceiling, DoorTop(sector));
-    }
+    *ceiling = OpenCeiling(sector);
 }
 
 // The heights a player crossing a portal stands at when its box gets to a
@@ -1270,13 +1314,7 @@ static boolean Obstacle(int index, fixed_t floor, fixed_t ceiling)
     for (side = 0; side < 2; ++side)
     {
         sector_t *sector = side ? line->backsector : line->frontsector;
-        int number = (int) (sector - sectors);
-        fixed_t top = sector->ceilingheight;
-
-        if (door_sectors[number])
-        {
-            top = SDL_max(top, DoorTop(sector));
-        }
+        fixed_t top = OpenCeiling(sector);
 
         if (sector->floorheight - floor > MAX_STEP_UP
          || !Headroom(floor, ceiling, sector->floorheight, top))
@@ -1445,10 +1483,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     ceiling_b = b->ceilingheight;
 
     // Standing in a door means it is open.
-    if (door_sectors[from_sector])
-    {
-        ceiling_a = SDL_max(ceiling_a, DoorTop(a));
-    }
+    ceiling_a = OpenCeiling(a);
 
     if (to_sector == from_sector)
     {
@@ -1472,15 +1507,18 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     // MF_DROPOFF).
     if (floor_b - floor_a > MAX_STEP_UP)
     {
-        // On a lift that is down: wait for it to come back up.
-        if (lift_sectors[from_sector]
-         && floor_b - LiftTop(a) <= MAX_STEP_UP
-         && Headroom(LiftTop(a), ceiling_a, floor_b, ceiling_b))
+        fixed_t speed;
+        fixed_t top = RisingTop(a, &speed);
+
+        // On a floor that will rise to within reach (a lift that is down
+        // or coming back up, a floor on its way up, Doom II MAP03's strip
+        // to the teleporter): wait on it.
+        if (floor_b - top <= MAX_STEP_UP
+         && Headroom(top, ceiling_a, floor_b, ceiling_b))
         {
             const plat_t *plat = PlatOf(a);
-            fixed_t speed = plat != NULL ? plat->speed : LIFT_SPEED;
 
-            *wait = (double) (LiftTop(a) - floor_a) / speed
+            *wait = (double) (top - floor_a) / speed
                   + (plat != NULL && plat->status == waiting ? plat->count : 0);
             return K_CROSS_RIDE;
         }
@@ -1553,13 +1591,16 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
 
 // The heights decide first; a crossing they let through is still no way
 // if it is narrower than the player. An open one over a teleport line
-// takes the player elsewhere.
+// takes the player elsewhere. A ride is not judged for width now, low
+// down, where the sides of the way off are walls (Doom II MAP03: the
+// teleporter at the end of a rising strip, as wide as the player, between
+// a closet's faces), but when it gets there.
 static k_crossing_t Judge(int portal_index, int from, double *wait)
 {
     k_crossing_t crossing = JudgeHeights(portal_index, from, wait);
     stance_t stance;
 
-    if (!K_Graph_Passable(crossing) || from < 0)
+    if (!K_Graph_Passable(crossing) || from < 0 || crossing == K_CROSS_RIDE)
     {
         return crossing;
     }
@@ -1663,12 +1704,7 @@ int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
         {
             sector_t *sector = side ? line->backsector : line->frontsector;
             int index = (int) (sector - sectors);
-            fixed_t top = sector->ceilingheight;
-
-            if (door_sectors[index])
-            {
-                top = SDL_max(top, DoorTop(sector));
-            }
+            fixed_t top = OpenCeiling(sector);
 
             if (sector->floorheight - floor <= MAX_STEP_UP
              && Headroom(floor, ceiling, sector->floorheight, top))

@@ -103,6 +103,12 @@ typedef struct
     boolean used;           // a walk-over line was crossed
     boolean moving;
     int wait;
+
+    // GOAL_TRIGGER: the blocked crossing it was pushed for (crossed out of
+    // cell from), -1 if none. Once that opens, even if only after a wait
+    // (a door opening, a lift on its way down), the goal is done: the
+    // player goes on and waits there, not at the switch.
+    int portal, from;
 } goal_t;
 
 typedef struct
@@ -221,6 +227,8 @@ static goal_t *Push(goal_type_t type, int param)
     goal->type = type;
     goal->param = param;
     goal->chosen.line = -1;
+    goal->portal = -1;
+    goal->from = -1;
     return goal;
 }
 
@@ -626,7 +634,7 @@ static void PlanGoal(goal_t *goal)
     int best_open = -1, best_blocked = -1, reachable = 0;
     double open_length = 0.0, blocked_score = 0.0;
     goal_type_t fix_type = GOAL_GOTO;
-    int fix_param = 0;
+    int fix_param = 0, fix_portal = -1, fix_from = -1;
     char reason[K_LOG_LINE_LEN], blocker[K_LOG_LINE_LEN] = "";
     char name[64];
     k_pose_t player;
@@ -725,6 +733,8 @@ static void PlanGoal(goal_t *goal)
                 blocked_score = score;
                 fix_type = type;
                 fix_param = param;
+                fix_portal = scratch.blocked_portal;
+                fix_from = scratch.blocked_from;
 
                 if (key_door >= 0)
                 {
@@ -758,6 +768,13 @@ static void PlanGoal(goal_t *goal)
 
         M_StringCopy(goal->note, blocker, sizeof(goal->note));
         fix = Push(fix_type, fix_param);
+
+        if (fix_type == GOAL_TRIGGER)
+        {
+            fix->portal = fix_portal;
+            fix->from = fix_from;
+        }
+
         GoalName(fix, fix_name, sizeof(fix_name));
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: %s - added %s", name, blocker, fix_name);
 
@@ -773,12 +790,24 @@ static void PlanGoal(goal_t *goal)
 }
 
 // A sector moved by a line: once the line is used, wait for the sector to
-// start moving, then to stop. Returns true while it handles the goal.
+// start moving, then to stop - unless the crossing the goal was pushed for
+// opens first: a door opening or a lift coming down is a crossing to wait
+// at, so the player sets off for it at once, as a human would. Returns
+// true while it handles the goal.
 static boolean UpdateTrigger(goal_t *goal)
 {
     double floor, ceiling;
     k_mover_t mover = K_Graph_SectorMover(goal->param);
     char how[96];
+
+    if (goal->portal >= 0
+     && K_Graph_Passable(K_Graph_CanCross(goal->portal, goal->from)))
+    {
+        M_snprintf(how, sizeof(how), "the way on is open, or opening (%s)",
+                   K_Graph_CrossingName(K_Graph_CanCross(goal->portal, goal->from)));
+        DoneGoal(how);
+        return true;
+    }
 
     K_Map_SectorHeights(goal->param, &floor, &ceiling);
 
