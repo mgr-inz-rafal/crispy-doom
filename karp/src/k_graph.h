@@ -67,8 +67,8 @@ typedef enum
                             // line from this side
     K_CROSS_LIFT,           // a raised lift the player can lower: use its
                             // line from this side, then step on
-    K_CROSS_RIDE,           // off a lift that is down: wait on it until it
-                            // rises
+    K_CROSS_RIDE,           // off a lift that is too low (or, coming down,
+                            // too high): wait on it until it gets there
 
     // Passable, but not into the cell beyond:
     K_CROSS_TELEPORT,       // a teleport line, from its front side: the
@@ -155,6 +155,18 @@ const char *K_Graph_LockName(int portal);
 // step onto or too low to fit under), up to reach; reach if none is
 // nearer, 0 off the floor.
 double K_Graph_Clearance(k_vec2_t at, double reach);
+
+// A line near a point that stops the player.
+typedef struct
+{
+    k_vec2_t away;          // unit vector from the line's nearest point to
+                            // the point
+    double distance;
+} k_nearline_t;
+
+// The lines within reach of a point on the floor that a player standing
+// there could not overlap, up to max. Returns how many.
+int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int max);
 
 k_mover_t K_Graph_SectorMover(int sector);
 

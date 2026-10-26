@@ -331,7 +331,11 @@ the stretch must be at least 1 unit long measured along both edges. Without that
 meeting nearly at right angles could share a short bogus stretch beyond the end of one of them;
 the M5 pathfinder test found such portals, with their middles outside one of their cells.
 Edges and linedefs are bucketed in a uniform 128-unit grid. Each portal records the two-sided
-linedef it runs along, or -1 when both cells are in the same sector.
+linedef it runs along, or -1 when both cells are in the same sector. A portal that runs along
+several collinear lines is **split** where each line starts (`SplitPortals`), so every portal
+runs along one line and is judged by it: its special, whether it blocks the player. Doom II MAP12
+has a diagonal key door between two short jambs on the same line; the portal had recorded a
+jamb, so the door looked like a closed sector that nothing opens.
 
 **Passability** of a portal, leaving a given cell, is evaluated **live** (`K_Graph_CanCross`). It
 is cheap, and it makes doors and lifts work naturally in later stages. It mirrors
@@ -356,6 +360,12 @@ become passable after an action, also judged live, with the engine's own rules:
   floor, as `EV_DoPlat` computes it) is within 24 of the player's floor.
 - **Lift ride:** a step too high off a lift that is down, but within 24 once it is back up (an
   active lift remembers its top; an idle one is at it).
+- **Lifts that come down by themselves:** a perpetual lift (53, 87; a stopped one has no
+  thinker), or one on its way down. A lift too high now to step onto, or to fit over, is a lift
+  crossing if its bottom works: wait for it (no press), step on. On one that is too high to fit
+  under the way off, the crossing off is a lift ride: ride it down. The wait is worked out from
+  the lift's state (`T_PlatRaise`: still to go up, the wait at the top, the way down). Doom II
+  MAP12's exit area is reached over perpetual lifts that go up and down all the time.
 - Standing in a door sector means its door is open, so crossings out of one are judged with the
   door's open height.
 - Each also gives the time it is expected to take: stopping and pressing (~1 second), plus the
@@ -538,6 +548,15 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
    down so the thrust direction is kept, then rounded. Movement therefore does not depend on
    facing, and pushing against the momentum brakes. Airborne, no movement is sent (it would do
    nothing).
+
+   **Sliding along walls.** The route keeps its legs inside cells, but not clear of the corners
+   along them, so a leg can pass close enough to one that the player's box catches on it, pushing
+   straight in, with nothing for the engine to slide it along (Doom II MAP03: leaving a switch
+   alcove past a pillar, the bot stood there until it gave up). So within 20 units of anything
+   that stops the player (`K_Graph_ObstaclesNear`: walls, impassable lines, steps too high, too
+   little headroom), the part of `v_des` toward it is dropped, and touching it (closer than 17),
+   the player eases away at 1 unit/tic. Drops are not obstacles, so this never steers toward a
+   ledge's edge on purpose.
 4. **Heading:** turn toward the desired velocity, at most 11.25 degrees per tic (2048 angleturn
    units, tunable). Cosmetic for now; later stages need it for aiming and using. When recording a
    demo without `-longtics`, the turn is rounded to a multiple of 256; no remainder needs carrying,
@@ -576,12 +595,12 @@ door, lift or lift ride, an action starts:
    the check uses the predicted position and angle and allows 60), and only when it is worth it.
    Pressing on a door that is opening or open closes it, and on a busy lift does nothing, so the
    door must be still or closing and the lift still. A door already opening, or a lift already
-   on its way, needs no press. Use is released for at least a tic between presses, or the
-   engine ignores it.
+   on its way (or one that comes down by itself, 3.2.1), needs no press. Use is released for at
+   least a tic between presses, or the engine ignores it.
 3. **Wait**, holding the spot, for as long as the door or lift keeps moving. When the crossing
    turns open the action is over and the route goes on: through the door, or onto the lift. On
    the lift the crossing off it is a lift ride: walk to a spot 24 units from its edge and wait
-   for the ride up. A door that starts closing before the player got through is pressed again
+   for the ride, up or down. A door that starts closing before the player got through is pressed again
    (that reopens it); a press after which nothing moves within 15 tics (a miss, or a lift that
    went back up without the player) is repeated, 3 times at most.
 4. **Giving up:** nothing moving for 5 seconds while still blocked (a lift waits 3 at the
@@ -592,8 +611,9 @@ door, lift or lift ride, an action starts:
 
 Stuck detection pauses while pressing and waiting. The Bot tab shows the action ("door at line
 151: waiting"), the log its start and end ("opening the door at line 151", "door at line 151
-open after 1.4 s", "lift up after 4.2 s"), and the graph overlay draws crossings that need an
-action in blue. The player presses use only through the ticcmd's `BT_USE`, like a human.
+open after 1.4 s", "waiting for the lift (sector 41) to come down at line 678", "riding the lift
+(sector 41) to the way off", "lift ride over after 4.9 s"), and the graph overlay draws
+crossings that need an action in blue. The player presses use only through the ticcmd's `BT_USE`, like a human.
 
 `K_Nav_Clear` drops the goal so the player stands still, e.g. while a sector the brain just moved
 settles.
@@ -677,6 +697,11 @@ it cannot be reached):
     ceiling is level with the floor in front of it until that floor, a lift, comes down);
   - a **switch that needs a key** the player lacks (remote locked doors 99 and 133-137, e.g.
     Doom II MAP02's red bars) -> GET KEY of that colour, before going to press it;
+  - **keys first:** if a door further along the same route needs a key that lies in the level,
+    GET KEY is pushed instead of the fix for the first crossing. A key stays, while what a switch
+    does may not last until the player gets there: on Doom II MAP12 the bot ran 11,000 units to
+    lower a lift, fetched the yellow key while it went back up, and had to lower it again;
+  - USE TRIGGER only for a sector some line still moves (one-shot lines lose their special);
 - if nothing can be fixed, the goal **fails**, with the reason for the last candidate tried.
 
 **Pickup spots.** A key is picked up when the player's box touches the key's (radius 20), so
@@ -954,6 +979,29 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      - the red key lies on an impassable line: the bot goes to a pickup spot beside it;
      - a walk-over line was "crossed" by going round its end: when the route does not cross the
        line, the bot walks up to it first.
+   - MAP06: the blue key is reached by a **jump** (follow-up 7). Skipped for now, to come back to.
+   - MAP07: a **boss map**: the way to the exit opens only when monsters die (follow-up 10), so
+     with `-nomonsters` it cannot be finished at all. Skipped until combat.
+   - MAP08: the way to the exit is over ledges reached by **jumps** (they start lowered and rise
+     during play; follow-up 7). Skipped for now, to come back to.
+   - MAP09: another **jump**, found by the user playing it: from a lift at about (700,1647)
+     (sector 12) across to about (380,1444) (sector 6, floor -64). Without it the bot sees no
+     way on and chases switches it cannot reach. Skipped for now, to come back to.
+   - MAP10: finished in 45.4 s with no changes (yellow key, blue key, nine doors, exit switch).
+   - MAP11: the exit area (the north part of the central circle) is reached by a **jump**, per
+     the user; the bot sees only a 296-unit step at line 796. Skipped for now, to come back to.
+   - MAP12: finished in 84.9 s (yellow and blue keys, a teleporter, eight switches, perpetual
+     lifts, exit line). Fixes it took (3.2.1, 3.4, 3.5):
+     - a diagonal blue door between two short jambs on one line looked like a closed sector:
+       portals are now split per line, which also settles the impassable-lines TODO;
+     - the bot lowered a lift first and fetched the yellow key meanwhile, the lift going back up:
+       keys first;
+     - the exit area is reached over perpetual lifts, judged as steps too high: lifts that come
+       down by themselves are waited for, ridden up and ridden down;
+     - USE TRIGGER for a door whose one-shot switch was used already: only sectors some line
+       still moves.
+     The new key order sent MAP03's bot out of a switch alcove past a pillar, where it stuck
+     against the corner: the controller now slides along walls (3.4).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -964,9 +1012,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    **M6 follow-ups**, each in its own commit and re-measured with the drive test (section 3.4):
    1. **Narrow gaps.** Done (3.2.1): a crossing narrower than 34 units is "too narrow" (32 proved
       too tight, as expected), and waypoints keep 24 units from obstacles where the portal allows.
-   2. **Impassable lines** (`ML_BLOCKING`). The clearance check treats them as walls. Still open: a
-      portal along one is refused only by the one line the portal records, so a portal along
-      several collinear lines can miss an impassable one among them (TODO in `K_Graph_CanCross`).
+   2. **Impassable lines** (`ML_BLOCKING`). Done: the clearance check treats them as walls, and
+      portals are split per line (3.2.1), so one along several collinear lines no longer misses
+      an impassable one among them.
    3. **Solid things.** Torches, lamps, barrels, columns, trees and the like block the player but
       are not part of the geometry. Read the solid non-monster things at level load and block the
       parts of portals and cells they cover, widened by the player's radius; barrels can be
@@ -977,7 +1025,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       (like a corner), and brake harder where it matters.
    5. **Narrow paths.** Some maps need narrow walkways and bridges, e.g. Doom II MAP24's long
       ledges only 4-8 units wide over the nukage. Entering a narrow portal or cell, slow down
-      enough to stay on it.
+      enough to stay on it. Doom II MAP03's raised strip to the teleporter is exactly the
+      player's width: once the bot drifted a unit off it (and still stood on it), once it fell
+      off and had to go round.
    6. **Stuck recovery.** Before replanning when stuck, block the crossing ahead for a while, so
       the new route really differs. If the player stays stuck too long, try semi-random moves in
       different directions, strafing included, to work free.
@@ -996,7 +1046,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       portal (far floor within 24, headroom; a lift that is down rides up first), crossed
       straight over the middle of the overlap without cutting corners. Doom II MAP04's red key
       needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
-      By the user's choice, gaps and jumps come **last**, after the other follow-ups.
+      By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
+      But six of the first eleven Doom II maps need them (MAP02, MAP04, MAP06, MAP08, MAP09,
+      MAP11), so they will probably have to come sooner.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -1006,6 +1058,21 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       right after crossing: finish the lower-the-lift goal as soon as the lift starts moving, and
       treat a lift on its way down, or waiting at the bottom, as a crossing to wait at (like a door
       that is already opening). Missing the window makes it cross the line again (3 times at most).
+      Partly done (3.2.1): a lift on its way down, or a perpetual one, is waited for. Still open:
+      finishing the goal as soon as the lift starts moving.
+   10. **Boss-death triggers** (needs monsters and combat, so a later stage). Some levels move
+       sectors when the last monster of a kind dies, not from any line (`A_BossDeath` and
+       `A_KeenDie` in `p_enemy.c`):
+       - Doom II MAP07: the last Mancubus (`MT_FATSO`) lowers the sectors tagged 666 to the
+         lowest neighbouring floor; the last Arachnotron (`MT_BABY`) raises those tagged 667
+         (`raiseToTexture`). crispy applies the same rule to some Master Levels maps
+         (`P_CheckMapTag666`).
+       - Doom II MAP32: when the last Commander Keen dies, the door tagged 666 opens.
+       - Doom: E1M8 (the last Baron of Hell lowers tag 666), E4M6 (the last Cyberdemon
+         blaze-opens door 666), E4M8 (the last Spider Mastermind lowers tag 666); E2M8 and E3M8
+         end the level when the boss dies. Doom II MAP30 ends when the Icon of Sin's brain dies.
+       The brain would need a goal like KILL ALL <kind>, pushed when a route is blocked by a
+       sector only such a death moves. Without monsters those levels cannot be finished.
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 

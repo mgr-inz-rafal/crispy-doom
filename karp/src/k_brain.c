@@ -449,6 +449,25 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 // Getting past blocked crossings
 //
 
+// Whether some line still moves the sector: one-shot lines lose their
+// special once used.
+static boolean LiveTrigger(int sector)
+{
+    int i;
+
+    for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
+    {
+        int line = K_Specials_TriggerLine(sector, i);
+
+        if (K_Specials_MoverTrigger(K_Specials_LineSpecial(line)) != K_TRIGGER_NONE)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // What would get the player past a blocked crossing, if anything: the key
 // for a locked door; for a step too high or too little headroom, a line
 // that moves the sector beyond, or the one the player is in; for a gap too
@@ -499,7 +518,7 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
 
     for (i = 0; i < count; ++i)
     {
-        if (sectors_[i] >= 0 && K_Specials_TriggerCount(sectors_[i]) > 0
+        if (sectors_[i] >= 0 && LiveTrigger(sectors_[i])
          && Allowed(GOAL_TRIGGER, sectors_[i]))
         {
             *type = GOAL_TRIGGER;
@@ -509,6 +528,39 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     }
 
     return false;
+}
+
+// The fix for a blocked route: for its first blocked crossing, or none.
+// But a key comes first, wherever its door is on the route: keys stay,
+// while what a switch does may not last until the player gets there (a
+// lift goes back up while it fetches the key, Doom II MAP12). Sets
+// key_door to that door's portal, else -1.
+static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param,
+                        int *key_door)
+{
+    goal_type_t key_type;
+    int key_param;
+    int i;
+
+    *key_door = -1;
+
+    if (!FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param))
+    {
+        return false;
+    }
+
+    for (i = 0; i < path->num_cells - 1 && *type != GOAL_KEY; ++i)
+    {
+        if (K_Graph_CanCross(path->portals[i], path->cells[i]) == K_CROSS_LOCKED
+         && FixFor(path->portals[i], path->cells[i], K_CROSS_LOCKED, &key_type, &key_param))
+        {
+            *type = key_type;
+            *param = key_param;
+            *key_door = path->portals[i];
+        }
+    }
+
+    return true;
 }
 
 // Set as the pathfinder's block cost, for every route planned (nav's
@@ -601,7 +653,7 @@ static void PlanGoal(goal_t *goal)
     {
         char text[K_LOG_LINE_LEN];
         goal_type_t type;
-        int param;
+        int param, key_door;
 
         if (WasTried(goal, candidates[i].at))
         {
@@ -663,8 +715,7 @@ static void PlanGoal(goal_t *goal)
             }
         }
         else if (scratch.result == K_PATH_BLOCKED
-              && FixFor(scratch.blocked_portal, scratch.blocked_from,
-                        scratch.blocked_by, &type, &param))
+              && RouteFix(&scratch, &type, &param, &key_door))
         {
             double score = scratch.blocked_count * FIXABLE_COST + scratch.length;
 
@@ -674,8 +725,19 @@ static void PlanGoal(goal_t *goal)
                 blocked_score = score;
                 fix_type = type;
                 fix_param = param;
-                M_snprintf(blocker, sizeof(blocker), "the %s is blocked by %s",
-                           candidates[i].what, text);
+
+                if (key_door >= 0)
+                {
+                    M_snprintf(blocker, sizeof(blocker), "the %s is blocked by %s, and "
+                               "further on by a door that needs the %s key - the key "
+                               "first", candidates[i].what, text,
+                               K_Graph_LockName(key_door));
+                }
+                else
+                {
+                    M_snprintf(blocker, sizeof(blocker), "the %s is blocked by %s",
+                               candidates[i].what, text);
+                }
             }
         }
         else

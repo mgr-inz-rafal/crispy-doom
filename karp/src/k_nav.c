@@ -105,6 +105,14 @@
 // teleported.
 #define TELEPORT_JUMP 64.0
 
+// Sliding along walls: within AVOID_DISTANCE of anything that stops the
+// player (its radius is 16), the part of the velocity toward it is
+// dropped; touching it, the player eases away at AVOID_PUSH.
+#define AVOID_DISTANCE 20.0
+#define AVOID_TOUCH 17.0
+#define AVOID_PUSH 1.0
+#define MAX_AVOID 16
+
 typedef struct
 {
     double x, y;
@@ -526,12 +534,43 @@ static void SteerToHold(const body_t *body, k_vec2_t to, const double *face,
     Steer(body, x, y, face, command);
 }
 
+// The route keeps its legs inside cells, but not clear of the corners
+// along them: a leg can pass so close to one that the player's box catches
+// on it, pushing straight in, with nothing for the engine to slide it
+// along (Doom II MAP03, leaving a switch alcove past a pillar). So near
+// anything that stops the player, the part of the velocity toward it is
+// dropped: the player slides along instead, and eases away when touching.
+static void AvoidWalls(const body_t *body, double *vx, double *vy)
+{
+    k_nearline_t walls[MAX_AVOID];
+    k_vec2_t at = { body->x, body->y };
+    int count = K_Graph_ObstaclesNear(at, AVOID_DISTANCE, walls, MAX_AVOID);
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        double into = *vx * walls[i].away.x + *vy * walls[i].away.y;
+
+        if (into < 0.0)
+        {
+            *vx -= into * walls[i].away.x;
+            *vy -= into * walls[i].away.y;
+        }
+
+        if (walls[i].distance < AVOID_TOUCH)
+        {
+            *vx += walls[i].away.x * AVOID_PUSH;
+            *vy += walls[i].away.y * AVOID_PUSH;
+        }
+    }
+}
+
 static void SteerAlongRoute(const body_t *body, k_command_t *command)
 {
     int target = status.target;
     int last = path.num_points - 1;
     k_vec2_t at = { body->x, body->y };
-    double distance, speed;
+    double distance, speed, vx, vy;
 
     // The waypoint may be reached during the tics still waiting to run.
     if (target < TargetLimit()
@@ -551,8 +590,10 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
 
     if (distance > 1e-6)
     {
-        Steer(body, (path.points[target].x - at.x) / distance * speed,
-              (path.points[target].y - at.y) / distance * speed, NULL, command);
+        vx = (path.points[target].x - at.x) / distance * speed;
+        vy = (path.points[target].y - at.y) / distance * speed;
+        AvoidWalls(body, &vx, &vy);
+        Steer(body, vx, vy, NULL, command);
     }
     else
     {
@@ -776,12 +817,20 @@ static void StartAction(k_crossing_t crossing, int r)
             break;
 
         case K_ACTION_LIFT:
-            K_Log(K_LOG_NAV, K_LOG_INFO, "calling the lift at line %d (%.0f,%.0f)",
-                  action.line, middle.x, middle.y);
+            if (K_Graph_SectorMover(action.sector) != K_MOVER_NONE)
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "waiting for the lift (sector %d) to come "
+                      "down at line %d", action.sector, action.line);
+            }
+            else
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "calling the lift at line %d (%.0f,%.0f)",
+                      action.line, middle.x, middle.y);
+            }
             break;
 
         default:
-            K_Log(K_LOG_NAV, K_LOG_INFO, "waiting for the lift (sector %d) to rise",
+            K_Log(K_LOG_NAV, K_LOG_INFO, "riding the lift (sector %d) to the way off",
                   action.sector);
             break;
     }
@@ -804,7 +853,7 @@ static void FinishAction(void)
             break;
 
         default:
-            K_Log(K_LOG_NAV, K_LOG_INFO, "lift up after %.1f s", seconds);
+            K_Log(K_LOG_NAV, K_LOG_INFO, "lift ride over after %.1f s", seconds);
             break;
     }
 

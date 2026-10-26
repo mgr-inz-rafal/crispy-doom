@@ -42,6 +42,9 @@
 // The shortest shared stretch that makes a portal.
 #define MIN_OVERLAP 1.0
 
+// The most linedefs one portal is found to run along (then split per line).
+#define MAX_PORTAL_LINES 16
+
 // A gap in a cell's border counts as a hole in the navigation mesh only if
 // it is at least this long and this far from every wall. Shorter gaps are
 // rounding at corners; gaps along a wall are hairline slivers of void.
@@ -348,12 +351,9 @@ static void AddCover(int edge, double t0, double t1)
     ++num_covers;
 }
 
-// The stretch t0-t1 of edge e is shared with edge f.
-static void AddPortal(int e, int f, double t0, double t1)
+// Room for one more portal; returns its index.
+static int NewPortal(void)
 {
-    k_portal_t *portal;
-    double f0, f1;
-
     if (graph.num_portals == portals_capacity)
     {
         portals_capacity = SDL_max(portals_capacity * 2, 1024);
@@ -361,7 +361,16 @@ static void AddPortal(int e, int f, double t0, double t1)
                                 portals_capacity * sizeof(*graph.portals));
     }
 
-    portal = &graph.portals[graph.num_portals++];
+    return graph.num_portals++;
+}
+
+// The stretch t0-t1 of edge e is shared with edge f.
+static void AddPortal(int e, int f, double t0, double t1)
+{
+    k_portal_t *portal;
+    double f0, f1;
+
+    portal = &graph.portals[NewPortal()];
     portal->cell[0] = edges[e].cell;
     portal->cell[1] = edges[f].cell;
     portal->a = PointAlong(edges[e].a, edges[e].b, t0);
@@ -487,6 +496,127 @@ static int FindPortalLine(const k_map_t *map, const k_portal_t *portal)
     }
 
     return found;
+}
+
+// A stretch of a portal that runs along a two-sided line, as distances
+// from the portal's start.
+typedef struct
+{
+    double t0, t1;
+    int line;
+} stretch_t;
+
+static int CompareStretches(const void *a, const void *b)
+{
+    const stretch_t *sa = a, *sb = b;
+
+    return sa->t0 < sb->t0 ? -1 : sa->t0 > sb->t0 ? 1 : 0;
+}
+
+// The two-sided lines a portal runs along, up to max.
+static int PortalStretches(const k_map_t *map, const k_portal_t *portal,
+                           stretch_t *found, int max)
+{
+    k_vec2_t min = { SDL_min(portal->a.x, portal->b.x) - 2.0 * MATCH_TOLERANCE,
+                     SDL_min(portal->a.y, portal->b.y) - 2.0 * MATCH_TOLERANCE };
+    k_vec2_t max_ = { SDL_max(portal->a.x, portal->b.x) + 2.0 * MATCH_TOLERANCE,
+                      SDL_max(portal->a.y, portal->b.y) + 2.0 * MATCH_TOLERANCE };
+    int x, y, x0, y0, x1, y1, k, i;
+    int count = 0;
+    double t0, t1;
+
+    CellRange(min, max_, &x0, &y0, &x1, &y1);
+
+    for (y = y0; y <= y1; ++y)
+    {
+        for (x = x0; x <= x1; ++x)
+        {
+            int cell = y * grid_width + x;
+
+            for (k = cell_first[cell]; k < cell_first[cell + 1]; ++k)
+            {
+                int line = cell_items[k] - num_edges;
+
+                if (line < 0 || map->lines[line].back_sector < 0)
+                {
+                    continue;
+                }
+
+                // A line spanning several grid cells comes up more than once.
+                for (i = 0; i < count && found[i].line != line; ++i)
+                {
+                }
+
+                if (i < count || count >= max
+                 || !Overlap(portal->a, portal->b, map->lines[line].v1,
+                             map->lines[line].v2, &t0, &t1))
+                {
+                    continue;
+                }
+
+                found[count].t0 = t0;
+                found[count].t1 = t1;
+                found[count].line = line;
+                ++count;
+            }
+        }
+    }
+
+    return count;
+}
+
+// Gives each portal its line. A portal can run along several collinear
+// lines (a diagonal door between two short jambs, Doom II MAP12): it is
+// split where each line starts, so every portal runs along one line and
+// is judged by it - its special, whether it blocks the player.
+static void SplitPortals(const k_map_t *map)
+{
+    int count = graph.num_portals;
+    int i, k;
+
+    for (i = 0; i < count; ++i)
+    {
+        stretch_t stretches[MAX_PORTAL_LINES];
+        k_portal_t whole = graph.portals[i];
+        double length = Length(Sub(whole.b, whole.a));
+        int n = PortalStretches(map, &whole, stretches, MAX_PORTAL_LINES);
+        double start = 0.0;
+        int line, piece = i;
+
+        // A miniseg, or (a map error) along a one-sided line only.
+        if (n == 0)
+        {
+            graph.portals[i].line = FindPortalLine(map, &whole);
+            continue;
+        }
+
+        qsort(stretches, n, sizeof(*stretches), CompareStretches);
+        line = stretches[0].line;
+
+        // A piece runs from where its line starts to where the next one
+        // does; slivers shorter than MIN_OVERLAP stay with the piece before.
+        for (k = 1; k <= n; ++k)
+        {
+            double end = k < n ? stretches[k].t0 : length;
+
+            if (k < n && (end - start < MIN_OVERLAP || length - end < MIN_OVERLAP))
+            {
+                continue;
+            }
+
+            graph.portals[piece] = whole;
+            graph.portals[piece].a = PointAlong(whole.a, whole.b, start);
+            graph.portals[piece].b = PointAlong(whole.a, whole.b, end);
+            graph.portals[piece].line = line;
+
+            if (k < n)
+            {
+                piece = NewPortal();
+                start = end;
+                line = stretches[k].line;
+            }
+        }
+    }
 }
 
 static boolean NearWall(const k_map_t *map, k_vec2_t point)
@@ -923,7 +1053,6 @@ void K_Graph_Build(void)
 {
     const k_map_t *map = K_Map_Get();
     Uint64 start = SDL_GetPerformanceCounter();
-    int i;
 
     graph.num_portals = 0;
     num_covers = 0;
@@ -931,12 +1060,7 @@ void K_Graph_Build(void)
     CollectEdges(map);
     BuildGrid(map);
     MatchEdges(map);
-
-    for (i = 0; i < graph.num_portals; ++i)
-    {
-        graph.portals[i].line = FindPortalLine(map, &graph.portals[i]);
-    }
-
+    SplitPortals(map);
     BuildLinks(map);
     FindMoverSectors(map);
     FindTeleporters(map);
@@ -1005,6 +1129,37 @@ static fixed_t LiftTop(const sector_t *sector)
 
     return plat != NULL ? SDL_max(plat->high, sector->floorheight)
                         : sector->floorheight;
+}
+
+// Whether a lift will come down without being worked: a perpetual one
+// (specials 53, 87; stopped ones have no thinker running), or one on its
+// way down.
+static boolean LiftComing(const sector_t *sector)
+{
+    const plat_t *plat = PlatOf(sector);
+
+    return plat != NULL && (plat->type == perpetualRaise || plat->status == down);
+}
+
+// Tics until a lift that is coming is at the bottom (EV_DoPlat,
+// T_PlatRaise): going up, it waits at the top before coming down.
+static double LiftArrival(const sector_t *sector)
+{
+    const plat_t *plat = PlatOf(sector);
+    double down = (double) (sector->floorheight - plat->low) / plat->speed;
+
+    switch (plat->status)
+    {
+        case up:
+            return (double) (plat->high - sector->floorheight) / plat->speed
+                 + plat->wait + (double) (plat->high - plat->low) / plat->speed;
+
+        case waiting:
+            return plat->count + down;
+
+        default:
+            return down;
+    }
 }
 
 static boolean Headroom(fixed_t floor_a, fixed_t ceiling_a,
@@ -1274,10 +1429,8 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
             return K_CROSS_WALL;
         }
 
-        // TODO: crossing an impassable line is only judged here, by the one
-        // line a portal records: a portal running along several collinear
-        // lines can miss an impassable one among them. (The clearance check
-        // does treat impassable lines beside a crossing as walls.)
+        // A portal runs along one line (SplitPortals), so an impassable
+        // one is never missed among collinear lines.
         if (line->flags & ML_BLOCKING)
         {
             return K_CROSS_BLOCKING;
@@ -1301,6 +1454,18 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     {
         floor_b = floor_a;
         ceiling_b = ceiling_a;
+    }
+
+    // A lift too high now to step onto, or to fit over, that comes down by
+    // itself (one that runs for good, or is on its way down): wait for it,
+    // step on, ride it.
+    if (lift_sectors[to_sector] && LiftComing(b)
+     && (floor_b - floor_a > MAX_STEP_UP || !Headroom(floor_a, ceiling_a, floor_b, ceiling_b))
+     && PlatOf(b)->low - floor_a <= MAX_STEP_UP
+     && Headroom(floor_a, ceiling_a, PlatOf(b)->low, ceiling_b))
+    {
+        *wait = LiftArrival(b);
+        return K_CROSS_LIFT;
     }
 
     // Stepping up is limited; dropping down never is (players have
@@ -1340,6 +1505,16 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     if (!Headroom(floor_a, ceiling_a, floor_b, ceiling_b))
     {
         const vldoor_t *door = DoorOf(b);
+
+        // On a lift too high now to fit under the way off, that comes down
+        // by itself: ride it down.
+        if (lift_sectors[from_sector] && LiftComing(a)
+         && floor_b - PlatOf(a)->low <= MAX_STEP_UP
+         && Headroom(PlatOf(a)->low, ceiling_a, floor_b, ceiling_b))
+        {
+            *wait = LiftArrival(a);
+            return K_CROSS_RIDE;
+        }
 
         // A door already opening (however it was opened; one-shot doors
         // lose their line special right away): wait for it, if it goes high
@@ -1564,23 +1739,24 @@ const char *K_Graph_LockName(int portal)
     return key >= 0 ? K_Specials_KeyName(key) : NULL;
 }
 
-double K_Graph_Clearance(k_vec2_t at, double reach)
+int K_Graph_ObstaclesNear(k_vec2_t at, double reach, k_nearline_t *found, int max)
 {
     const k_map_t *map = K_Map_Get();
     int cell = K_Map_CellAt(at.x, at.y);
     k_vec2_t min = { at.x - reach, at.y - reach };
-    k_vec2_t max = { at.x + reach, at.y + reach };
-    double clearance = reach;
+    k_vec2_t max_ = { at.x + reach, at.y + reach };
+    int lines_seen[MAX_NEAR_LINES];
+    int seen = 0, count = 0;
     fixed_t floor, ceiling;
-    int x, y, x0, y0, x1, y1, k;
+    int x, y, x0, y0, x1, y1, k, i;
 
     if (cell < 0 || graph.generation != map->generation)
     {
-        return 0.0;
+        return 0;
     }
 
     StandingHeights(cell, &floor, &ceiling);
-    CellRange(min, max, &x0, &y0, &x1, &y1);
+    CellRange(min, max_, &x0, &y0, &x1, &y1);
 
     for (y = y0; y <= y1; ++y)
     {
@@ -1591,21 +1767,69 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
             for (k = cell_first[grid]; k < cell_first[grid + 1]; ++k)
             {
                 int line = cell_items[k] - num_edges;
-                double distance;
+                k_vec2_t a, ab, closest;
+                double t, distance;
 
-                if (line < 0)
+                if (line < 0 || count >= max)
                 {
                     continue;
                 }
 
-                distance = SegmentDistance(map->lines[line].v1, map->lines[line].v2, at);
-
-                if (distance < clearance && Obstacle(line, floor, ceiling))
+                // A line spanning several grid cells comes up more than once.
+                for (i = 0; i < seen && lines_seen[i] != line; ++i)
                 {
-                    clearance = distance;
                 }
+
+                if (i < seen)
+                {
+                    continue;
+                }
+
+                if (seen < MAX_NEAR_LINES)
+                {
+                    lines_seen[seen++] = line;
+                }
+
+                a = map->lines[line].v1;
+                ab = Sub(map->lines[line].v2, a);
+                t = SDL_max(0.0, SDL_min(1.0, Dot(Sub(at, a), ab)
+                                              / SDL_max(Dot(ab, ab), 1e-12)));
+                closest.x = a.x + ab.x * t;
+                closest.y = a.y + ab.y * t;
+                distance = Length(Sub(at, closest));
+
+                if (distance >= reach || distance < 1e-6
+                 || !Obstacle(line, floor, ceiling))
+                {
+                    continue;
+                }
+
+                found[count].away.x = (at.x - closest.x) / distance;
+                found[count].away.y = (at.y - closest.y) / distance;
+                found[count].distance = distance;
+                ++count;
             }
         }
+    }
+
+    return count;
+}
+
+double K_Graph_Clearance(k_vec2_t at, double reach)
+{
+    k_nearline_t found[MAX_NEAR_LINES];
+    int count = K_Graph_ObstaclesNear(at, reach, found, MAX_NEAR_LINES);
+    double clearance = reach;
+    int i;
+
+    if (K_Map_CellAt(at.x, at.y) < 0)
+    {
+        return 0.0;
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        clearance = SDL_min(clearance, found[i].distance);
     }
 
     return clearance;
