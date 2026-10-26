@@ -233,7 +233,9 @@ Output (`k_map_t`, plain C types):
 - `lines[]`: endpoints, flags, special, front/back sector index. `K_Map_LineClass()` gives the
   automap-style draw class (one-sided, floor change, ceiling change, plain two-sided) from live
   sector heights, so a door or lift changes colour as it moves.
-- `K_Map_GetPlayer()`: the local player's live position and facing (read-only).
+- `K_Map_GetPlayer()`: the local player's live position, facing, momentum, the floor it stands on
+  and the cell it stands on (`K_Map_StandingCell`, below), and how long it stays frozen after a
+  teleport (read-only).
 - `sectors[]`: index into engine `sectors[]`. Heights are read **live**: floors will move in later
   stages, and loading a savegame changes heights after `P_SetupLevel`.
 - `cells[]`: convex pieces of floor, each with its subsector, polygon, area-weighted centroid and
@@ -303,6 +305,15 @@ all cells for the nearest one within a distance; the pathfinder uses it when the
 one of the few holes in the mesh. `K_Map_SubsectorAt` wraps `K_Map_CellAt`. The console's hover
 info and click validation use them.
 
+**Where the player stands** (`K_Map_StandingCell`). The engine stands the player on the highest
+floor under its 32x32 box (`mo->floorz`), not on the floor under its centre: with its centre just
+over the edge of a ledge, it still stands on the ledge. The cell containing the centre is then the
+one below, and judged from there the ledge is a step too high, so every route from it looked
+blocked (Doom II MAP03: the bot drifted a unit off a 32-wide strip on its way to a teleporter, and
+every goal failed). So when the floor under the centre is not the player's floor, the player's
+cell is the nearest cell under its box that has that floor. Route progress and the start of every
+plan use this cell, and the Bot tab shows it.
+
 #### 3.2.1 `k_graph.c` - navigation graph
 
 **Portals.** Two cells are neighbours where their edges lie on the same line, run in opposite
@@ -360,7 +371,13 @@ the narrowest gap that counts is 34. A gap exactly as wide as the player (32) ne
 to the fraction of a unit; Doom II MAP02 has one the bot got stuck in. Obstacles are the lines
 that stop a player standing on the crossing's floor from overlapping them (`PIT_CheckLine`): walls,
 impassable lines (`ML_BLOCKING`), and two-sided lines with a side too high to step onto or too low
-to fit under. A drop is no obstacle (the player can hang over it), and manual doors count as open,
+to fit under. Which floor: the engine stands the player on the highest floor under its box, under
+the lowest ceiling. Lines before the crossing are judged from the cell the player comes from; a
+line wholly past it is reached with the box over the cell beyond too, so it is judged from the
+higher of the two floors and the lower of the two ceilings (only for a real step of up to 24, not
+for a lift to lower or a ride up). Otherwise stairs whose steps are shallower than the player's
+radius look too narrow: on Doom II MAP03 the steps are 8 high and 16 deep, and from the floor below
+the first one, the second one's riser looked like a wall 16 units from the crossing. A drop is no obstacle (the player can hang over it), and manual doors count as open,
 since the player opens any it gets to (otherwise a closed door's faces, 8 units apart, would
 narrow every crossing near a doorway). Judged live, so bars that lower open the gap.
 `K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the obstacle
@@ -403,8 +420,10 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
 ### 3.3 `k_path.c` - pathfinder
 
 `K_Path_Find(path, start, goal)` plans from a start point to a goal point:
-- **Start and goal cells** via `K_Map_CellAt`. A player standing on a hole in the mesh starts from
-  the nearest cell within 64 units (`K_Map_NearestCell`).
+- **Start and goal cells** via `K_Map_CellAt`; the caller can give the start cell instead, and
+  nav and the brain give the cell the player stands on (`K_Map_StandingCell`, 3.2). A player
+  standing on a hole in the mesh starts from the nearest cell within 64 units
+  (`K_Map_NearestCell`).
 - **A\* over portal crossings, not cells.** A search node is "crossed portal p into the cell on
   side s" (two nodes per portal), plus the start and the goal. A route runs from the start point
   through the **middle of each portal** it crosses to the goal point, and crossing a cell costs the
@@ -478,10 +497,10 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
   stop, braking with full reverse thrust ~45.
 
 **Think - `K_Nav_Tick()`, once per game tic** (from `K_Ticker`, through the brain):
-- **Progress:** the player's cell is looked up in the route's cells. Moving further along the
-  route (perhaps having cut a corner) moves the target waypoint to the first one inside that
-  cell, never back; being pushed back to an earlier route cell sets the target to that cell's way
-  out again. The route remembers which cell each leg runs through (`k_path_t.leg_cells`) for
+- **Progress:** the cell the player stands on (3.2) is looked up in the route's cells. Moving
+  further along the route (perhaps having cut a corner) moves the target waypoint to the first
+  one inside that cell, never back; being pushed back to an earlier route cell sets the target to
+  that cell's way out again. The route remembers which cell each leg runs through (`k_path_t.leg_cells`) for
   this. A waypoint on the way also counts as reached within 24 units (tunable).
 - **Off the route:** a cell that is not on the route but is one open crossing from a route cell
   (a corner cut through a neighbouring cell) is tolerated. Anywhere else (fell off a ledge, got
@@ -581,8 +600,12 @@ the destination, and progress picks up from there (the destination's cell is the
 A route can come back to a cell it went through before a teleporter, so the route cell is looked
 up from the player's current one on first.
 - A position jump no step could make (over 64 units in a tic) is a teleport: logged ("teleported
-  from (x,y) to (x,y)"), and neither a misprediction nor progress for the stuck check. Teleported
-  somewhere off the route, the bot replans at once.
+  from (x,y) to (x,y)"), and neither a misprediction nor progress for the stuck check.
+- The player does not always land exactly on the destination: the engine moves a fast player in
+  steps (`P_XYMovement`), and the step that crosses the line goes on from the destination, so at
+  running speed it lands a few units past it (8 on Doom II MAP03), possibly in the next cell.
+  Landing next to the route (one open crossing from a route cell) counts as being on it, at that
+  route cell; landing anywhere else, the bot replans at once.
 - For 18 tics after a teleport the player can neither move nor turn (`reactiontime`). The pose
   reports it, the prediction replays it, and the bot sends empty commands meanwhile.
 - If the teleporter on the route stops working before the bot gets there (a once-only one used
@@ -894,8 +917,12 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      check judges every line near a crossing from the floor the player starts on (32), so the
      second step (64) counts as a wall 16 units from the first riser. In the engine the player
      stands on the highest floor under its box: once on the first step (56), the next one is only
-     8 higher. Next: judge the lines that lie wholly past a crossing from the higher of its two
-     floors.
+     8 higher. Fixed: lines wholly past a crossing are judged from the higher of its two floors
+     (3.2.1). The bot then took the blue key, rode the fast lift, pressed switch 431 and headed
+     along the raised strip for the teleporter, where it drifted with its centre a unit off the
+     strip: still standing on it, but Karp placed it in the cell below, from which nothing was
+     reachable. Fixed: the player's cell is the one it stands on (3.2). Finished in 36.3 s:
+     blue key, switch 431, teleporter, switches 445 and 498, red key, lift, red door, exit switch.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

@@ -561,7 +561,7 @@ static void PlanGoal(goal_t *goal)
             continue;
         }
 
-        K_Path_Find(&scratch, start, candidates[i].at);
+        K_Path_Find(&scratch, start, player.cell, candidates[i].at);
         K_Path_Describe(&scratch, text, sizeof(text));
 
         // A switch that needs a key (red bars, say): nothing happens until

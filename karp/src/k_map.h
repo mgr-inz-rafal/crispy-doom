@@ -113,6 +113,10 @@ typedef struct
     int onground;           // movement input only works on the ground
     int frozen;             // tics left that it can neither move nor turn
                             // (just teleported)
+    double floor;           // the floor it stands on: the highest under its
+                            // box, which can be off the floor under its centre
+    int cell;               // the cell it stands on (K_Map_StandingCell),
+                            // -1 if none
 } k_pose_t;
 
 // Called by Karp at the end of every P_SetupLevel.
@@ -129,6 +133,13 @@ int K_Map_CellAt(double x, double y);
 // The cell nearest to the point, if one is within max_distance (0 when the
 // point is inside it); -1 otherwise. Scans every cell.
 int K_Map_NearestCell(double x, double y, double max_distance);
+
+// The cell a player at (x, y) standing on the given floor stands on. The
+// engine stands the player on the highest floor under its box, so with its
+// centre just over the edge of a ledge it still stands on the ledge: then
+// this is the ledge's cell under its box nearest the centre, not the cell
+// below. Otherwise the cell containing the point (K_Map_CellAt).
+int K_Map_StandingCell(double x, double y, double floor);
 
 // The subsector containing the point, or -1 when it is on no floor.
 int K_Map_SubsectorAt(double x, double y);

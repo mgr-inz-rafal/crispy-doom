@@ -1391,7 +1391,7 @@ static void DrawBotTab(void)
         return;
     }
 
-    int cell = K_Map_CellAt(player.x, player.y);
+    int cell = player.cell;
 
     if (ImGui::BeginTable("player", 2, ImGuiTableFlags_RowBg))
     {

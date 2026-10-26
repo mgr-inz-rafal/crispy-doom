@@ -73,8 +73,10 @@ typedef struct
 } k_path_t;
 
 // Plans a route from start to goal over the crossings that are open now.
-// The arrays in path are reused from call to call.
-void K_Path_Find(k_path_t *path, k_vec2_t start, k_vec2_t goal);
+// start_cell is the cell the start is on, when that is known better than
+// from the point (the player's standing cell: K_Map_GetPlayer), or -1 to
+// look it up. The arrays in path are reused from call to call.
+void K_Path_Find(k_path_t *path, k_vec2_t start, int start_cell, k_vec2_t goal);
 
 // What a blocked crossing adds to the cost of a route. More than any route
 // on a map could cost, so open routes always win; set by the brain, which

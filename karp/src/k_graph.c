@@ -1018,6 +1018,83 @@ static boolean Headroom(fixed_t floor_a, fixed_t ceiling_a,
 // Clearance
 //
 
+// The floor and ceiling of the sector a cell is in. Standing in a door
+// means it is open.
+static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
+{
+    const k_map_t *map = K_Map_Get();
+    int index = map->subsectors[map->cells[cell].subsector].sector;
+    sector_t *sector = &sectors[index];
+
+    *floor = sector->floorheight;
+    *ceiling = sector->ceilingheight;
+
+    if (door_sectors[index])
+    {
+        *ceiling = SDL_max(*ceiling, DoorTop(sector));
+    }
+}
+
+// The heights a player crossing a portal stands at when its box gets to a
+// line near it. The engine stands the player on the highest floor under
+// its box, under the lowest ceiling. Before the portal that is the cell it
+// comes from. A line wholly past the portal is reached with the box over
+// the cell beyond too, so a step up there is already climbed: stairs whose
+// steps are shallower than the player's radius would otherwise look too
+// narrow, the next riser counting as a wall (Doom II MAP03). Not past a
+// step too high (a lift to lower, a ride up): the player never stands
+// there as things are.
+typedef struct
+{
+    const k_portal_t *portal;
+    k_vec2_t normal;            // unit, pointing past the portal
+    fixed_t floor[2];           // [0] before the portal, [1] past it
+    fixed_t ceiling[2];
+} stance_t;
+
+static void Stance(int portal_index, int from, stance_t *stance)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = &graph.portals[portal_index];
+    int to = portal->cell[0] == from ? portal->cell[1] : portal->cell[0];
+    k_vec2_t dir = Sub(portal->b, portal->a);
+    double length = SDL_max(Length(dir), 1e-6);
+
+    stance->portal = portal;
+    stance->normal.x = -dir.y / length;
+    stance->normal.y = dir.x / length;
+
+    if (Dot(stance->normal, Sub(map->cells[to].centroid, portal->a)) < 0.0)
+    {
+        stance->normal.x = -stance->normal.x;
+        stance->normal.y = -stance->normal.y;
+    }
+
+    StandingHeights(from, &stance->floor[0], &stance->ceiling[0]);
+    StandingHeights(to, &stance->floor[1], &stance->ceiling[1]);
+
+    if (stance->floor[1] - stance->floor[0] <= MAX_STEP_UP)
+    {
+        stance->floor[1] = SDL_max(stance->floor[0], stance->floor[1]);
+        stance->ceiling[1] = SDL_min(stance->ceiling[0], stance->ceiling[1]);
+    }
+    else
+    {
+        stance->floor[1] = stance->floor[0];
+        stance->ceiling[1] = stance->ceiling[0];
+    }
+}
+
+// 1 if a line lies wholly past the portal: no end before its line, and
+// not along it.
+static int StanceSide(const stance_t *stance, const k_line_t *line)
+{
+    double d1 = Dot(stance->normal, Sub(line->v1, stance->portal->a));
+    double d2 = Dot(stance->normal, Sub(line->v2, stance->portal->a));
+
+    return d1 > -1.0 && d2 > -1.0 && SDL_max(d1, d2) >= 1.0;
+}
+
 // Whether a line stops a player standing on the given floor under the
 // given ceiling from overlapping it (PIT_CheckLine): a wall, an impassable
 // line, or a two-sided line with a side too high to step onto or too low
@@ -1078,12 +1155,11 @@ static boolean AlongPortal(const k_line_t *line, const k_portal_t *portal)
     return SDL_min(length, SDL_max(t1, t2)) - SDL_max(0.0, SDL_min(t1, t2)) > 1.0;
 }
 
-// The obstacle lines within reach of a portal, for a player on the given
-// floor and ceiling.
-static int NearObstacles(const k_portal_t *portal, fixed_t floor, fixed_t ceiling,
-                         double reach, int *found, int max)
+// The obstacle lines within reach of a portal, for a player crossing it.
+static int NearObstacles(const stance_t *stance, double reach, int *found, int max)
 {
     const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = stance->portal;
     k_vec2_t min = { SDL_min(portal->a.x, portal->b.x) - reach - 1.0,
                      SDL_min(portal->a.y, portal->b.y) - reach - 1.0 };
     k_vec2_t max_ = { SDL_max(portal->a.x, portal->b.x) + reach + 1.0,
@@ -1101,6 +1177,7 @@ static int NearObstacles(const k_portal_t *portal, fixed_t floor, fixed_t ceilin
             for (k = cell_first[cell]; k < cell_first[cell + 1]; ++k)
             {
                 int line = cell_items[k] - num_edges;
+                int side;
 
                 if (line < 0)
                 {
@@ -1113,8 +1190,14 @@ static int NearObstacles(const k_portal_t *portal, fixed_t floor, fixed_t ceilin
                 }
 
                 if (i < count || count >= max
-                 || AlongPortal(&map->lines[line], portal)
-                 || !Obstacle(line, floor, ceiling))
+                 || AlongPortal(&map->lines[line], portal))
+                {
+                    continue;
+                }
+
+                side = StanceSide(stance, &map->lines[line]);
+
+                if (!Obstacle(line, stance->floor[side], stance->ceiling[side]))
                 {
                     continue;
                 }
@@ -1128,11 +1211,12 @@ static int NearObstacles(const k_portal_t *portal, fixed_t floor, fixed_t ceilin
 }
 
 // Whether no point on the portal is CLEARANCE away from every obstacle.
-static boolean Narrow(const k_portal_t *portal, fixed_t floor, fixed_t ceiling)
+static boolean Narrow(const stance_t *stance)
 {
     const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = stance->portal;
     int found[MAX_NEAR_LINES];
-    int count = NearObstacles(portal, floor, ceiling, CLEARANCE, found, MAX_NEAR_LINES);
+    int count = NearObstacles(stance, CLEARANCE, found, MAX_NEAR_LINES);
     int s, i;
 
     for (s = 0; s < CLEARANCE_SAMPLES; ++s)
@@ -1292,39 +1376,22 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     return K_CROSS_OPEN;
 }
 
-// The floor and ceiling of the sector a cell is in. Standing in a door
-// means it is open.
-static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
-{
-    const k_map_t *map = K_Map_Get();
-    int index = map->subsectors[map->cells[cell].subsector].sector;
-    sector_t *sector = &sectors[index];
-
-    *floor = sector->floorheight;
-    *ceiling = sector->ceilingheight;
-
-    if (door_sectors[index])
-    {
-        *ceiling = SDL_max(*ceiling, DoorTop(sector));
-    }
-}
-
 // The heights decide first; a crossing they let through is still no way
 // if it is narrower than the player. An open one over a teleport line
 // takes the player elsewhere.
 static k_crossing_t Judge(int portal_index, int from, double *wait)
 {
     k_crossing_t crossing = JudgeHeights(portal_index, from, wait);
-    fixed_t floor, ceiling;
+    stance_t stance;
 
     if (!K_Graph_Passable(crossing) || from < 0)
     {
         return crossing;
     }
 
-    StandingHeights(from, &floor, &ceiling);
+    Stance(portal_index, from, &stance);
 
-    if (Narrow(&graph.portals[portal_index], floor, ceiling))
+    if (Narrow(&stance))
     {
         *wait = 0.0;
         return K_CROSS_NARROW;
@@ -1356,12 +1423,11 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
     int found[MAX_NEAR_LINES];
     double best_score = -1.0;
     k_vec2_t best = PointAlong(portal->a, portal->b, length * 0.5);
-    fixed_t floor, ceiling;
+    stance_t stance;
     int count, s, i;
 
-    StandingHeights(from, &floor, &ceiling);
-    count = NearObstacles(portal, floor, ceiling, WAYPOINT_CLEARANCE, found,
-                          MAX_NEAR_LINES);
+    Stance(portal_index, from, &stance);
+    count = NearObstacles(&stance, WAYPOINT_CLEARANCE, found, MAX_NEAR_LINES);
 
     if (count == 0)
     {
@@ -1396,18 +1462,20 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
 
 int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
 {
+    const k_map_t *map = K_Map_Get();
     int lines_found[MAX_NEAR_LINES];
-    fixed_t floor, ceiling;
+    stance_t stance;
     int count, found = 0;
     int i, side, j;
 
-    StandingHeights(from, &floor, &ceiling);
-    count = NearObstacles(&graph.portals[portal], floor, ceiling, CLEARANCE,
-                          lines_found, MAX_NEAR_LINES);
+    Stance(portal, from, &stance);
+    count = NearObstacles(&stance, CLEARANCE, lines_found, MAX_NEAR_LINES);
 
     for (i = 0; i < count; ++i)
     {
         const line_t *line = &lines[lines_found[i]];
+        int past = StanceSide(&stance, &map->lines[lines_found[i]]);
+        fixed_t floor = stance.floor[past], ceiling = stance.ceiling[past];
 
         if (line->backsector == NULL)
         {

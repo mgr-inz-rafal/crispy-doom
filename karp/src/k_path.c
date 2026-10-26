@@ -642,7 +642,7 @@ static void FindBlocked(k_path_t *path)
     }
 }
 
-void K_Path_Find(k_path_t *path, k_vec2_t start, k_vec2_t goal)
+void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
 {
     Uint64 begin = SDL_GetPerformanceCounter();
 
@@ -667,7 +667,7 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, k_vec2_t goal)
 
     if (map->loaded && graph->generation == map->generation)
     {
-        start_cell = K_Map_CellAt(start.x, start.y);
+        start_cell = from_cell >= 0 ? from_cell : K_Map_CellAt(start.x, start.y);
 
         if (start_cell < 0)
         {

@@ -63,6 +63,9 @@
 // Per kind of problem, only this many are logged individually.
 #define MAX_REPORTS 5
 
+// The player's radius (MT_PLAYER): its box is twice that wide.
+#define PLAYER_RADIUS 16.0
+
 // A convex polygon being split into cells.
 typedef struct
 {
@@ -942,6 +945,86 @@ int K_Map_NearestCell(double x, double y, double max_distance)
     return best;
 }
 
+static double CellFloor(int index)
+{
+    int sector = map.subsectors[map.cells[index].subsector].sector;
+
+    return sector >= 0 ? FixedToMap(sectors[sector].floorheight) : -1e30;
+}
+
+// Whether a cell overlaps the square of half-width r around (x, y): no
+// edge of the convex cell has every corner of the square outside it.
+static boolean CellOverlapsBox(const k_cell_t *cell, double x, double y, double r)
+{
+    const k_vec2_t *poly = &map.points[cell->first_point];
+    int i, c;
+
+    if (x + r < cell->min.x || x - r > cell->max.x
+     || y + r < cell->min.y || y - r > cell->max.y)
+    {
+        return false;
+    }
+
+    for (i = 0; i < cell->num_points; ++i)
+    {
+        k_vec2_t a = poly[i];
+        k_vec2_t b = poly[(i + 1) % cell->num_points];
+        k_vec2_t dir = { b.x - a.x, b.y - a.y };
+
+        for (c = 0; c < 4; ++c)
+        {
+            k_vec2_t corner = { x + ((c & 1) ? r : -r), y + ((c & 2) ? r : -r) };
+
+            if (LineSide(a, dir, corner) >= 0.0)
+            {
+                break;
+            }
+        }
+
+        if (c == 4)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+int K_Map_StandingCell(double x, double y, double floor)
+{
+    k_vec2_t point = { x, y };
+    int cell = K_Map_CellAt(x, y);
+    double best_distance = 1e30;
+    int best = -1;
+    int i;
+
+    if (cell >= 0 && fabs(CellFloor(cell) - floor) < 0.5)
+    {
+        return cell;
+    }
+
+    for (i = 0; i < map.num_cells; ++i)
+    {
+        double distance;
+
+        if (fabs(CellFloor(i) - floor) >= 0.5
+         || !CellOverlapsBox(&map.cells[i], x, y, PLAYER_RADIUS))
+        {
+            continue;
+        }
+
+        distance = CellDistance(&map.cells[i], point);
+
+        if (distance < best_distance)
+        {
+            best_distance = distance;
+            best = i;
+        }
+    }
+
+    return best >= 0 ? best : cell;
+}
+
 int K_Map_SubsectorAt(double x, double y)
 {
     int cell = K_Map_CellAt(x, y);
@@ -977,5 +1060,7 @@ int K_Map_GetPlayer(k_pose_t *pose)
     pose->momy = FixedToMap(mo->momy);
     pose->onground = mo->z <= mo->floorz;
     pose->frozen = mo->reactiontime;
+    pose->floor = FixedToMap(mo->floorz);
+    pose->cell = K_Map_StandingCell(pose->x, pose->y, pose->floor);
     return 1;
 }

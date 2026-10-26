@@ -1027,23 +1027,24 @@ static boolean UpdateAction(k_vec2_t at, double speed)
 // Following the route
 //
 
-// Off the route, but one open step from it: e.g. a corner cut through a
-// neighbouring cell. Not worth a new route.
-static boolean NextToRoute(int cell)
+// For a cell off the route but one open step from it (e.g. a corner cut
+// through a neighbouring cell): the position of that route cell, or -1.
+static int RouteNeighbor(int cell)
 {
     const k_graph_t *graph = K_Graph_Get();
     int i, end = graph->first_link[cell] + graph->link_count[cell];
 
     for (i = graph->first_link[cell]; i < end; ++i)
     {
-        if (RouteIndex(graph->links[i].neighbor) >= 0
-         && K_Graph_CanCross(graph->links[i].portal, cell) == K_CROSS_OPEN)
+        int r = RouteIndex(graph->links[i].neighbor);
+
+        if (r >= 0 && K_Graph_CanCross(graph->links[i].portal, cell) == K_CROSS_OPEN)
         {
-            return true;
+            return r;
         }
     }
 
-    return false;
+    return -1;
 }
 
 static void StartRoute(void)
@@ -1062,9 +1063,10 @@ static boolean Replan(k_vec2_t at, const char *why)
 {
     char text[K_LOG_LINE_LEN];
     char problem[sizeof(status.problem)];
+    k_pose_t pose;
 
     ++status.replans;
-    K_Path_Find(&path, at, goal);
+    K_Path_Find(&path, at, K_Map_GetPlayer(&pose) ? pose.cell : -1, goal);
     K_Path_Describe(&path, text, sizeof(text));
 
     if (path.result != K_PATH_FOUND)
@@ -1080,15 +1082,23 @@ static boolean Replan(k_vec2_t at, const char *why)
     return true;
 }
 
-// Moves the target along as the player goes. Returns false if the route
-// was replaced or failed. Teleported off the route, it replans even next
-// to it: the route cell it last was in is far away.
-static boolean Progress(k_vec2_t at, boolean teleported)
+// Moves the target along as the player goes, by the cell it stands on.
+// Returns false if the route was replaced or failed. Off the route but
+// next to it, the player carries on; teleported, it goes on from that
+// route cell (the route cell it was in is far away), else it replans.
+static boolean Progress(k_vec2_t at, int cell, boolean teleported)
 {
-    int cell = K_Map_CellAt(at.x, at.y);
     int r = RouteIndex(cell);
     int limit;
     char why[96];
+
+    // The move that crosses a teleport line goes on from the destination
+    // (P_XYMovement moves in steps), so at speed the player lands a few
+    // units past it, possibly in the next cell.
+    if (r < 0 && teleported && cell >= 0)
+    {
+        r = RouteNeighbor(cell);
+    }
 
     if (r > status.route_cell)
     {
@@ -1102,7 +1112,7 @@ static boolean Progress(k_vec2_t at, boolean teleported)
         status.target = FirstPointIn(r);
         status.route_cell = r;
     }
-    else if (r < 0 && cell >= 0 && (teleported || !NextToRoute(cell)))
+    else if (r < 0 && cell >= 0 && (teleported || RouteNeighbor(cell) < 0))
     {
         M_snprintf(why, sizeof(why), "off the route in cell %d at (%.0f,%.0f)",
                    cell, at.x, at.y);
@@ -1186,7 +1196,7 @@ k_navstate_t K_Nav_Tick(void)
 
     last_at = at;
 
-    if (!Progress(at, teleported) || !UpdateAction(at, status.speed))
+    if (!Progress(at, pose.cell, teleported) || !UpdateAction(at, status.speed))
     {
         return status.state;
     }
@@ -1282,7 +1292,7 @@ static int StartGoal(double x, double y, k_goalkind_t kind, int line)
     goal.y = y;
     last_at = start;
 
-    K_Path_Find(&path, start, goal);
+    K_Path_Find(&path, start, player.cell, goal);
     have_goal = true;
 
     memset(&status, 0, sizeof(status));
