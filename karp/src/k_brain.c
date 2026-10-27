@@ -115,8 +115,11 @@ typedef struct
     // GOAL_TRIGGER: the blocked crossing it was pushed for (crossed out of
     // cell from), -1 if none. Once that opens, even if only after a wait
     // (a door opening, a lift on its way down), the goal is done: the
-    // player goes on and waits there, not at the switch.
+    // player goes on and waits there, not at the switch. want: the moves
+    // of the sector that would open it (k_move_t); only lines that make one
+    // of them are candidates.
     int portal, from;
+    int want;
 
     // Found no way while sectors were moving: not planned again before
     // leveltime retry_tic; waited is how long it has waited so far.
@@ -239,6 +242,13 @@ static boolean LineWorks(int line)
 {
     return K_Specials_MoverTrigger(K_Specials_LineSpecial(line)) != K_TRIGGER_NONE
         && (line_uses == NULL || line_uses[line] < MAX_TRIGGERS);
+}
+
+// Whether a line still works and moves its sectors one of the ways wanted
+// (k_move_t flags).
+static boolean LineHelps(int line, int want)
+{
+    return LineWorks(line) && (K_Specials_MoverMoves(K_Specials_LineSpecial(line)) & want);
 }
 
 static goal_t *Push(goal_type_t type, int param)
@@ -403,6 +413,55 @@ static int LineCandidate(int line, k_trigger_t trigger, const char *what,
                                &candidate->at.y);
 }
 
+// Which side of the line through a and b the point p is on.
+static double Side(k_vec2_t a, k_vec2_t b, k_vec2_t p)
+{
+    return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+}
+
+// Whether segments ab and cd cross.
+static boolean Crosses(k_vec2_t a, k_vec2_t b, k_vec2_t c, k_vec2_t d)
+{
+    return (Side(c, d, a) > 0.0) != (Side(c, d, b) > 0.0)
+        && (Side(a, b, c) > 0.0) != (Side(a, b, d) > 0.0);
+}
+
+// The key that a door between a switch and the spot it is pressed from
+// needs, if the player lacks it, else -1; door gets the door's line. Use
+// stops at the first line with a special on its way (PTR_UseTraverse), so
+// a locked door in front of a switch takes the press (Doom II MAP27: switch
+// 727 at the back of a closet behind the blue door). A one-shot door loses
+// its special once opened, and then the press gets through.
+static int DoorKeyInTheWay(const candidate_t *candidate, int *door)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_line_t *target = &map->lines[candidate->line];
+    k_vec2_t middle = { (target->v1.x + target->v2.x) * 0.5,
+                        (target->v1.y + target->v2.y) * 0.5 };
+    int i;
+
+    for (i = 0; i < map->num_lines; ++i)
+    {
+        int key;
+
+        if (i == candidate->line
+         || !Crosses(candidate->at, middle, map->lines[i].v1, map->lines[i].v2))
+        {
+            continue;
+        }
+
+        key = K_Specials_LockKey(K_Specials_LineSpecial(i));
+
+        if (key >= 0 && !K_Specials_HasKey(key))
+        {
+            *door = i;
+            return key;
+        }
+    }
+
+    return -1;
+}
+
 static int Candidates(const goal_t *goal, candidate_t *out, int max)
 {
     const k_map_t *map = K_Map_Get();
@@ -453,7 +512,7 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                 int line = K_Specials_TriggerLine(goal->param, i);
                 k_trigger_t trigger = K_Specials_MoverTrigger(K_Specials_LineSpecial(line));
 
-                if (LineWorks(line)
+                if (LineHelps(line, goal->want)
                  && LineCandidate(line, trigger, trigger == K_TRIGGER_USE ? "switch"
                                   : trigger == K_TRIGGER_SHOOT ? "gun switch"
                                   : "walk-over line", &out[count]))
@@ -480,14 +539,19 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 // Getting past blocked crossings
 //
 
-// Whether some line can still move the sector (LineWorks).
-static boolean LiveTrigger(int sector)
+// What opens a way with too little headroom, or too narrow: a floor going
+// down, a ceiling going up.
+#define OPENING_MOVES (K_MOVE_FLOOR_DOWN | K_MOVE_CEILING_UP)
+
+// Whether some line can still move the sector one of the ways wanted
+// (LineHelps).
+static boolean LiveTrigger(int sector, int want)
 {
     int i;
 
     for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
     {
-        if (LineWorks(K_Specials_TriggerLine(sector, i)))
+        if (LineHelps(K_Specials_TriggerLine(sector, i), want))
         {
             return true;
         }
@@ -497,13 +561,16 @@ static boolean LiveTrigger(int sector)
 }
 
 // What would get the player past a blocked crossing, if anything: the key
-// for a locked door; for a step too high or too little headroom, a line
-// that moves the sector beyond, or the one the player is in; for a gap too
-// narrow, a line that moves one of the sectors that narrow it (bars that
-// lower), or else either side's (a lift the player rides down to where the
-// way on has headroom, Doom II MAP05).
+// for a locked door; for a step too high, a line that lowers the floor
+// beyond or raises the one the player is on, never one that lowers it (Doom
+// II MAP27: lowering the arm it stood on, to climb the pillar beside it,
+// burned a dozen walk-over lines); for too little headroom, a line that
+// lowers a floor or raises a ceiling on either side; for a gap too narrow,
+// one that does so to a sector narrowing it (bars that lower), or else to
+// either side (a lift the player rides down to where the way on has
+// headroom, Doom II MAP05). want gets the moves that would help.
 static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *type,
-                      int *param)
+                      int *param, int *want)
 {
     const k_map_t *map = K_Map_Get();
     const k_portal_t *p = &K_Graph_Get()->portals[portal];
@@ -511,8 +578,11 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     int from_sector = map->subsectors[map->cells[from].subsector].sector;
     int to_sector = map->subsectors[map->cells[to].subsector].sector;
     int sectors_[8];
+    int wants[8];
     int count = 2;
     int i;
+
+    *want = 0;
 
     if (crossing == K_CROSS_LOCKED)
     {
@@ -533,11 +603,25 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
         count = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_) - 2);
         sectors_[count++] = from_sector;
         sectors_[count++] = to_sector;
+
+        for (i = 0; i < count; ++i)
+        {
+            wants[i] = OPENING_MOVES;
+        }
     }
-    else if (crossing == K_CROSS_STEP || crossing == K_CROSS_HEADROOM)
+    else if (crossing == K_CROSS_STEP)
     {
         sectors_[0] = to_sector;
+        wants[0] = K_MOVE_FLOOR_DOWN;
         sectors_[1] = from_sector;
+        wants[1] = K_MOVE_FLOOR_UP;
+    }
+    else if (crossing == K_CROSS_HEADROOM)
+    {
+        sectors_[0] = to_sector;
+        wants[0] = OPENING_MOVES;
+        sectors_[1] = from_sector;
+        wants[1] = OPENING_MOVES;
     }
     else
     {
@@ -546,11 +630,12 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
 
     for (i = 0; i < count; ++i)
     {
-        if (sectors_[i] >= 0 && LiveTrigger(sectors_[i])
+        if (sectors_[i] >= 0 && LiveTrigger(sectors_[i], wants[i])
          && Allowed(GOAL_TRIGGER, sectors_[i]))
         {
             *type = GOAL_TRIGGER;
             *param = sectors_[i];
+            *want = wants[i];
             return true;
         }
     }
@@ -563,18 +648,19 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
 // while what a switch does may not last until the player gets there (a
 // lift goes back up while it fetches the key, Doom II MAP12). Sets
 // key_door to that door's portal, else -1.
-static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param,
+static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int *want,
                         int *key_door)
 {
     goal_type_t key_type;
-    int key_param;
+    int key_param, key_want;
     int i;
 
     *key_door = -1;
 
     // A gap inside a cell is no crossing's: nothing found fixes it.
     if (path->blocked_pinch
-     || !FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param))
+     || !FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param,
+                want))
     {
         return false;
     }
@@ -582,10 +668,12 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param,
     for (i = 0; i < path->num_cells - 1 && *type != GOAL_KEY; ++i)
     {
         if (K_Graph_CanCross(path->portals[i], path->cells[i]) == K_CROSS_LOCKED
-         && FixFor(path->portals[i], path->cells[i], K_CROSS_LOCKED, &key_type, &key_param))
+         && FixFor(path->portals[i], path->cells[i], K_CROSS_LOCKED, &key_type, &key_param,
+                   &key_want))
         {
             *type = key_type;
             *param = key_param;
+            *want = key_want;
             *key_door = path->portals[i];
         }
     }
@@ -598,9 +686,10 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param,
 static double BlockCost(int portal, int from, k_crossing_t crossing)
 {
     goal_type_t type;
-    int param;
+    int param, want;
 
-    return FixFor(portal, from, crossing, &type, &param) ? FIXABLE_COST : UNFIXABLE_COST;
+    return FixFor(portal, from, crossing, &type, &param, &want) ? FIXABLE_COST
+                                                                : UNFIXABLE_COST;
 }
 
 static void CountKeys(void)
@@ -689,7 +778,7 @@ static void PlanGoal(goal_t *goal)
     int moving;
     double open_length = 0.0, blocked_score = 0.0;
     goal_type_t fix_type = GOAL_GOTO;
-    int fix_param = 0, fix_portal = -1, fix_from = -1;
+    int fix_param = 0, fix_want = 0, fix_portal = -1, fix_from = -1;
     char reason[K_LOG_LINE_LEN], blocker[K_LOG_LINE_LEN] = "";
     char name[64];
     k_pose_t player;
@@ -717,7 +806,7 @@ static void PlanGoal(goal_t *goal)
     {
         char text[K_LOG_LINE_LEN];
         goal_type_t type;
-        int param, key_door;
+        int param, want, key_door;
 
         if (WasTried(goal, candidates[i].at))
         {
@@ -730,14 +819,33 @@ static void PlanGoal(goal_t *goal)
         K_Path_Find(&scratch, start, player.cell, candidates[i].at);
         K_Path_Describe(&scratch, text, sizeof(text));
 
-        // A switch that needs a key (red bars, say): nothing happens until
-        // the player has it.
+        // A switch that needs a key (red bars, say), or stands behind a door
+        // that does: nothing happens until the player has it.
         if (candidates[i].line >= 0)
         {
             int key = K_Specials_LockKey(K_Specials_LineSpecial(candidates[i].line));
+            int door = -1;
+            char needs[64];
+
+            if ((key < 0 || K_Specials_HasKey(key))
+             && candidates[i].kind == K_GOAL_USE_LINE)
+            {
+                key = DoorKeyInTheWay(&candidates[i], &door);
+            }
 
             if (key >= 0 && !K_Specials_HasKey(key))
             {
+                if (door >= 0)
+                {
+                    M_snprintf(needs, sizeof(needs), "is behind a door at line %d that "
+                               "needs the %s key", door, K_Specials_KeyName(key));
+                }
+                else
+                {
+                    M_snprintf(needs, sizeof(needs), "needs the %s key",
+                               K_Specials_KeyName(key));
+                }
+
                 if (scratch.result != K_PATH_FOUND && scratch.result != K_PATH_BLOCKED)
                 {
                     M_snprintf(reason, sizeof(reason), "no way to the %s: %s",
@@ -756,15 +864,15 @@ static void PlanGoal(goal_t *goal)
                         blocked_score = score;
                         fix_type = GOAL_KEY;
                         fix_param = key;
-                        M_snprintf(blocker, sizeof(blocker), "the %s needs the %s key",
-                                   candidates[i].what, K_Specials_KeyName(key));
+                        fix_want = 0;
+                        M_snprintf(blocker, sizeof(blocker), "the %s %s",
+                                   candidates[i].what, needs);
                     }
                 }
                 else
                 {
-                    M_snprintf(reason, sizeof(reason), "the %s needs the %s key, and "
-                               "there is none to get", candidates[i].what,
-                               K_Specials_KeyName(key));
+                    M_snprintf(reason, sizeof(reason), "the %s %s, and there is none to "
+                               "get", candidates[i].what, needs);
                     KeepReason(reason);
                 }
 
@@ -783,7 +891,7 @@ static void PlanGoal(goal_t *goal)
             }
         }
         else if (scratch.result == K_PATH_BLOCKED
-              && RouteFix(&scratch, &type, &param, &key_door))
+              && RouteFix(&scratch, &type, &param, &want, &key_door))
         {
             double score = scratch.blocked_count * FIXABLE_COST + scratch.length;
 
@@ -793,6 +901,7 @@ static void PlanGoal(goal_t *goal)
                 blocked_score = score;
                 fix_type = type;
                 fix_param = param;
+                fix_want = want;
                 fix_portal = scratch.blocked_portal;
                 fix_from = scratch.blocked_from;
 
@@ -835,6 +944,7 @@ static void PlanGoal(goal_t *goal)
         {
             fix->portal = fix_portal;
             fix->from = fix_from;
+            fix->want = fix_want;
         }
 
         GoalName(fix, fix_name, sizeof(fix_name));

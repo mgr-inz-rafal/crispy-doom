@@ -33,6 +33,14 @@ typedef enum
     K_TRIGGER_SHOOT,        // a gun switch: hit it with a hitscan attack
 } k_trigger_t;
 
+// Which way a mover line moves the sectors it targets (flags).
+typedef enum
+{
+    K_MOVE_FLOOR_UP = 1,
+    K_MOVE_FLOOR_DOWN = 2,
+    K_MOVE_CEILING_UP = 4,
+} k_move_t;
+
 // A key lying in the level.
 typedef struct
 {
@@ -51,6 +59,10 @@ k_trigger_t K_Specials_ExitTrigger(int special, int *secret);
 // doors that open, floors, lifts, stairs, ceilings that rise. K_TRIGGER_NONE
 // for anything else (doors that close, crushers, lights, teleporters).
 k_trigger_t K_Specials_MoverTrigger(int special);
+
+// How a mover line moves the sectors it targets, as k_move_t flags (a lift
+// goes down and comes back up); 0 for any other special.
+int K_Specials_MoverMoves(int special);
 
 // A line's live special: one-shot lines lose theirs once used.
 int K_Specials_LineSpecial(int line);

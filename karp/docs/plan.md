@@ -791,14 +791,28 @@ it cannot be reached):
 - if none is open, the candidate whose blocked route is cheapest wins (fewest blocked crossings,
   then shortest), and the fix for its **first** blocked crossing is pushed (`FixFor`):
   - a **locked door** -> GET KEY of its colour, if such a key lies in the level;
-  - a **step too high or too little headroom** -> USE TRIGGER for the sector beyond, or the one
-    the player stands in, if some line moves it;
+  - a **step too high** -> USE TRIGGER for the sector beyond, if some line lowers its floor (a
+    lift does too), or for the one the player stands in, if some line raises its floor; never
+    one that lowers the floor the player stands on, which only makes the step taller (Doom II
+    MAP27: the bot lowered the arm it stood on, to climb the pillar beside it, and burned a
+    dozen walk-over lines on that);
+  - **too little headroom** -> USE TRIGGER for the sector beyond or the one the player stands
+    in, if some line lowers its floor or raises its ceiling;
   - a **gap too narrow** -> USE TRIGGER for a sector that narrows it (`K_Graph_NarrowSectors`),
     e.g. bars that lower; else for the sector on either side of the crossing, e.g. a lift that
     takes the player down to where the way on has headroom (Doom II MAP05: a passage whose
-    ceiling is level with the floor in front of it until that floor, a lift, comes down);
+    ceiling is level with the floor in front of it until that floor, a lift, comes down); again
+    only lines that lower a floor or raise a ceiling;
+  - which way a line moves its sectors comes from its special (`K_Specials_MoverMoves`: floor
+    up, floor down, ceiling up; a lift both down and up), and a USE TRIGGER goal remembers the
+    moves that would help: only lines that make one of them are its candidates;
   - a **switch that needs a key** the player lacks (remote locked doors 99 and 133-137, e.g.
-    Doom II MAP02's red bars) -> GET KEY of that colour, before going to press it;
+    Doom II MAP02's red bars), or stands behind a door that does -> GET KEY of that colour,
+    before going to press it. Use stops at the first line with a special on its way, so a
+    locked door between the press spot and the switch takes the press (Doom II MAP27: switch
+    727 at the back of a closet behind the blue door; the bot pressed three times at the door,
+    gave the switch up as doing nothing, and never went for the blue key). A one-shot door
+    loses its special once opened, so then the press gets through;
   - **keys first:** if a door further along the same route needs a key that lies in the level,
     GET KEY is pushed instead of the fix for the first crossing. A key stays, while what a switch
     does may not last until the player gets there: on Doom II MAP12 the bot ran 11,000 units to
@@ -1280,6 +1294,22 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      turned again. Its centre had drifted a unit or two into a sliver of a cell along the pit edge
      (cell 96), which the route had already passed through, and that counted as being pushed
      back (3.4). Now it carries on: yellow key 1.4 s sooner, **48.5 s**.
+   - MAP27: the red skull key sits on a central pillar (sector 50, floor 192) between four arms
+     (sectors 51, 52, 58, 60, floor 128). About 28 walk-over lines (38, seven per arm, spread
+     over the map and round the pillar) lower the arms to 0; switch 727 (71, S1, turbo lower)
+     lowers the pillar to its highest neighbouring floor plus 8, and sits behind the blue door.
+     First run: the bot pressed 727 at the blue door without the key (the door took the press),
+     gave the switch up as doing nothing, then went after the step from an arm up onto the
+     pillar by lowering that arm again: three minutes of walk-over lines that moved nothing, a
+     yellow key fetched for one of them, past the blue key without picking it up. Now fixes go
+     the right way, and a switch behind a locked door needs that key (3.5): yellow key, blue
+     key, switch 727, red key, **finished in 80.9 s**. Pressed with an arm still up, 727 would
+     leave the pillar at 136, out of reach for good (the arms only go down, and 727 is the only
+     line tagged 32): a softlock a human avoids by crossing the arm lines on the way, as the
+     bot's routes did too. Not handled: predicting where such a one-shot lowering leaves the
+     sector, and lowering its neighbours first. MAP17 no longer chases walk-over line 375: it
+     opens a door (sector 147) whose floor is 224 above the bot's, and a ceiling going up does
+     nothing for a step. The rest pass as before.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1400,7 +1430,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  05, 10, 12, 16, 18, 24, 26 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
+  05, 10, 12, 16, 18, 24, 26, 27 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the

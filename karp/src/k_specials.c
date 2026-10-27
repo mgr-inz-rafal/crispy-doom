@@ -229,6 +229,44 @@ k_trigger_t K_Specials_MoverTrigger(int special)
     }
 }
 
+int K_Specials_MoverMoves(int special)
+{
+    switch (special)
+    {
+        // Doors that open:
+        case 2: case 4: case 29: case 46: case 61: case 63: case 86: case 90:
+        case 99: case 103: case 105: case 106: case 108: case 109: case 111:
+        case 112: case 114: case 115: case 133: case 134: case 135: case 136:
+        case 137:
+            return K_MOVE_CEILING_UP;
+
+        // Floors that rise, stairs:
+        case 5: case 7: case 8: case 14: case 15: case 18: case 20: case 22:
+        case 24: case 30: case 47: case 58: case 59: case 64: case 66: case 67:
+        case 68: case 69: case 91: case 92: case 93: case 95: case 96: case 100:
+        case 101: case 119: case 127: case 128: case 129: case 130: case 131:
+        case 132: case 140:
+            return K_MOVE_FLOOR_UP;
+
+        // Floors that go down, the hole of a donut (its ring rises):
+        case 9: case 19: case 23: case 36: case 37: case 38: case 45: case 60:
+        case 70: case 71: case 82: case 83: case 84: case 98: case 102:
+            return K_MOVE_FLOOR_DOWN;
+
+        // Lifts, which come back up:
+        case 10: case 21: case 53: case 62: case 87: case 88: case 120: case 121:
+        case 122: case 123:
+            return K_MOVE_FLOOR_DOWN | K_MOVE_FLOOR_UP;
+
+        // A ceiling that rises over a floor that goes down:
+        case 40:
+            return K_MOVE_CEILING_UP | K_MOVE_FLOOR_DOWN;
+
+        default:
+            return 0;
+    }
+}
+
 int K_Specials_LineSpecial(int line)
 {
     return lines[line].special;
