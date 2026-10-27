@@ -1341,6 +1341,17 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      are hardcoded per map, not built into the brain). Skipped for now.
    - MAP31: **finished in 41.6 s** at the first try, through twelve doors to the normal exit
      switch (line 549); the secret exit to MAP32 was the longer way.
+   - MAP32: not tried. The exit opens (the doors tagged 666) when the last of four Commander
+     Keens dies (`A_KeenDie`). Keens hang still and never fight back, a first target for
+     aiming and shooting, but with `-nomonsters` they never spawn (they count as kills,
+     `P_SpawnMapThing`), and with monsters there are 28 Wolfenstein SS and a Cyberdemon.
+     **Needs combat**, efficient enough for a Cyberdemon. Skipped for now.
+
+   **Where Doom II stands** after the first pass, with `-nomonsters`: 11 maps finish (MAP01,
+   05, 10, 12, 16, 18, 24, 26, 27, 28, 31); 14 need gaps or jumps (follow-up 7: gap links for
+   MAP04, 22, 25; running jumps for MAP02, 06, 08, 09, 11, 13, 14, 15, 20, 21, 29); 4 need solid
+   things (follow-up 3: MAP03, 17, 19, 23); 3 need monsters and combat (follow-up 10 and later
+   stages: MAP07, 30, 32).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
