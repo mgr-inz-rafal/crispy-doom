@@ -743,6 +743,14 @@ static ImU32 RouteColor(const k_path_t *path, int alpha)
                                         : IM_COL32(255, 140, 50, alpha);
 }
 
+// The legs taken carefully, near an edge: mint on a blue route, pale amber
+// on an orange one.
+static ImU32 CarefulColor(const k_path_t *path)
+{
+    return path->result == K_PATH_FOUND ? IM_COL32(70, 235, 160, 255)
+                                        : IM_COL32(255, 210, 120, 255);
+}
+
 static void DrawRouteCells(ImDrawList *draw, const k_map_t *map,
                            const k_path_t *path, const ImVec2 &center)
 {
@@ -757,12 +765,14 @@ static void DrawRouteCells(ImDrawList *draw, const k_map_t *map,
 }
 
 // The line to follow, its waypoints, and on a blocked route the crossing
-// that blocks it, in red. A teleport is dashed.
+// that blocks it, in red. A teleport is dashed. Legs taken carefully, and
+// the waypoints between them, stand out in their own colour.
 static void DrawRoute(ImDrawList *draw, const k_path_t *path,
                       const ImVec2 &center)
 {
     float thickness = SDL_max(1.0f, ui_scale);
     ImU32 color = RouteColor(path, 255);
+    ImU32 careful = CarefulColor(path);
     int first = 0;
 
     screen_points.clear();
@@ -796,9 +806,18 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
         first = i + 1;
     }
 
+    for (int i = 0; i < path->num_points - 1; ++i)
+    {
+        if (!path->jumps[i] && K_Nav_CarefulLeg(i))
+        {
+            draw->AddLine(screen_points[i], screen_points[i + 1], careful, 2.0f * thickness);
+        }
+    }
+
     for (int i = 1; i < path->num_points - 1; ++i)
     {
-        draw->AddCircleFilled(screen_points[i], 2.5f * ui_scale, color);
+        draw->AddCircleFilled(screen_points[i], 2.5f * ui_scale,
+                              K_Nav_CarefulLeg(i - 1) && K_Nav_CarefulLeg(i) ? careful : color);
     }
 
     const k_navstatus_t *nav = K_Nav_GetStatus();

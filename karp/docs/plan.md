@@ -955,6 +955,9 @@ the config; Karp simply ignores it while it owns the controls.
     per waypoint, and a goal ring. Blue line and green ring when the route is open; orange line,
     the blocking crossing as a thick red line, and a red ring when it is blocked. A teleport is a
     dashed purple line. While the bot drives, a white ring marks the waypoint it is driving to.
+    Legs taken carefully near an edge (3.4: into a careful waypoint, braked for, and out of it,
+    drift first) are mint on a blue route and pale amber on an orange one, as are the waypoints
+    between them (`K_Nav_CarefulLeg`, from the marks made when the route is planned).
   - Player arrow (live position and heading).
   - Hover tooltip: subsector # (and which of its cells), sector #, live floor/ceiling, area,
     neighbours by crossing ("4 neighbours: 3 open, 1 step too high").
@@ -1336,6 +1339,22 @@ Each milestone builds and runs; the user reviews and commits between milestones.
          end the level when the boss dies. Doom II MAP30 ends when the Icon of Sin's brain dies.
        The brain would need a goal like KILL ALL <kind>, pushed when a route is blocked by a
        sector only such a death moves. Without monsters those levels cannot be finished.
+   11. **Never stuck for good** (the user's rule). The bot never decides it is stuck for good:
+       it keeps looking for a way, and when there is none it idles (later: fetches weapons and
+       ammo meanwhile) and tries again. A map can look blocked and still open later through
+       something out of the bot's hands: a monster in a distant room crossing a walk-over line,
+       a very long moving floor, a lift a queue of monsters keeps turning back (3.4 already never
+       gives up on a ride). Limits against thrashing stay, but they pause and retry instead of
+       ending things. What still gives up for good today, all in the brain:
+       - a goal whose candidates all fail is failed for the rest of the level, never pushed
+         again; a failed GO TO EXIT is not added again, and the bot stands idle until a click;
+       - a candidate that did not work out (nav failed, stuck, presses that moved nothing) is
+         never chosen again for that goal;
+       - a line is worked at most 3 times a level;
+       - waiting while sectors move ends after 15 seconds with a failure.
+       To do: failures, tried candidates and line uses expire (after a while, or when the world
+       changes: a sector moved, a door opened, the player is somewhere new), and an emptied
+       stack idles and plans GO TO EXIT again from time to time.
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -1345,6 +1364,14 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 - Run (Doom II):
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
+- Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
+  05, 10, 12, 16, 18 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
+  `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
+  logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
+  of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the
+  exe's folder, which instances sharing it would overwrite. Seven maps take 77 s instead of over
+  five minutes, with the same results to the tenth of a second as one at a time. `-Maps '24'
+  -Seconds 150` runs other maps.
 - Regression (no Karp params): no console window, mouse grabbed as usual, closing the window
   behaves as before.
 - `-autoplay` alone: no console window; log lines in stdout and `karp.log`.

@@ -1791,6 +1791,14 @@ const k_path_t *K_Nav_GetPath(void)
     return have_goal ? &path : NULL;
 }
 
+// As SteerAlongRoute: the leg into a careful point brakes for it, the leg
+// out of it is steady.
+int K_Nav_CarefulLeg(int leg)
+{
+    return have_goal && leg >= 0 && leg < path.num_points - 1
+        && (careful[leg] || careful[leg + 1]);
+}
+
 const k_navstatus_t *K_Nav_GetStatus(void)
 {
     return &status;

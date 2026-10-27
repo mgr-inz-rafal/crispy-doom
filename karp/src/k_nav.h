@@ -116,6 +116,12 @@ void K_Nav_Clear(void);
 // The route to the current goal, or NULL when there is no goal.
 const k_path_t *K_Nav_GetPath(void);
 
+// Whether the route's leg from point `leg` to the next is taken carefully,
+// near an edge the player could fall over: into a careful waypoint (a
+// slower corner, braked for early) or out of it (drift cancelled before
+// speeding up). Marked when the route is planned.
+int K_Nav_CarefulLeg(int leg);
+
 const k_navstatus_t *K_Nav_GetStatus(void);
 
 k_navtuning_t *K_Nav_Tuning(void);
