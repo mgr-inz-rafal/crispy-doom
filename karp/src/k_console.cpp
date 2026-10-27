@@ -642,6 +642,37 @@ static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
     DrawTeleporters(draw, graph, center);
 }
 
+// Solid things as the squares that stop the player: barrels green, other
+// things grey, faint once gone (a barrel blew up).
+static void DrawBlocks(ImDrawList *draw, const k_map_t *map, const ImVec2 &center)
+{
+    float thickness = SDL_max(1.0f, ui_scale);
+
+    for (int i = 0; i < map->num_blocks; ++i)
+    {
+        const k_block_t *block = &map->blocks[i];
+        bool stands = K_Map_BlockStands(i) != 0;
+        ImU32 color = block->barrel ? IM_COL32(120, 200, 80, 255)
+                                    : IM_COL32(190, 190, 200, 255);
+        ImVec2 top_left = MapToScreen(center, block->at.x - block->radius,
+                                      block->at.y + block->radius);
+        ImVec2 bottom_right = MapToScreen(center, block->at.x + block->radius,
+                                          block->at.y - block->radius);
+
+        if (!stands)
+        {
+            color = (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 70);
+        }
+        else
+        {
+            draw->AddRectFilled(top_left, bottom_right,
+                                (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 60));
+        }
+
+        draw->AddRect(top_left, bottom_right, color, 0.0f, 0, thickness);
+    }
+}
+
 // "4 neighbours: 3 open, 1 step too high"
 static std::string DescribeNeighbours(const k_graph_t *graph, int index)
 {
@@ -682,6 +713,7 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
     const k_graph_t *graph = K_Graph_Get();
     std::string neighbours;
     char cell_of[32] = "";
+    char under[64] = "";
     double floor, ceiling;
 
     if (graph->generation == map->generation)
@@ -695,6 +727,13 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
                  index - ss->first_cell + 1, ss->num_cells);
     }
 
+    if (cell->block >= 0)
+    {
+        snprintf(under, sizeof(under), "\nUnder %s %d (%s)",
+                 map->blocks[cell->block].barrel ? "barrel" : "solid thing", cell->block,
+                 K_Map_CellBlock(index) >= 0 ? "standing" : "gone");
+    }
+
     ProjectCell(map, cell, center);
     draw->AddConvexPolyFilled(screen_points.data(), cell->num_points,
                               IM_COL32(255, 255, 255, 40));
@@ -704,9 +743,9 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
 
     K_Map_SectorHeights(ss->sector, &floor, &ceiling);
     ImGui::SetTooltip("Subsector %d%s%s\nSector %d\nFloor %.0f, ceiling %.0f\n"
-                      "%d vertices, area %.0f\n%s", cell->subsector, cell_of,
+                      "%d vertices, area %.0f%s\n%s", cell->subsector, cell_of,
                       ss->foreign_floor ? " (other-sector floor)" : "", ss->sector,
-                      floor, ceiling, cell->num_points, cell->area,
+                      floor, ceiling, cell->num_points, cell->area, under,
                       neighbours.c_str());
 }
 
@@ -917,8 +956,8 @@ static void DrawMapView(void)
         ImGui::SetTooltip("Where neighbouring cells meet, from live sector "
                           "heights.\nGreen: open both ways. Yellow: one way "
                           "only (arrow), e.g. a drop.\nBlue: a door or lift "
-                          "the bot can work.\nRed: blocked, e.g. a locked door "
-                          "or a step too high.");
+                          "the bot can work.\nRed: blocked, e.g. a locked door, "
+                          "a step too high or a solid thing.");
     }
 
     ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -1038,6 +1077,8 @@ static void DrawMapView(void)
         }
     }
 
+    DrawBlocks(draw, map, center);
+
     const k_graph_t *graph = K_Graph_Get();
 
     if (view_graph && graph->generation == map->generation)
@@ -1143,8 +1184,17 @@ static void DrawMapTab(void)
         if (ImGui::IsItemHovered())
         {
             ImGui::SetTooltip("Subsectors whose floor is not convex (e.g. a wall "
-                              "corner inside), so it is split into several "
-                              "cells.");
+                              "corner inside), or holds a solid thing, so it is "
+                              "split into several cells.");
+        }
+
+        StatRow("Solid things", "%d (%d barrels)", map->num_blocks, map->num_barrels);
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Solid things that are not monsters: decorations, "
+                              "barrels. Cut out of the floor cells like pillars; "
+                              "the cells under one are blocked while it stands.");
         }
 
         StatRow("Without area", "%d", map->no_area_subsectors);

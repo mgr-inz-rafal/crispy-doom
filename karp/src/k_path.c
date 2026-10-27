@@ -522,9 +522,10 @@ static void Reconstruct(k_path_t *path)
 static void CellHeights(int cell, double *floor, double *ceiling);
 
 // Whether a point lies on a stretch of a cell's border that is not a way
-// on: a wall, or a portal to a floor more than 24 higher or lower. Not a
-// ledge's edge either: the player would fall off it (Doom II MAP16: both
-// crossings of a landing on its open edge, the leg between them along it).
+// on: a wall, a portal to a floor more than 24 higher or lower, or to a
+// cell under a solid thing. Not a ledge's edge either: the player would
+// fall off it (Doom II MAP16: both crossings of a landing on its open
+// edge, the leg between them along it).
 static boolean OnWall(int cell, k_vec2_t point)
 {
     const k_cell_t *c = &map->cells[cell];
@@ -555,7 +556,8 @@ static boolean OnWall(int cell, k_vec2_t point)
         CellHeights(graph->links[i].neighbor, &neighbor_floor, &neighbor_ceiling);
 
         if (SegmentDistance(portal->a, portal->b, point) < BORDER_DISTANCE
-         && fabs(neighbor_floor - floor) <= LEDGE_HEIGHT)
+         && fabs(neighbor_floor - floor) <= LEDGE_HEIGHT
+         && K_Map_CellBlock(graph->links[i].neighbor) < 0)
         {
             return false;
         }
@@ -907,6 +909,26 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
         case K_CROSS_NARROW:
             M_snprintf(buf, buf_len, "a gap narrower than the player at %s", where);
             break;
+
+        case K_CROSS_THING:
+        {
+            const k_portal_t *portal = &g->portals[path->blocked_portal];
+            int block = K_Map_CellBlock(portal->cell[0] == path->blocked_from
+                                        ? portal->cell[1] : portal->cell[0]);
+            const k_block_t *b = block >= 0 ? &K_Map_Get()->blocks[block] : NULL;
+
+            if (b != NULL)
+            {
+                M_snprintf(buf, buf_len, "%s at (%.0f,%.0f) in the way",
+                           b->barrel ? "a barrel" : "a solid thing", b->at.x, b->at.y);
+            }
+            else
+            {
+                M_snprintf(buf, buf_len, "a solid thing in the way at %s", where);
+            }
+
+            break;
+        }
 
         default:
             M_snprintf(buf, buf_len, "a one-sided line at %s", where);

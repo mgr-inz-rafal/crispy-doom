@@ -51,7 +51,22 @@ typedef struct
     k_vec2_t min, max;      // bounding box
     int centroid_mismatch;  // the engine puts the centroid in another
                             // subsector
+    int block;              // the block whose square it lies under, -1 if
+                            // none (under several: the first)
 } k_cell_t;
+
+// A solid thing that is not a monster: a decoration (a torch, lamp,
+// column, tree...), a barrel, a voodoo doll. The engine stops the player
+// at the square of its radius, at any height (PIT_CheckThing), and does
+// not slide the player along it as along a wall. Its square is cut out of
+// the floor cells like a pillar, but the cells under it stay: crossing
+// into them is blocked only while the thing stands (K_Map_CellBlock).
+typedef struct
+{
+    k_vec2_t at;            // its centre, where it stood at level load
+    double radius;          // half its square's side
+    int barrel;             // a barrel: shooting it blows it up
+} k_block_t;
 
 typedef struct
 {
@@ -90,6 +105,10 @@ typedef struct
     k_cell_t *cells;
     int num_points;
     k_vec2_t *points;       // all cell polygons, back to back
+
+    int num_blocks;
+    k_block_t *blocks;
+    int num_barrels;
 
     k_vec2_t min, max;      // bounding box of all lines
 
@@ -147,6 +166,18 @@ int K_Map_SubsectorAt(double x, double y);
 
 // Live floor and ceiling heights of a sector.
 void K_Map_SectorHeights(int sector, double *floor, double *ceiling);
+
+// Whether a block's thing still stands where it stood: a barrel that blew
+// up is gone, and so is one pushed off its square (it is then an obstacle
+// that moves, like a monster). Live, judged once a tic.
+int K_Map_BlockStands(int block);
+
+// A block that stands over the cell (it lies under its square), or -1.
+int K_Map_CellBlock(int cell);
+
+// The standing blocks whose squares reach into the box from min to max, up
+// to max_found. Returns how many.
+int K_Map_BlocksNear(k_vec2_t min, k_vec2_t max, int *found, int max_found);
 
 // The local player's position and facing. Returns 0 when not in a level.
 int K_Map_GetPlayer(k_pose_t *pose);

@@ -239,7 +239,9 @@ Output (`k_map_t`, plain C types):
 - `sectors[]`: index into engine `sectors[]`. Heights are read **live**: floors will move in later
   stages, and loading a savegame changes heights after `P_SetupLevel`.
 - `cells[]`: convex pieces of floor, each with its subsector, polygon, area-weighted centroid and
-  bbox. These are the nodes of the navigation graph (see below).
+  bbox, and the block whose square it lies under, if any. These are the nodes of the navigation
+  graph (see below).
+- `blocks[]`: the solid things that are not monsters (see below).
 - `subsectors[]`: sector index, its range of cells, total floor area and centroid, and flags.
 - Map bounds for the console view.
 
@@ -268,6 +270,25 @@ region need not stop at its own walls:
   whose segs belong to other leaves; clipping by the leaf's own segs keeps that void as "floor".
 The M4 hole check (3.2.1) found both: holes of up to 1,000+ units of border.
 
+**Solid things (blocks).** A solid thing stops the player at the square of its radius plus the
+player's, at any height (`PIT_CheckThing`; Karp supports vanilla levels only, so crispy's walk
+over/under option stays off), and the engine does not slide the player along it as along a
+wall. At level load every solid thing that is not a monster becomes a **block**: decorations
+(torches, lamps, columns, trees, hanging bodies), barrels, voodoo dolls (`k_block_t`: its centre,
+radius, and whether it is a barrel). Monsters (`MF_COUNTKILL`, lost souls) move about: they are
+steered round, not built into the map. Each floor piece a block's square overlaps is cut into
+the piece under the square and up to four round it (edge by edge round the square, what lies
+beyond the edge is kept and the rest goes on), so the square is cut out like a pillar and
+everything built for walls works round it: portals, narrow crossings, pinches, waypoints kept
+clear (3.2.1). The cells under a square stay, though: a block is judged live
+(`K_Map_BlockStands`, once a tic), by looking for a solid thing of its type within 4 units of
+where it stood, in the blockmap, never by pointer (a removed thing's memory is used again). A
+barrel that blows up is gone, and one pushed further off its square counts as gone too (then an
+obstacle that moves, like a monster). `K_Map_CellBlock` gives the standing block over a cell;
+crossing into such a cell is blocked (3.2.1). Blocks are bucketed in a 128-unit grid
+(`K_Map_BlocksNear`). Doom II has 0-63 per map, most of them decorations; MAP23 has 208
+barrels, and its cells go from 200 to 1,696.
+
 **Sector at a point** (`SectorAtPoint`): a ray from the point finds the first linedef it hits; the
 point is in that line's front sector if it is on the line's right, else its back sector, and in
 void if that is a one-sided line seen from behind (or nothing is hit). Three rays at
@@ -281,7 +302,8 @@ player is 32 units wide. Each leaf is classified:
 - **No area** (harmless, no cells): the BSP region itself has no usable floor. These are leaves
   from splitting twice along the same line, and hairline slivers from vertex rounding.
 - **Behind walls** (harmless, no cells): every piece of the region is void, e.g. inside a pillar.
-- **Split** (informational): the floor is not convex and needs several cells.
+- **Split** (informational): the floor is not convex, or holds a solid thing, and needs several
+  cells.
 - **Other-sector floor** (informational): some piece lies, by the surrounding lines, in a
   different sector than the leaf's (sector tricks, buggy nodes). The engine uses the leaf's sector
   for floor height there, so the graph does too.
@@ -390,7 +412,20 @@ become passable after an action, also judged live, with the engine's own rules:
   an open route that is not much longer still wins.
 
 Doors and lifts worked from elsewhere (remote switches, walk-over lines) are the brain's job: it
-goes and works the line first (3.5). Not yet: things blocking a doorway.
+goes and works the line first (3.5).
+
+**Solid things** (`K_CROSS_THING`). Crossing into a cell under a standing block (3.2) is blocked,
+whatever the heights say: the player gets round a solid thing, never past it, until it is gone
+(a barrel blown up). Nothing the brain can do fixes it yet (shooting barrels is to come), so the
+pathfinder costs it as a crossing with no fix. Blocks are obstacles in every clearance check
+below (narrow crossings, pinches, waypoints, `K_Graph_Clearance`), at any height, with the
+distance measured as the engine collides two boxes: the larger of the x and y distances to the
+block's square. So a gap between a thing and a wall, or between two things, is judged like any
+other: Doom II MAP19's rows of blue torches, 32 apart across and 48 along, are walls (their
+squares, grown by the player's radius, overlap); MAP23's row of barrels north of the start, 32
+apart, leaves 12-unit gaps, a fence; its rows further down leave 44, a slalom the player gets
+through. Chords also start at the corners of block squares on a cell's border, since a cell
+along one side of a square has the square's corners partway along an edge.
 
 **Narrow gaps** (`K_CROSS_NARROW`). The cells treat the player as a point, so a crossing the
 heights let through is still no way if it is narrower than the player: gaps between bars or
@@ -521,8 +556,9 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
   the leg between them runs along that edge. That is common and harmless along a partition line,
   where the edge is all portals, but between two doorways in one wall it would scrape the wall. A
   leg that runs along a stretch of border that is not a way on (sampled at 1/4, 1/2 and 3/4) goes
-  through the cell's centroid instead. Not a way on: a wall, or a portal to a floor more than 24
-  higher, or more than 24 lower, a ledge's edge the player would fall off. On Doom II MAP16 both
+  through the cell's centroid instead. Not a way on: a wall, a portal to a floor more than 24
+  higher, or more than 24 lower, a ledge's edge the player would fall off, or a portal to a cell
+  under a standing solid thing (the side of its square). On Doom II MAP16 both
   crossings of a landing lay on its open edge; followed at careful speed (3.4), the leg along it
   dropped the bot back to the start, and the route sent it up again, round and round.
 - **Output** (`k_path_t`): the result, the route's cells and the portals between them (for
@@ -624,6 +660,17 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
    (`K_Map_StandingCell`), not the one under its centre: with the centre past a ledge's edge, the
    ledge looked like a wall to climb from the pit, and the player was pushed off it (MAP17).
 
+   **Going round solid things** (`AvoidBlocks`). The engine slides the player along lines, not
+   things (`P_SlideMove` traces lines only): against a solid thing the move just fails, a whole
+   step before the boxes touch. Dropping the part of the velocity toward it, as for walls,
+   leaves nothing when a leg runs at it head on: Doom II MAP27's route passed along the edge of
+   a skull pile's square (both waypoints 27 units clear, the leg between them 0), and the bot
+   stood 22 units off it until it gave up. So within 32 units of a standing block, the part of
+   `v_des` toward its square is turned along its side instead, the speed kept: the way the
+   target lies, or round the side the player is on if the target is straight past it. Touching
+   (closer than 17), the player eases away as from walls. This is the obstacle avoidance that
+   monsters will use too.
+
    **Careful near edges.** A waypoint within 40 units of an edge the player could drop over but
    not climb back (`K_Graph_DropDistance`: a floor more than 24 below), where the route turns by
    more than 20 degrees or steps down, is taken at no more than 6 units/tic, less for a sharp
@@ -652,7 +699,12 @@ The controller settings are adjustable in the console's Bot tab, but not saved y
 **Line goals.** Besides a point, nav can be sent to work a line (`K_Nav_SetLineGoal`): press a
 switch, or walk across a line. `K_Nav_LineGoalPoint` gives the spot: 24 units in front of a
 switch's front side (use only works from there), or just past a walk-over line on the side away
-from the player; 32, 16 and 40 units are tried in turn until the spot is on floor. On arriving at
+from the player; 32, 16 and 40 units are tried in turn until the spot is on floor with the
+player's box a unit clear of every solid thing. A walk-over line can be crossed anywhere along
+it, so for one the spots along it are tried too, from the middle out (Doom II MAP27: a skull
+rock inside a diamond of walk-over lines, 11 units from each, leaves room to cross only near
+their ends; every spot past a middle lay under the rock, and the goal had no way there). If no
+spot is clear of things, the first one on floor is used, as before. On arriving at
 a switch's spot the player presses use as for a door (below), facing the line; a press after
 which nothing happens within 15 tics is repeated, 3 times at most. What the switch does is up to
 the caller (an exit ends the level). A walk-over line works only if the player crosses it, but
@@ -1353,6 +1405,55 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    things (follow-up 3: MAP03, 17, 19, 23); 3 need monsters and combat (follow-up 10 and later
    stages: MAP07, 30, 32).
 
+   **Solid things** (follow-up 3, first part: blocks in the map, 3.2, 3.2.1, 3.4):
+   - MAP03: **finished in 33.6 s**: the route goes round the torch on the way to switch 445.
+   - MAP27 broke twice on the way and was fixed. A skull rock stands inside a diamond of
+     walk-over lines, 11 units from each: every spot past a line's middle lay under the rock, so
+     the second line of the diamond had no way to it; walk-over lines are now tried along their
+     length (3.4). Then a leg ran along the edge of a skull pile's square and the bot stood stuck
+     22 units off it, head on: solid things are now gone round in steering (3.4). Finished in
+     80.3 s, as before. Watched one by one, two things to improve (not fixed yet): the lift
+     beside the skull rock is lowered at the start long before it is any use (follow-up 12),
+     and a one-way door that closes before the bot gets back to it costs a switch (follow-up
+     13).
+   - MAP17: the barrels on the staircase are planned round now, and the bot gets all three keys
+     (blue at 63 s, yellow at 84 s), working seven switches and five lift rides. Then the way to
+     the exit (floor 600) is a step 112 high (line 935) into a room that is also reached
+     through a block 24 wide (sector 80, tag 30) that a switch far off lowers (line 1101). The
+     route's first blocked crossing is the step, which nothing fixes, so the brain never looks
+     further along the route; not a solid-things problem. Watched one by one (the user: a nice
+     slalom between the barrels), two more things:
+     - **The ditch.** Switch 491 (tag 19) sits in a 48-unit alcove at the end of a ditch 64
+       wide and 288 deep (sector 40). The bot drops in to press it, and the switch raises the
+       ditch floor too, at half a unit a tic, so it rides 15 s back up. With jumps (follow-up 7)
+       the bot could keep out of the ditch (the user's note, optional). Also possible without
+       jumps: in vanilla, use ignores height (`PTR_UseTraverse` only needs an opening on the way,
+       here 168 and 48 units), so the switch can be pressed from the ditch's edge, 288 above.
+       The line goal spot (3.4) only looks straight out from the switch, which is all ditch; a
+       spot on higher floor within use range would save the drop and the ride. An idea, for the
+       user to decide.
+     - **South staircase, then north** after the blue door: not a detour. The yellow key lies on
+       lift 164 (floor 224), ringed by a walkway at the same height (sector 165) that everything
+       around is 80-160 below, so the only way on is to lower the lift and step on from the west
+       (floor 64). That floor is reached by dropping past walk-over line 722 from the area
+       behind door 153, and door 153 opens only from switch 677, at the top of the south
+       staircase, a dead end. So: up the south stairs for the switch, back north through the
+       door, down past line 722 (which lowers the lift), onto the lift. The brain chose the door
+       route because no route avoided the door (one with the lift alone would have cost less).
+   - MAP19: the rows of blue torches along the river are walls (3.2.1), so the old route is
+     closed, and now every route left passes a gate of three key bars (sectors 12-14, 8 and 16
+     wide with 8-unit gaps, opened from the far side) that no single door opens wide enough.
+     GO TO EXIT fails at once. The map's real way round is still to be found.
+   - MAP23: the start hall holds 208 barrels: a fence north of the start (12-unit gaps), rows
+     with 44-unit gaps down the hall (passable). The planner prefers the route east over a
+     128-unit step at line 9, since every route out crosses something unfixable further on,
+     presumably a barrel fence to blow up (shooting barrels: follow-up 3, second part). Earlier
+     the brain took the door switch at line 9 as the fix for that step, which it is not (it
+     raises the strip's ceiling and leaves its floor 128 up); since the fixes go by direction
+     (3.5), it no longer does.
+   Regression set unchanged in time (MAP26 49.1 s, MAP28 72.7 s, MAP12 77.8 s), MAP21 ends as
+   before. Now 12 maps finish (MAP03 added to the regression set).
+
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
    so the bot waits for as long as the sector moves; a door may not open high enough, and how
@@ -1366,18 +1467,26 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       portals are split per line (3.2.1), so one along several collinear lines no longer misses
       an impassable one among them.
    3. **Solid things.** Torches, lamps, barrels, columns, trees and the like block the player but
-      are not part of the geometry. Read the solid non-monster things at level load and block the
-      parts of portals and cells they cover, widened by the player's radius; barrels can be
-      destroyed, so check those live. In the engine a solid thing is a box of its radius, of any
+      are not part of the geometry. In the engine a solid thing is a box of its radius, of any
       height (no heights are checked), and the player does not slide along it as along a wall:
-      it stops dead. By the user's choice this is a **topic of its own**, like jumps, to be
-      thought through first: monsters block the player too and move about, and a barrel may be
-      easier to shoot than to go round. Doom II MAP03 (a torch on the way to switch 445), MAP17
-      (barrels on a staircase), MAP19 (a ring of torches) and MAP23 (a starting area full of
-      barrels) need it now. Steering round a thing is not enough: things
-      can form walls (MAP19: a ring of torches closes a passage the geometry leaves open), so
-      solid things must go into what the pathfinder plans on, e.g. as blocks cut into the cells
-      and portals, widened by the player's radius.
+      it stops dead. Planned with the user in three parts:
+      1. **Things that stay put go into the map.** Done (3.2, 3.2.1, 3.4): every solid thing
+         that is not a monster is a block, its square cut out of the cells like a pillar, the
+         cells under it judged live (a barrel blown up opens the way); steering goes round
+         them. Doom II MAP03 finishes; MAP17 gets all its keys; MAP19 and MAP23 need more (see
+         the playtests above).
+      2. **Shooting barrels** to clear the way: a crossing blocked by a barrel gets a fix, a
+         SHOOT BARREL goal: stand where it is in sight and out of its blast (128 units plus the
+         player's radius, and a barrel sets off its neighbours), aim, fire until it is gone. Not
+         killing itself is the point. Later, barrels near monsters are worth blowing up first.
+         MAP23 is built around shooting barrels and running between them before they go off,
+         which a generic bot may not manage: it may need a hardcoded route, or a soulsphere from
+         the level before to live through a blast (the user's note).
+      3. **Monsters** are never built into the map: they move. When one is in the way and is not
+         to be killed, the steering that goes round blocks goes round it too, with some random
+         strafing against the randomness of how monsters move (the user's note), then waiting
+         for it to move, then a replan round it. Built with combat, since `-nomonsters` leaves
+         nothing to test it on.
    4. **Downhill and drops.** Going down stairs the player keeps gaining speed: each step down
       leaves it briefly airborne, with no friction and no control, so it overshoots the target,
       and next to a pit that can mean falling in. Slow down earlier for crossings that drop
@@ -1418,7 +1527,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       But twelve of the first twenty-two Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
       MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21, MAP22; MAP14's over several gaps in a
       row), and so do MAP25 (a gap) and MAP29 (a running jump onto an island, about 180 units
-      from a ledge 48 higher), so they will probably have to come sooner.
+      from a ledge 48 higher), so they will probably have to come sooner. Jumps would also save
+      time where falling in is not needed: Doom II MAP17's ditch at switch 491 costs a 15 s ride
+      back up (optional, the user's note; see the MAP17 playtest).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -1463,6 +1574,32 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        To do: failures, tried candidates and line uses expire (after a while, or when the world
        changes: a sector moved, a door opened, the player is somewhere new), and an emptied
        stack idles and plans GO TO EXIT again from time to time.
+   12. **Lasting fixes first, passing ones last.** The brain works the first blocked crossing on
+       a route, and only then sees the next one. When that first fix does not last (a lift goes
+       back up after 3 s, a door closes after 4) and a later crossing needs a long way round
+       first, the first fix is wasted. Doom II MAP27: the route to the red key is blocked first by
+       an 8-unit gap beside the raised lift 185 (tag 18), then by a 192-unit step whose switch
+       (line 727) is behind the blue door, with the blue key behind the yellow one. The bot spent
+       4.6 s going to the walk-over lines round the skull rock, lowered the lift, then turned
+       away for the yellow key (switch 90), and the lift was long back up when it next came by.
+       It lowered the lift again at 13 s, for the blue key, and that time went on through. The
+       key-first rule (3.5) already covers a locked door further along the route. The same is
+       wanted for any later blocked crossing: look at the whole route, and work a fix that does
+       not last only when nothing after it needs work first. Seen in a one-by-one run. Agreed
+       with the user, but for later: not worth risking a regression now.
+   13. **Doors that close before the player gets there.** A door that is open now counts as
+       open wherever the player is, but a normal door (DR) closes about 4 s after it opens, and
+       from a side it cannot be opened from (a one-way door) the way is then shut. Doom II MAP27:
+       going north for the blue key, the bot opened the yellow door at line 626 (sector 27; its
+       north face, line 751, has no special) at 31.7 s. At 35.2 s it planned the way back south
+       through it, to switch 610, and arrived at 38.1 s with the door closing (46 units of
+       headroom), found no way and gave the switch up. The brain then found another way, so the
+       map still finished, but the switch stays given up for the level (follow-up 11). **By the
+       user's choice, closing times are not predicted:** if the door shuts first, so be it, the
+       bot plans again as a human would. A door can also stay open longer than its timer says:
+       a closing door goes back up when it meets a monster, so a prediction would give up on
+       doors too early once monsters are in. What is left to do is only that a way shut like
+       this is not given up on for good (follow-up 11).
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -1473,7 +1610,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  05, 10, 12, 16, 18, 24, 26, 27, 28, 31 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
+  03, 05, 10, 12, 16, 18, 24, 26, 27, 28, 31 (they finish) and MAP17 (all three keys, then a
+  step it finds no fix for) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the

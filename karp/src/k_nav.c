@@ -146,6 +146,16 @@
 #define AVOID_PUSH 1.0
 #define MAX_AVOID 16
 
+// A goal spot is clear of solid things when the player's box (radius 16)
+// is a unit off every one.
+#define STAND_CLEARANCE 17.0
+
+// Going round solid things: the engine stops a move that would overlap
+// one, a whole step before the boxes touch, so this starts further out
+// than for walls.
+#define AVOID_BLOCK_DISTANCE 32.0
+#define MAX_AVOID_BLOCKS 16
+
 typedef struct
 {
     double x, y;
@@ -634,8 +644,9 @@ static void SteerToHold(const body_t *body, k_vec2_t to, const double *face,
 // along them: a leg can pass so close to one that the player's box catches
 // on it, pushing straight in, with nothing for the engine to slide it
 // along (Doom II MAP03, leaving a switch alcove past a pillar). So near
-// anything that stops the player, the part of the velocity toward it is
+// any line that stops the player, the part of the velocity toward it is
 // dropped: the player slides along instead, and eases away when touching.
+// Solid things are gone round instead (AvoidBlocks).
 // Near is measured with the player's square box, and away is from the
 // nearest point: a wall end caught by the side of the box turns the player
 // round it (MAP16, a wall stub at the top of a staircase).
@@ -660,6 +671,72 @@ static void AvoidWalls(const body_t *body, double *vx, double *vy)
         {
             *vx += walls[i].away.x * AVOID_PUSH;
             *vy += walls[i].away.y * AVOID_PUSH;
+        }
+    }
+}
+
+// The engine slides the player along walls but not along solid things
+// (P_SlideMove only traces lines): against one it stops dead. So the
+// player goes round them as round a pillar: near one, the part of the
+// velocity toward it is turned along its side, the way the target lies, or
+// round the side the player is on if the target is straight past it (Doom
+// II MAP27: a leg grazing a skull pile's square stopped the player head
+// on, with nothing left to slide along).
+static void AvoidBlocks(const body_t *body, k_vec2_t target, double *vx, double *vy)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t at = { body->x, body->y };
+    k_vec2_t min = { at.x - AVOID_BLOCK_DISTANCE, at.y - AVOID_BLOCK_DISTANCE };
+    k_vec2_t max = { at.x + AVOID_BLOCK_DISTANCE, at.y + AVOID_BLOCK_DISTANCE };
+    int blocks[MAX_AVOID_BLOCKS];
+    int count = K_Map_BlocksNear(min, max, blocks, MAX_AVOID_BLOCKS);
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        const k_block_t *block = &map->blocks[blocks[i]];
+        double dx = at.x - SDL_max(block->at.x - block->radius,
+                                   SDL_min(block->at.x + block->radius, at.x));
+        double dy = at.y - SDL_max(block->at.y - block->radius,
+                                   SDL_min(block->at.y + block->radius, at.y));
+        double length = sqrt(dx * dx + dy * dy);
+        double ax, ay, tx, ty, into, toward;
+
+        if (length < 1e-6)
+        {
+            continue;
+        }
+
+        // Away from the nearest point of its square.
+        ax = dx / length;
+        ay = dy / length;
+        into = *vx * ax + *vy * ay;
+
+        if (into < 0.0)
+        {
+            tx = -ay;
+            ty = ax;
+            toward = (target.x - at.x) * tx + (target.y - at.y) * ty;
+
+            if (fabs(toward) < 1.0)
+            {
+                toward = (at.x - block->at.x) * tx + (at.y - block->at.y) * ty;
+            }
+
+            if (toward < 0.0)
+            {
+                tx = -tx;
+                ty = -ty;
+            }
+
+            *vx -= into * (ax + tx);
+            *vy -= into * (ay + ty);
+        }
+
+        if (SDL_max(fabs(dx), fabs(dy)) < AVOID_TOUCH)
+        {
+            *vx += ax * AVOID_PUSH;
+            *vy += ay * AVOID_PUSH;
         }
     }
 }
@@ -699,6 +776,7 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
         vx = (path.points[target].x - at.x) / distance * speed;
         vy = (path.points[target].y - at.y) / distance * speed;
         AvoidWalls(body, &vx, &vy);
+        AvoidBlocks(body, path.points[target], &vx, &vy);
         Steer(body, vx, vy, NULL, steady, command);
     }
     else
@@ -1750,17 +1828,36 @@ int K_Nav_SetGoal(double x, double y)
     return StartGoal(x, y, K_GOAL_POINT, -1);
 }
 
+// Whether the player's box at a point, with a unit to spare, overlaps no
+// solid thing.
+static boolean ClearOfBlocks(double x, double y)
+{
+    k_vec2_t min = { x - STAND_CLEARANCE, y - STAND_CLEARANCE };
+    k_vec2_t max = { x + STAND_CLEARANCE, y + STAND_CLEARANCE };
+    int found;
+
+    return K_Map_BlocksNear(min, max, &found, 1) == 0;
+}
+
 int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
 {
-    // Tried in turn until one is on floor: a switch may sit in a shallow
-    // alcove, a walk-over line just in front of a wall.
+    // Tried in turn until one is on floor, clear of solid things: a switch
+    // may sit in a shallow alcove, a walk-over line just in front of a
+    // wall. A walk-over line can also be crossed off its middle, so the
+    // places along it are tried too, from the middle out (Doom II MAP27: a
+    // skull rock inside a diamond of walk-over lines, 11 units from each).
+    // If nothing is clear of solid things, the first spot on floor.
     static const double distances[] = { 24.0, 32.0, 16.0, 40.0 };
+    static const double alongs[] = { 0.5, 0.3, 0.7, 0.15, 0.85, 0.05, 0.95 };
     const k_line_t *line = &K_Map_Get()->lines[line_index];
     k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
     double length = Distance(line->v1, line->v2);
+    int num_alongs = kind == K_GOAL_CROSS_LINE ? arrlen(alongs) : 1;
+    boolean on_floor = false;
+    double floor_x = 0.0, floor_y = 0.0;
     double nx, ny;
     k_pose_t player;
-    int i;
+    int i, a;
 
     if (length < 1e-6)
     {
@@ -1779,18 +1876,38 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
         ny = -ny;
     }
 
-    for (i = 0; i < arrlen(distances); ++i)
+    for (a = 0; a < num_alongs; ++a)
     {
-        *x = middle.x + nx * distances[i];
-        *y = middle.y + ny * distances[i];
+        k_vec2_t at = { line->v1.x + (line->v2.x - line->v1.x) * alongs[a],
+                        line->v1.y + (line->v2.y - line->v1.y) * alongs[a] };
 
-        if (K_Map_CellAt(*x, *y) >= 0)
+        for (i = 0; i < arrlen(distances); ++i)
         {
-            return 1;
+            *x = at.x + nx * distances[i];
+            *y = at.y + ny * distances[i];
+
+            if (K_Map_CellAt(*x, *y) < 0)
+            {
+                continue;
+            }
+
+            if (ClearOfBlocks(*x, *y))
+            {
+                return 1;
+            }
+
+            if (!on_floor)
+            {
+                on_floor = true;
+                floor_x = *x;
+                floor_y = *y;
+            }
         }
     }
 
-    return 0;
+    *x = floor_x;
+    *y = floor_y;
+    return on_floor;
 }
 
 int K_Nav_SetLineGoal(int line, k_goalkind_t kind)

@@ -88,6 +88,7 @@
 #define CLEARANCE 17.0
 #define CLEARANCE_SAMPLES 9
 #define MAX_NEAR_LINES 256
+#define MAX_NEAR_BLOCKS 64
 
 // A gap inside a cell, between its portals, can be narrower than the
 // player too: a closed block beside a wall, mid-cell (Doom II MAP21's
@@ -144,7 +145,8 @@ static int *cell_items;
 static const char *crossing_names[K_NUM_CROSSINGS] =
 {
     "open", "wall", "blocking line", "step too high", "no headroom",
-    "locked door", "too narrow", "door", "lift", "lift ride", "teleporter",
+    "locked door", "too narrow", "solid thing", "door", "lift", "lift ride",
+    "teleporter",
 };
 
 // Per sector: opened by a manual door line (it is the line's back
@@ -1185,10 +1187,29 @@ static void TryChord(int cell, const k_vec2_t *poly, int n, k_vec2_t a, k_vec2_t
     ++num_chords;
 }
 
+// Adds p to the chord points of a cell if it lies on the cell's border and
+// is not there already.
+static void AddChordPoint(k_vec2_t *points, int *num_points, const k_vec2_t *poly, int n,
+                          k_vec2_t p)
+{
+    int j;
+
+    for (j = 0; j < *num_points && !SamePoint(points[j], p); ++j)
+    {
+    }
+
+    if (j == *num_points && *num_points < MAX_CHORD_POINTS && OnBorder(poly, n, p))
+    {
+        points[(*num_points)++] = p;
+    }
+}
+
 // The narrowest way across a convex cell between two obstacles on its
-// border starts at the end of one of them: a corner, or the end of a line
-// partway along an edge. From each such point, a chord to the nearest
-// point of every other edge, and to each other such point.
+// border starts at the end of one of them: a corner, the end of a line
+// partway along an edge, or the corner of a block's square (a cell along
+// one side of a square has its corners partway along an edge). From each
+// such point, a chord to the nearest point of every other edge, and to
+// each other such point.
 static void FindChords(const k_map_t *map)
 {
     int c;
@@ -1206,13 +1227,32 @@ static void FindChords(const k_map_t *map)
         k_vec2_t min = { cell->min.x - 1.0, cell->min.y - 1.0 };
         k_vec2_t max = { cell->max.x + 1.0, cell->max.y + 1.0 };
         int num_points = 0;
-        int x, y, x0, y0, x1, y1, k, i, j, end;
+        int x, y, x0, y0, x1, y1, k, i, j, b;
 
         chord_first[c] = num_chords;
 
         for (i = 0; i < n && num_points < MAX_CHORD_POINTS; ++i)
         {
             points[num_points++] = poly[i];
+        }
+
+        for (b = 0; b < map->num_blocks; ++b)
+        {
+            const k_block_t *block = &map->blocks[b];
+
+            if (block->at.x + block->radius < min.x || block->at.x - block->radius > max.x
+             || block->at.y + block->radius < min.y || block->at.y - block->radius > max.y)
+            {
+                continue;
+            }
+
+            for (k = 0; k < 4; ++k)
+            {
+                k_vec2_t corner = { block->at.x + ((k & 1) ? block->radius : -block->radius),
+                                    block->at.y + ((k & 2) ? block->radius : -block->radius) };
+
+                AddChordPoint(points, &num_points, poly, n, corner);
+            }
         }
 
         CellRange(min, max, &x0, &y0, &x1, &y1);
@@ -1226,28 +1266,14 @@ static void FindChords(const k_map_t *map)
                 for (k = cell_first[grid]; k < cell_first[grid + 1]; ++k)
                 {
                     int line = cell_items[k] - num_edges;
-                    k_vec2_t ends[2];
 
                     if (line < 0)
                     {
                         continue;
                     }
 
-                    ends[0] = map->lines[line].v1;
-                    ends[1] = map->lines[line].v2;
-
-                    for (end = 0; end < 2; ++end)
-                    {
-                        for (j = 0; j < num_points && !SamePoint(points[j], ends[end]); ++j)
-                        {
-                        }
-
-                        if (j == num_points && num_points < MAX_CHORD_POINTS
-                         && OnBorder(poly, n, ends[end]))
-                        {
-                            points[num_points++] = ends[end];
-                        }
-                    }
+                    AddChordPoint(points, &num_points, poly, n, map->lines[line].v1);
+                    AddChordPoint(points, &num_points, poly, n, map->lines[line].v2);
                 }
             }
         }
@@ -1543,6 +1569,56 @@ static boolean Headroom(fixed_t floor_a, fixed_t ceiling_a,
 // Clearance
 //
 
+// The standing blocks whose squares come within reach of the segment a-b,
+// up to max.
+static int NearBlocks(k_vec2_t a, k_vec2_t b, double reach, int *found, int max)
+{
+    k_vec2_t min = { SDL_min(a.x, b.x) - reach, SDL_min(a.y, b.y) - reach };
+    k_vec2_t max_ = { SDL_max(a.x, b.x) + reach, SDL_max(a.y, b.y) + reach };
+
+    return K_Map_BlocksNear(min, max_, found, max);
+}
+
+// How far a point is from a block as the engine collides the player's box
+// with the thing's: the larger of the x and y distances to its square, at
+// any height (PIT_CheckThing).
+static double BlockDistance(int block, k_vec2_t at)
+{
+    const k_block_t *b = &K_Map_Get()->blocks[block];
+    k_vec2_t min = { b->at.x - b->radius, b->at.y - b->radius };
+    k_vec2_t max = { b->at.x + b->radius, b->at.y + b->radius };
+
+    return BoxGap(at, min, max);
+}
+
+// Whether a point is CLEARANCE away from the obstacle lines and blocks
+// found.
+static boolean ClearOf(k_vec2_t at, const int *lines_found, int count, const int *blocks,
+                       int num_blocks)
+{
+    const k_map_t *map = K_Map_Get();
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (SegmentDistance(map->lines[lines_found[i]].v1, map->lines[lines_found[i]].v2,
+                            at) < CLEARANCE)
+        {
+            return false;
+        }
+    }
+
+    for (i = 0; i < num_blocks; ++i)
+    {
+        if (BlockDistance(blocks[i], at) < CLEARANCE)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // The floor and ceiling of the sector a cell is in. Standing in a door
 // means it is open.
 static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
@@ -1734,14 +1810,16 @@ static int NearObstacles(const stance_t *stance, double reach, int *found, int m
     return count;
 }
 
-// Whether no point on the portal is CLEARANCE away from every obstacle.
+// Whether no point on the portal is CLEARANCE away from every obstacle:
+// lines, and blocks.
 static boolean Narrow(const stance_t *stance)
 {
-    const k_map_t *map = K_Map_Get();
     const k_portal_t *portal = stance->portal;
     int found[MAX_NEAR_LINES];
+    int blocks[MAX_NEAR_BLOCKS];
     int count = NearObstacles(stance, CLEARANCE, found, MAX_NEAR_LINES);
-    int s, i;
+    int num_blocks = NearBlocks(portal->a, portal->b, CLEARANCE, blocks, MAX_NEAR_BLOCKS);
+    int s;
 
     for (s = 0; s < CLEARANCE_SAMPLES; ++s)
     {
@@ -1749,16 +1827,7 @@ static boolean Narrow(const stance_t *stance)
                                  Length(Sub(portal->b, portal->a))
                                  * (s + 0.5) / CLEARANCE_SAMPLES);
 
-        for (i = 0; i < count; ++i)
-        {
-            if (SegmentDistance(map->lines[found[i]].v1, map->lines[found[i]].v2, at)
-                < CLEARANCE)
-            {
-                break;
-            }
-        }
-
-        if (i == count)
+        if (ClearOf(at, found, count, blocks, num_blocks))
         {
             return false;
         }
@@ -1929,10 +1998,22 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
 // down, where the sides of the way off are walls (Doom II MAP03: the
 // teleporter at the end of a rising strip, as wide as the player, between
 // a closet's faces), but when it gets there.
+//
+// Under a standing block there is no way in, whatever the heights: the
+// player cannot get past a solid thing, only round it, until it is gone.
 static k_crossing_t Judge(int portal_index, int from, double *wait)
 {
-    k_crossing_t crossing = JudgeHeights(portal_index, from, wait);
+    const k_portal_t *portal = &graph.portals[portal_index];
+    k_crossing_t crossing;
     stance_t stance;
+
+    if (K_Map_CellBlock(portal->cell[0] == from ? portal->cell[1] : portal->cell[0]) >= 0)
+    {
+        *wait = 0.0;
+        return K_CROSS_THING;
+    }
+
+    crossing = JudgeHeights(portal_index, from, wait);
 
     if (!K_Graph_Passable(crossing) || from < 0 || crossing == K_CROSS_RIDE)
     {
@@ -1971,15 +2052,18 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
     int samples = SDL_min(MAX_WAYPOINT_SAMPLES,
                           SDL_max(2, (int) (length / WAYPOINT_STEP) + 1));
     int found[MAX_NEAR_LINES];
+    int blocks[MAX_NEAR_BLOCKS];
     double best_score = -1.0;
     k_vec2_t best = PointAlong(portal->a, portal->b, length * 0.5);
     stance_t stance;
-    int count, s, i;
+    int count, num_blocks, s, i;
 
     Stance(portal_index, from, &stance);
     count = NearObstacles(&stance, WAYPOINT_CLEARANCE, found, MAX_NEAR_LINES);
+    num_blocks = NearBlocks(portal->a, portal->b, WAYPOINT_CLEARANCE, blocks,
+                            MAX_NEAR_BLOCKS);
 
-    if (count == 0)
+    if (count == 0 && num_blocks == 0)
     {
         return best;
     }
@@ -1995,6 +2079,11 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
         {
             clearance = SDL_min(clearance, SegmentDistance(map->lines[found[i]].v1,
                                                            map->lines[found[i]].v2, at));
+        }
+
+        for (i = 0; i < num_blocks; ++i)
+        {
+            clearance = SDL_min(clearance, BlockDistance(blocks[i], at));
         }
 
         // Clearance first, then nearness to the middle.
@@ -2069,9 +2158,10 @@ static boolean ChordNarrow(int cell, chord_t *chord)
     k_vec2_t dir = Sub(chord->b, chord->a);
     double length = Length(dir);
     int found[MAX_NEAR_LINES];
+    int blocks[MAX_NEAR_BLOCKS];
     k_portal_t across;
     stance_t stance;
-    int count, samples, s, i;
+    int count, num_blocks, samples, s;
 
     if (chord->judged == leveltime + 1)
     {
@@ -2105,6 +2195,7 @@ static boolean ChordNarrow(int cell, chord_t *chord)
     stance.crossing = false;
 
     count = NearObstacles(&stance, CLEARANCE, found, MAX_NEAR_LINES);
+    num_blocks = NearBlocks(across.a, across.b, CLEARANCE, blocks, MAX_NEAR_BLOCKS);
     samples = (int) (length / CHORD_STEP) + 1;
     chord->narrow = true;
 
@@ -2112,16 +2203,7 @@ static boolean ChordNarrow(int cell, chord_t *chord)
     {
         k_vec2_t at = PointAlong(across.a, across.b, length * s / samples);
 
-        for (i = 0; i < count; ++i)
-        {
-            if (SegmentDistance(map->lines[found[i]].v1, map->lines[found[i]].v2, at)
-                < CLEARANCE)
-            {
-                break;
-            }
-        }
-
-        if (i == count)
+        if (ClearOf(at, found, count, blocks, num_blocks))
         {
             chord->narrow = false;
         }
@@ -2273,15 +2355,17 @@ static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
     return best;
 }
 
-// K_Graph_ObstaclesNear for a player standing in the given cell.
+// K_Graph_ObstaclesNear for a player standing in the given cell, and the
+// standing blocks too if asked.
 static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *found,
-                           int max)
+                           int max, boolean with_blocks)
 {
     const k_map_t *map = K_Map_Get();
     k_vec2_t min = { at.x - reach, at.y - reach };
     k_vec2_t max_ = { at.x + reach, at.y + reach };
     int lines_seen[MAX_NEAR_LINES];
-    int seen = 0, count = 0;
+    int blocks[MAX_NEAR_BLOCKS];
+    int seen = 0, count = 0, num_blocks;
     fixed_t floor, ceiling;
     standing_t standing;
     int x, y, x0, y0, x1, y1, k, i;
@@ -2355,13 +2439,38 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
         }
     }
 
+    // Blocks stop the player at any height.
+    num_blocks = with_blocks ? K_Map_BlocksNear(min, max_, blocks, MAX_NEAR_BLOCKS) : 0;
+
+    for (i = 0; i < num_blocks && count < max; ++i)
+    {
+        const k_block_t *block = &map->blocks[blocks[i]];
+        k_vec2_t closest = { SDL_max(block->at.x - block->radius,
+                                     SDL_min(block->at.x + block->radius, at.x)),
+                             SDL_max(block->at.y - block->radius,
+                                     SDL_min(block->at.y + block->radius, at.y)) };
+        double length = Length(Sub(at, closest));
+        double distance = BlockDistance(blocks[i], at);
+
+        if (distance >= reach || length < 1e-6)
+        {
+            continue;
+        }
+
+        found[count].away.x = (at.x - closest.x) / length;
+        found[count].away.y = (at.y - closest.y) / length;
+        found[count].distance = distance;
+        ++count;
+    }
+
     return count;
 }
 
 int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
                           int max)
 {
-    return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max);
+    return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max,
+                           false);
 }
 
 double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
@@ -2428,7 +2537,7 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
 {
     k_nearline_t found[MAX_NEAR_LINES];
     int cell = K_Map_CellAt(at.x, at.y);
-    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES);
+    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true);
     double clearance = reach;
     int i;
 

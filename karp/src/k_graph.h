@@ -61,6 +61,8 @@ typedef enum
     K_CROSS_LOCKED,         // a door that needs a key the player lacks
     K_CROSS_NARROW,         // a gap narrower than the player, e.g. between
                             // bars or raised blocks
+    K_CROSS_THING,          // a solid thing stands there (k_block_t): a
+                            // decoration, a barrel
 
     // Passable after an action:
     K_CROSS_DOOR,           // a closed door the player can open: use its
@@ -160,10 +162,10 @@ const char *K_Graph_LockName(int portal);
 
 // How far a point on the floor is from the nearest line a player standing
 // there could not overlap (a wall, an impassable line, a side too high to
-// step onto or too low to fit under), up to reach; reach if none is
-// nearer, 0 off the floor. Distances are measured as the engine collides
-// the player's square box: the larger of the x and y distances, so a box
-// of radius r overlaps what is nearer than r.
+// step onto or too low to fit under) or standing block, up to reach; reach
+// if none is nearer, 0 off the floor. Distances are measured as the engine
+// collides the player's square box: the larger of the x and y distances,
+// so a box of radius r overlaps what is nearer than r.
 double K_Graph_Clearance(k_vec2_t at, double reach);
 
 // A line near a point that stops the player.
@@ -175,7 +177,9 @@ typedef struct
 } k_nearline_t;
 
 // The lines within reach of a point that a player standing there, on the
-// given floor, could not overlap, up to max. Returns how many. Judged from
+// given floor, could not overlap, up to max (not blocks: the engine slides
+// the player along lines, not things; K_Map_BlocksNear gives those).
+// Returns how many. Judged from
 // the floor the player stands on, not the one under its centre: over a
 // ledge's edge, the ledge would look like a wall to climb, and the player
 // would be steered off it (Doom II MAP17's bridge over a pit).
