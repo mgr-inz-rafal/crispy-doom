@@ -1328,6 +1328,19 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      the exit door (line 573) "did nothing": the bot held a chainsaw, picked up on the way, which
      reads fire only every 4 tics, and each shot was a 1-tic press; fire is now held 5 tics (3.4).
      **Finished in 72.5 s**, no jump needed. The rest pass as before.
+   - MAP29: GO TO EXIT failed at 10 s, "a step 320 units high at line 36". The exit hall (sector
+     46) is reached only up a winding staircase (sectors 93-98, 296 to 568) from sector 93, where
+     the tag 37 teleporter lands. Its pad (sector 40) is on an island (sectors 38 and 39, floor
+     480-488) in a courtyard (sector 33, floor 400), with nothing to climb onto it: three pillars
+     (sectors 41, 42, 44, floor 560, lowered to the courtyard by one-shot switches 825, 837 and
+     975 elsewhere) stand between it and a ledge (sector 43, floor 528) about 180 units away.
+     **Needs a running jump** from that ledge onto the island (follow-up 7). Skipped for now.
+   - MAP30 (Icon of Sin): not tried. The boss brain spawns even with `-nomonsters`, and the
+     level ends only when it dies: rockets fired into it from the top of a lift. **Needs combat
+     and a hardcoded route** for that special path (by the user's choice, map-specific tricks
+     are hardcoded per map, not built into the brain). Skipped for now.
+   - MAP31: **finished in 41.6 s** at the first try, through twelve doors to the normal exit
+     switch (line 549); the secret exit to MAP32 was the longer way.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1393,7 +1406,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
       But twelve of the first twenty-two Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
       MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21, MAP22; MAP14's over several gaps in a
-      row), so they will probably have to come sooner.
+      row), and so do MAP25 (a gap) and MAP29 (a running jump onto an island, about 180 units
+      from a ledge 48 higher), so they will probably have to come sooner.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -1448,7 +1462,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  05, 10, 12, 16, 18, 24, 26, 27, 28 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
+  05, 10, 12, 16, 18, 24, 26, 27, 28, 31 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the
