@@ -114,6 +114,7 @@
 // the chainsaw, MISSILERANGE for bullets; a little less, to be sure.
 #define MELEE_REACH 60.0
 #define SHOT_REACH 2000.0
+#define ATTACK_HOLD 5
 #define ACTION_TURN 45.0
 #define SPOT_RADIUS 6.0
 #define HOLD_GAIN 0.3
@@ -820,6 +821,16 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
     }
 
     SteerToHold(body, action.spot, &action.face, command);
+
+    // Fire is held long enough for any weapon to see it: the chainsaw reads
+    // it only as each frame of its idle animation starts, every 4 tics
+    // (Doom II MAP28: three 1-tic presses at a gun switch all fell between).
+    if (action.kind == K_ACTION_SHOOT && action.phase == PHASE_WAIT
+     && tic - action.press_tic < ATTACK_HOLD)
+    {
+        command->attack = 1;
+        return;
+    }
 
     // A hitscan weapon first, and fire only once it is up: never a rocket
     // fired while switching.

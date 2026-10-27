@@ -110,6 +110,7 @@ typedef struct
     double floor, ceiling;
     boolean used;           // a walk-over line was crossed
     boolean moving;
+    boolean changed;        // the heights have differed from those since
     int wait;
 
     // GOAL_TRIGGER: the blocked crossing it was pushed for (crossed out of
@@ -716,6 +717,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     goal->planned = true;
     goal->used = false;
     goal->moving = false;
+    goal->changed = false;
     goal->wait = 0;
     goal->waited = 0;
 
@@ -1018,9 +1020,14 @@ static boolean UpdateTrigger(goal_t *goal)
 
     K_Map_SectorHeights(goal->param, &floor, &ceiling);
 
+    if (floor != goal->floor || ceiling != goal->ceiling)
+    {
+        goal->changed = true;
+    }
+
     if (!goal->moving)
     {
-        if (floor != goal->floor || ceiling != goal->ceiling || mover != K_MOVER_NONE)
+        if (goal->changed || mover != K_MOVER_NONE)
         {
             goal->moving = true;
             goal->wait = 0;
@@ -1041,6 +1048,15 @@ static boolean UpdateTrigger(goal_t *goal)
 
     if (mover == K_MOVER_NONE || mover == K_MOVER_WAITING || ++goal->wait > MOVE_TICS)
     {
+        // A mover set going can have nowhere to go: a lift already at the
+        // bottom waits there at once (Doom II MAP28), and counting that as
+        // moved, the brain worked its switches round and round.
+        if (!goal->changed)
+        {
+            CandidateFailed(goal, "using it moved nothing");
+            return true;
+        }
+
         M_snprintf(how, sizeof(how), "sector %d moved (floor %.0f, ceiling %.0f)",
                    goal->param, floor, ceiling);
         DoneGoal(how);

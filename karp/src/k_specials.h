@@ -61,7 +61,8 @@ k_trigger_t K_Specials_ExitTrigger(int special, int *secret);
 k_trigger_t K_Specials_MoverTrigger(int special);
 
 // How a mover line moves the sectors it targets, as k_move_t flags (a lift
-// goes down and comes back up); 0 for any other special.
+// goes down, and back up only to where it was; a perpetual one also up to
+// the highest neighbouring floor); 0 for any other special.
 int K_Specials_MoverMoves(int special);
 
 // A line's live special: one-shot lines lose theirs once used.

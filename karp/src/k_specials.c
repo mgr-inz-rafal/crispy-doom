@@ -248,14 +248,18 @@ int K_Specials_MoverMoves(int special)
         case 132: case 140:
             return K_MOVE_FLOOR_UP;
 
-        // Floors that go down, the hole of a donut (its ring rises):
+        // Floors that go down, the hole of a donut (its ring rises), lifts:
+        // a lift comes back up to where it was, no higher, so one already
+        // at the bottom does nothing (Doom II MAP28: lift 82 starts level
+        // with the room, and walk-over line 402 raises it first).
         case 9: case 19: case 23: case 36: case 37: case 38: case 45: case 60:
         case 70: case 71: case 82: case 83: case 84: case 98: case 102:
+        case 10: case 21: case 62: case 88: case 120: case 121: case 122: case 123:
             return K_MOVE_FLOOR_DOWN;
 
-        // Lifts, which come back up:
-        case 10: case 21: case 53: case 62: case 87: case 88: case 120: case 121:
-        case 122: case 123:
+        // Perpetual lifts, which run between the lowest and the highest
+        // neighbouring floor:
+        case 53: case 87:
             return K_MOVE_FLOOR_DOWN | K_MOVE_FLOOR_UP;
 
         // A ceiling that rises over a floor that goes down:

@@ -668,8 +668,11 @@ shotgun (whichever has ammo, in that order; the shotgun's slot brings up the sup
 player has it, so it needs 2 shells), else the fist (whose slot brings up the chainsaw if the
 player has it). The fist reaches 64 units, enough from the spot. Fire is pressed only once that
 weapon is up and in its ready state (`A_WeaponReady`), so nothing is fired while switching, and
-only when the trace would reach the line (2048 units for bullets). As with use, a shot after
-which nothing happens within 15 tics is repeated, 3 times at most.
+only when the trace would reach the line (2048 units for bullets). It is held for 5 tics: a
+weapon reads the button only as a frame of its idle animation starts, every tic for most, but
+every 4 for the chainsaw (Doom II MAP28: a chainsaw picked up on the way, three 1-tic shots at a
+gun switch all fell between, and the switch was given up as doing nothing). As with use, a shot
+after which nothing happens within 15 tics is repeated, 3 times at most.
 
 **Doors and lifts on the route** (`UpdateAction` in Think, `SteerAction` in Act). The target never
 moves past the way out of a cell whose crossing is not open yet, and the speed profile treats
@@ -804,8 +807,11 @@ it cannot be reached):
     ceiling is level with the floor in front of it until that floor, a lift, comes down); again
     only lines that lower a floor or raise a ceiling;
   - which way a line moves its sectors comes from its special (`K_Specials_MoverMoves`: floor
-    up, floor down, ceiling up; a lift both down and up), and a USE TRIGGER goal remembers the
-    moves that would help: only lines that make one of them are its candidates;
+    up, floor down, ceiling up), and a USE TRIGGER goal remembers the moves that would help:
+    only lines that make one of them are its candidates. A lift only lowers: it comes back up to
+    where it was, no higher, so one already at the bottom does nothing (Doom II MAP28: lift 82
+    starts level with the room, below the way off, and walk-over line 402 raises it first); a
+    perpetual lift also rises, to the highest neighbouring floor;
   - a **switch that needs a key** the player lacks (remote locked doors 99 and 133-137, e.g.
     Doom II MAP02's red bars), or stands behind a door that does -> GET KEY of that colour,
     before going to press it. Use stops at the first line with a special on its way, so a
@@ -847,7 +853,10 @@ right after the press, as a human would, and waits at the door or lift instead o
 Doom II MAP03 got 6 seconds faster: switch 431 raises a strip slowly, and the bot now drops onto
 it from the walkway while it rises and rides it up to the teleporter. Otherwise the goal waits,
 with the player standing still, for the sector to start moving after its line is used (2 seconds
-for a walk-over line) and then to stop. The crossing is checked before the goal is even planned:
+for a walk-over line) and then to stop. If its heights never changed, the line did nothing and
+the next candidate is tried: a mover can be set going with nowhere to go, like a lift already at
+the bottom, which waits there at once (Doom II MAP28: counted as moved, the brain worked four
+switches and a walk-over line round and round, three times each). The crossing is checked before the goal is even planned:
 it may have opened while a goal in front of it was worked on, and planning would send the player
 off for nothing and count a use of the line (on Doom II MAP24 two lines used up two of their
 three uses that way).
@@ -1310,6 +1319,15 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      sector, and lowering its neighbours first. MAP17 no longer chases walk-over line 375: it
      opens a door (sector 147) whose floor is 224 above the bot's, and a ceiling going up does
      nothing for a step. The rest pass as before.
+   - MAP28: the red key is up a step of 64 from lift 82 (tag 10), which starts at the bottom,
+     level with the room. Taking a lift for something that raises its floor, the brain pressed
+     its switches (719-722, special 62): a lift at the bottom has nowhere to go, but the engine
+     still sets it waiting, which counted as moved, so round it went, three times on each line,
+     then failed. Now lifts only lower (3.5), the far walk-over line 402 that raises the lift is
+     chosen, and a line after which no heights changed is tried no more. Then the gun switch for
+     the exit door (line 573) "did nothing": the bot held a chainsaw, picked up on the way, which
+     reads fire only every 4 tics, and each shot was a 1-tic press; fire is now held 5 tics (3.4).
+     **Finished in 72.5 s**, no jump needed. The rest pass as before.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1430,7 +1448,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  05, 10, 12, 16, 18, 24, 26, 27 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
+  05, 10, 12, 16, 18, 24, 26, 27, 28 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the
