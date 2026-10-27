@@ -66,6 +66,14 @@
 #define BLAZING_SPEED (8 * FRACUNIT)
 #define LIFT_WAIT (3 * TICRATE)
 
+// Each time a lift turned back while the player rode it (something in its
+// way that the map does not show: a monster at its edge, a barrel), riding
+// it counts TURN_WAIT tics more, up to MAX_TURNS times: still well under
+// what a blocked crossing adds. A route another way wins once it is worth
+// it; where there is none, the lift stays the way, however often it turns.
+#define TURN_WAIT (5 * TICRATE)
+#define MAX_TURNS 100
+
 // Tics to stop in front of a line, face it and press use.
 #define ACTION_OVERHEAD 35.0
 
@@ -143,6 +151,7 @@ static const char *crossing_names[K_NUM_CROSSINGS] =
 // sector), or moved by a lift line (it has the line's tag).
 static unsigned char *door_sectors;
 static unsigned char *lift_sectors;
+static unsigned char *lift_turns;       // per sector, K_Graph_LiftTurnedBack
 static k_vec2_t *door_min, *door_max;   // per door sector, its bounding box
 
 // Per line: the teleporter it belongs to, -1 if none.
@@ -907,8 +916,10 @@ static void FindMoverSectors(const k_map_t *map)
 
     free(door_sectors);
     free(lift_sectors);
+    free(lift_turns);
     door_sectors = calloc(count, 1);
     lift_sectors = calloc(count, 1);
+    lift_turns = calloc(count, 1);
 
     for (i = 0; i < numlines; ++i)
     {
@@ -1434,29 +1445,46 @@ static const floormove_t *FloorMoverOf(const sector_t *sector)
     return NULL;
 }
 
-// How high a floor will rise, and how fast: an active lift or plat goes
-// (back) up to its top, a floor moving up to where it is going; anything
-// else stays where it is.
+// How high a floor the player stands on will rise, and how fast: an active
+// lift or plat goes (back) up to its top, a floor moving up to where it is
+// going; anything else stays where it is. Unless it crushes, it stops where
+// the player's head meets the ceiling, and a lift turns back down there
+// (T_PlatRaise): Doom II MAP24's red key platform tops out 48 units under
+// its ceiling, so with the player on it, it rises to 120 of its 128.
 static fixed_t RisingTop(const sector_t *sector, fixed_t *speed)
 {
     const plat_t *plat = PlatOf(sector);
     const floormove_t *floor = FloorMoverOf(sector);
+    fixed_t top = sector->floorheight;
+    boolean crush = false;
 
     *speed = LIFT_SPEED;
 
     if (plat != NULL)
     {
         *speed = plat->speed;
-        return SDL_max(plat->high, sector->floorheight);
+        top = plat->high;
+        crush = plat->crush;
     }
-
-    if (floor != NULL && floor->direction == 1)
+    else if (floor != NULL && floor->direction == 1)
     {
         *speed = floor->speed;
-        return SDL_max(floor->floordestheight, sector->floorheight);
+        top = floor->floordestheight;
+        crush = floor->crush;
     }
 
-    return sector->floorheight;
+    if (!crush)
+    {
+        top = SDL_min(top, sector->ceilingheight - PLAYER_HEIGHT);
+    }
+
+    return SDL_max(top, sector->floorheight);
+}
+
+// The extra wait for riding a lift that has turned back on the player.
+static double TurnWait(int sector)
+{
+    return (double) lift_turns[sector] * TURN_WAIT;
 }
 
 // Whether a lift will come down without being worked: a perpetual one
@@ -1788,7 +1816,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
      && PlatOf(b)->low - floor_a <= MAX_STEP_UP
      && Headroom(floor_a, ceiling_a, PlatOf(b)->low, ceiling_b))
     {
-        *wait = LiftArrival(b);
+        *wait = LiftArrival(b) + TurnWait(to_sector);
         return K_CROSS_LIFT;
     }
 
@@ -1798,17 +1826,20 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     {
         fixed_t speed;
         fixed_t top = RisingTop(a, &speed);
+        fixed_t off = floor_b - MAX_STEP_UP;
 
         // On a floor that will rise to within reach (a lift that is down
         // or coming back up, a floor on its way up, Doom II MAP03's strip
-        // to the teleporter): wait on it.
-        if (floor_b - top <= MAX_STEP_UP
-         && Headroom(top, ceiling_a, floor_b, ceiling_b))
+        // to the teleporter): wait on it. The player steps off as soon as
+        // the step is low enough, so that is where it is judged; further
+        // up there is only less headroom.
+        if (off <= top && Headroom(off, ceiling_a, floor_b, ceiling_b))
         {
             const plat_t *plat = PlatOf(a);
 
-            *wait = (double) (top - floor_a) / speed
-                  + (plat != NULL && plat->status == waiting ? plat->count : 0);
+            *wait = (double) (off - floor_a) / speed
+                  + (plat != NULL && plat->status == waiting ? plat->count : 0)
+                  + TurnWait(from_sector);
             return K_CROSS_RIDE;
         }
 
@@ -1822,7 +1853,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
             fixed_t speed = IsBlazingLift(line->special) ? BLAZING_SPEED : LIFT_SPEED;
 
             *wait = ACTION_OVERHEAD + LIFT_WAIT
-                  + 2.0 * (floor_b - LiftBottom(b)) / speed;
+                  + 2.0 * (floor_b - LiftBottom(b)) / speed + TurnWait(to_sector);
             return K_CROSS_LIFT;
         }
 
@@ -1839,7 +1870,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
          && floor_b - PlatOf(a)->low <= MAX_STEP_UP
          && Headroom(PlatOf(a)->low, ceiling_a, floor_b, ceiling_b))
         {
-            *wait = LiftArrival(a);
+            *wait = LiftArrival(a) + TurnWait(from_sector);
             return K_CROSS_RIDE;
         }
 
@@ -2465,4 +2496,22 @@ k_mover_t K_Graph_SectorMover(int sector)
     }
 
     return K_MOVER_OTHER;
+}
+
+int K_Graph_LiftTurnedBack(int sector)
+{
+    if (lift_turns != NULL && lift_turns[sector] < MAX_TURNS)
+    {
+        ++lift_turns[sector];
+    }
+
+    return lift_turns != NULL ? lift_turns[sector] : 0;
+}
+
+void K_Graph_LiftRidden(int sector)
+{
+    if (lift_turns != NULL)
+    {
+        lift_turns[sector] = 0;
+    }
 }

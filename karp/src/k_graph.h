@@ -190,6 +190,13 @@ double K_Graph_DropDistance(k_vec2_t at, double floor, double reach);
 
 k_mover_t K_Graph_SectorMover(int sector);
 
+// A lift the player rode turned back before it could get off: something
+// the map does not show is in its way (a monster at its edge, a barrel).
+// Each time makes riding that lift count as a longer wait, until a ride on
+// it works (K_Graph_LiftRidden). Returns how many times so far.
+int K_Graph_LiftTurnedBack(int sector);
+void K_Graph_LiftRidden(int sector);
+
 // A sector whose floor, ceiling, door or lift is on its way somewhere, or
 // -1 if none. Perpetual lifts and crushers, which never stop, do not count.
 int K_Graph_MovingSector(void);

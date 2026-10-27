@@ -867,25 +867,44 @@ static void PlanGoal(goal_t *goal)
     }
 }
 
+// A trigger goal is done once the crossing it was pushed for opens: a door
+// opening or a lift coming down is a crossing to wait at, so the player
+// sets off for it at once, as a human would. Judged before the goal is
+// planned too: the way may have opened while a goal in front of it was
+// worked on (Doom II MAP24: the red key platform rising with the player),
+// and planning would send the player off for nothing and count a use of
+// the line. Returns true if the goal is done.
+static boolean DoneIfOpen(const goal_t *goal)
+{
+    k_crossing_t crossing;
+    char how[96];
+
+    if (goal->type != GOAL_TRIGGER || goal->portal < 0)
+    {
+        return false;
+    }
+
+    crossing = K_Graph_CanCross(goal->portal, goal->from);
+
+    if (!K_Graph_Passable(crossing))
+    {
+        return false;
+    }
+
+    M_snprintf(how, sizeof(how), "the way on is open, or opening (%s)",
+               K_Graph_CrossingName(crossing));
+    DoneGoal(how);
+    return true;
+}
+
 // A sector moved by a line: once the line is used, wait for the sector to
-// start moving, then to stop - unless the crossing the goal was pushed for
-// opens first: a door opening or a lift coming down is a crossing to wait
-// at, so the player sets off for it at once, as a human would. Returns
-// true while it handles the goal.
+// start moving, then to stop (unless the way opens first: DoneIfOpen).
+// Returns true while it handles the goal.
 static boolean UpdateTrigger(goal_t *goal)
 {
     double floor, ceiling;
     k_mover_t mover = K_Graph_SectorMover(goal->param);
     char how[96];
-
-    if (goal->portal >= 0
-     && K_Graph_Passable(K_Graph_CanCross(goal->portal, goal->from)))
-    {
-        M_snprintf(how, sizeof(how), "the way on is open, or opening (%s)",
-                   K_Graph_CrossingName(K_Graph_CanCross(goal->portal, goal->from)));
-        DoneGoal(how);
-        return true;
-    }
 
     K_Map_SectorHeights(goal->param, &floor, &ceiling);
 
@@ -1004,6 +1023,11 @@ void K_Brain_Tick(void)
     if (goal->type == GOAL_KEY && K_Specials_HasKey(goal->param))
     {
         DoneGoal("picked it up");
+        return;
+    }
+
+    if (DoneIfOpen(goal))
+    {
         return;
     }
 

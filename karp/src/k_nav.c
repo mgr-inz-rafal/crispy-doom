@@ -185,6 +185,7 @@ typedef struct
     int start_tics;         // status.tics when it started
     int still;              // tics the door or lift has not moved
     double height;          // of its moving plane, last tic
+    k_mover_t mover;        // what moved it, last tic
     int presses;
     int press_tic;          // the tic of the last press
 } action_t;
@@ -992,6 +993,7 @@ static void StartAction(k_crossing_t crossing, int r)
     action.sector = map->subsectors[map->cells[action.kind == K_ACTION_RIDE
                                                ? from : to].subsector].sector;
     action.height = PlaneHeight();
+    action.mover = K_Graph_SectorMover(action.sector);
 
     status.action = action.kind;
     status.action_line = action.line;
@@ -1042,6 +1044,7 @@ static void FinishAction(void)
 
         default:
             K_Log(K_LOG_NAV, K_LOG_INFO, "lift ride over after %.1f s", seconds);
+            K_Graph_LiftRidden(action.sector);
             break;
     }
 
@@ -1209,7 +1212,25 @@ static boolean UpdateAction(k_vec2_t at, double speed)
     height = PlaneHeight();
     action.still = height != action.height ? 0 : action.still + 1;
     action.height = height;
-    mover = action.kind == K_ACTION_RIDE ? K_MOVER_NONE : K_Graph_SectorMover(action.sector);
+    mover = K_Graph_SectorMover(action.sector);
+
+    // A lift that turns straight back down while the player rides it,
+    // before it can get off (at the top, a lift stops or waits first):
+    // something the map does not show is in its way, a monster at its edge
+    // or a barrel. Never given up on: the route is planned again with that
+    // lift dearer, so it goes another way if one is worth it, and else
+    // rides again, however often the lift turns.
+    if (action.kind == K_ACTION_RIDE && action.mover == K_MOVER_UP
+     && mover == K_MOVER_DOWN)
+    {
+        M_snprintf(why, sizeof(why), "the lift (sector %d) turned back at %.0f, short of "
+                   "the way off (%d so far)", action.sector, height,
+                   K_Graph_LiftTurnedBack(action.sector));
+        EndAction();
+        return Replan(at, why);
+    }
+
+    action.mover = mover;
 
     switch (action.phase)
     {

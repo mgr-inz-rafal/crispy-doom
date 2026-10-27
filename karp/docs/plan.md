@@ -362,7 +362,18 @@ become passable after an action, also judged live, with the engine's own rules:
   coming back up (an active lift or plat remembers its top), or any floor on its way up (a plat
   raising it, a floor mover going up: Doom II MAP03's strip to the teleporter). A ride is not
   judged for width at the height it starts from, where the sides of the way off can be walls,
-  but when it gets there.
+  but when it gets there. Unless it crushes, a floor stops where the player's head meets the
+  ceiling (its ceiling less 56), and a lift turns straight back down there (`T_PlatRaise`): Doom
+  II MAP24's red key platform tops out 48 units under its ceiling, so with the player on it, it
+  rises to 120 of its 128, turns back, waits 3 seconds at the bottom and comes up again, for as
+  long as the player stays on. The way off is judged where the player first can step off (the
+  floor beyond less 24), not at the top, since higher up there is only less headroom.
+- **Lifts that turn back:** a lift also turns back for a monster or barrel at its edge that it
+  would lift into a lower ceiling (anything shootable whose box touches the lift sector is
+  lifted with it). Each time one turned back on the player before it could get off (3.4),
+  riding that lift counts 5 seconds more as a wait, up to 100 times, still well under a blocked
+  crossing: a route another way wins once it is worth it, but where there is none the lift stays
+  the way, however often it turns back. A ride on it that works clears the count.
 - **Lifts that come down by themselves:** a perpetual lift (53, 87; a stopped one has no
   thinker), or one on its way down. A lift too high now to step onto, or to fit over, is a lift
   crossing if its bottom works: wait for it (no press), step on. On one that is too high to fit
@@ -681,7 +692,13 @@ door, lift or lift ride, an action starts:
    bottom), never able to press within 3 seconds, or 3 presses that moved nothing: the goal
    fails with the line in the reason. If the crossing becomes blocked outright (a door that no
    longer opens high enough because a neighbouring ceiling moved, a key door), the route is
-   replanned.
+   replanned. A ride is never given up on: a lift that turns straight back down while the player
+   rides it, before it could get off (at the top a lift stops or waits first), has something in
+   its way that the map does not show, a monster at its edge or a barrel. The lift is marked
+   dearer (3.2.1) and the route replanned: another way if one is worth it, else the same ride
+   again, after dozens of turns if need be ("the lift (sector 86) turned back at 120, short of
+   the way off (1 so far)"). Until monsters can be fought, a lift a monster keeps turning back
+   is waited out; later, killing the monster (or blowing up the barrel) frees it.
 
 Stuck detection pauses while pressing and waiting. The Bot tab shows the action ("door at line
 151: waiting"), the log its start and end ("opening the door at line 151", "door at line 151
@@ -805,7 +822,10 @@ right after the press, as a human would, and waits at the door or lift instead o
 Doom II MAP03 got 6 seconds faster: switch 431 raises a strip slowly, and the bot now drops onto
 it from the walkway while it rises and rides it up to the teleporter. Otherwise the goal waits,
 with the player standing still, for the sector to start moving after its line is used (2 seconds
-for a walk-over line) and then to stop.
+for a walk-over line) and then to stop. The crossing is checked before the goal is even planned:
+it may have opened while a goal in front of it was worked on, and planning would send the player
+off for nothing and count a use of the line (on Doom II MAP24 two lines used up two of their
+three uses that way).
 
 **Guards against loops and early give-ups:**
 - a candidate that does not work out (nav fails, the press moves nothing, the key was not picked
@@ -1208,14 +1228,21 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      pit (sector 24 over sector 0, 512 lower), where the bot fell at a corner, rode a pad in the pit
      back to the start and fell again, round and round. Careful corners now brake earlier and
      cancel drift first (3.4): the bot takes the corners within a unit of the ledge's middle, and
-     had the red key at 40 s, past two teleporters and switches 1004 and 990. Then it loops at
-     the red key's two lifts, side by side: sector 83 (tag 24, floor 64, lowered by switch 990 and
-     walk-over lines 1028, 1040 and 1042, the last inside 83 itself) and sector 86 (tag 25, floor
-     128, the key's, lowered by line 984 on their border). With both moving, the step over line
-     984 keeps changing; each trigger goal ends as soon as its crossing turns "opening", the brain
-     plans again instead of crossing, the lift goes back up, and round it goes. To look into:
-     goals finishing early around lifts. MAP01 8.2 s, MAP05 31.0 s, MAP10 45.9 s, MAP12 75.1 s,
-     MAP16 42.2 s, MAP18 32.9 s pass, and MAP17's bridge still gets its red key.
+     had the red key at 40 s, past two teleporters and switches 1004 and 990. Then it looped on
+     the way out. The key's platform (sector 86, tag 25, lowered by switch 984 from sector 83)
+     tops out at 128 under a ceiling of 176: with the player on it, it rises only to 120, where
+     the player's head meets the ceiling, and turns back (3.2.1). Karp took it to reach its top,
+     where 48 units of headroom left no way off, so the 64-unit step to sector 83 looked blocked.
+     The brain pushed goals for both lifts; while the platform was high, it spent the time on goals
+     already met, set off late, found the way closed again, and wrote off switch 978, the only way
+     out of the room. Now a rising floor stops at head height and the way off is judged where the
+     player can first step off: the bot rides the platform up, steps off at 43 s, presses 978 and
+     teleports out over line 1013 while lift 69 is down, and **finished in 60.4 s**. Also new:
+     a trigger goal whose crossing has opened ends before it is planned (3.5), and a lift that
+     turns back on the player is never given up on (3.4; tested by holding the bot on the
+     platform past its turn: it replanned and stepped off on the way down, 61.0 s). MAP01 8.2 s,
+     MAP05 31.0 s, MAP10 45.9 s, MAP12 75.1 s, MAP16 42.2 s, MAP18 32.9 s pass, and MAP17 still
+     gets its red key (then sticks at the barrels, as before).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
