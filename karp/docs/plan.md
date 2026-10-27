@@ -408,18 +408,24 @@ for a lift to lower or a ride up). Otherwise stairs whose steps are shallower th
 radius look too narrow: on Doom II MAP03 the steps are 8 high and 16 deep, and from the floor below
 the first one, the second one's riser looked like a wall 16 units from the crossing. A drop is no obstacle (the player can hang over it).
 A closed manual door counts as open where the player opens it on the way (otherwise a door's
-faces, 8 units apart, would narrow every crossing near a doorway). That is: seen across a face
-that opens it (a door line, from its front side) when the player has the key it needs, if any;
-where the player stands in it; or where it is within 17 units of every point on the crossing,
-locked or not, so that, closed, it alone would leave no way through and the player gets there
-only through the open door (one-way doors leave strips 8 and 16 units deep behind them on Doom II
-MAP16 and MAP03; MAP16's blue door, locked, sits at the back of an alcove 16 deep: the door's own
-crossing says the key is missing). Seen from further off across a face that does not open it, or
-locked without the key, a closed door is a block: MAP16's red-key pillar, a door opened from two
-of its four faces, leaves gaps exactly as wide as the player on either side, which first looked
-90 units wide with the pillar "open", so the bot never went for the red key; MAP21's yellow bars,
-door faces all round, leave a gap of 24 between two of them. Judged live, so bars that lower open
-the gap. `K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the
+faces, 8 units apart, would narrow every crossing near a doorway). That is: where the player
+stands in it; where it is within 17 units of every point on the crossing, locked or not, so that,
+closed, it alone would leave no way through and the player gets there only through the open door
+(one-way doors leave strips 8 and 16 units deep behind them on Doom II MAP16 and MAP03; MAP16's
+blue door, locked, sits at the back of an alcove 16 deep: the door's own crossing says the key is
+missing); or, for a door set in a wall (it has a one-sided line), seen across a face that opens
+it (a door line, from its front side) when the player has the key it needs, if any. There is no
+way past a door set in a wall but through it, so whatever its closed faces narrow is on that way
+(MAP01: a light sector in the 24-deep room before the exit door; MAP24: a 17-deep alcove before an
+exit door). Otherwise a closed door is a block, and a way past it that it narrows leads through
+it, as a door crossing that gets it opened: MAP26's yellow-key pillar, a free-standing door 16
+square with door lines all round, leaves 24 units on either side in a corridor 64 wide; counted
+open because it could be, it was squeezed past, never opened, and the bot stuck against it.
+MAP16's red-key pillar, a door opened from two of its four faces, leaves gaps exactly as wide as
+the player on either side, which first looked 90 units wide with the pillar "open", so the bot
+never went for the red key; MAP21's yellow bars, door faces all round, leave a gap of 24 between
+two of them. Judged live, so bars that lower open the gap. Not covered: a door set in a wall at
+one end only, with floor on its other sides, could still be squeezed past. `K_Graph_NarrowSectors` names the sectors that narrow a gap (the far side of the
 obstacle lines), so the brain can look for a line that moves them.
 
 **Gaps inside cells** (`K_Graph_Pinched`). A gap can also be narrower than the player inside a
@@ -1246,6 +1252,25 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      platform past its turn: it replanned and stepped off on the way down, 61.0 s). MAP01 8.2 s,
      MAP05 31.0 s, MAP10 45.9 s, MAP12 75.1 s, MAP16 42.2 s, MAP18 32.9 s pass, and MAP17 still
      gets its red key (then sticks at the barrels, as before).
+   - MAP25: no way off the start platform (floor 280). Its only two ways down are drops through
+     niches 16 units wide (sectors 41 and 47, floor -72) onto teleporter pads (38 and 46, the
+     lower level's way back up; entered from the back of their lines, so they do not teleport).
+     The player's box keeps it on the walkway until it has cleared the edge, then it falls onto
+     the pad, never standing in the niche; Karp judges walkway-niche-pad as two crossings, and
+     standing in the niche the walkway's face is 16 away: too narrow. GO TO EXIT failed at 0 s.
+     **Needs gap links** (follow-up 7): a link from the walkway's end straight to the pad.
+     Skipped for now, to come back to.
+   - MAP26: all three keys by 42 s, then stuck 300 units from the exit, against a yellow-key
+     pillar (sector 113): a free-standing door 16 square with door lines (34) all round, in the
+     middle of a corridor 64 wide, leaving 24 units on either side. With the key, the pillar
+     counted as open seen across any face, so the route squeezed past it, never through it, and
+     nothing opened it. Now only doors set in a wall count as open across a face that opens them
+     (3.2.1); the bot opens the pillar and **finished in 49.9 s**. On the way: simply dropping
+     that rule broke MAP01 (a light sector before the exit door looked pinched) and MAP24 (an
+     alcove 17 deep before an exit door looked too narrow), and judging chords near doors more
+     loosely let MAP21's route slip past its locked red door. MAP01 8.2 s, MAP05 31.0 s, MAP10
+     45.9 s, MAP12 75.1 s, MAP16 42.2 s, MAP18 32.9 s, MAP24 60.4 s pass; MAP03, MAP17 and MAP21
+     end as before.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1306,7 +1331,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       portal (far floor within 24, headroom; a lift that is down rides up first), crossed
       straight over the middle of the overlap without cutting corners. Doom II MAP04's red key
       needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
-      So does MAP22: from a raised lift to a ledge at the same height, 16 units away.
+      So does MAP22: from a raised lift to a ledge at the same height, 16 units away. And
+      MAP25: off the start platform, across a 16-unit niche, dropping 344 onto a teleporter pad.
       By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
       But twelve of the first twenty-two Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
       MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21, MAP22; MAP14's over several gaps in a
@@ -1365,7 +1391,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  05, 10, 12, 16, 18 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
+  05, 10, 12, 16, 18, 24, 26 (they finish) and MAP17 (red key, then stuck at barrels) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the

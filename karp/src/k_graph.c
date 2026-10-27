@@ -150,6 +150,7 @@ static const char *crossing_names[K_NUM_CROSSINGS] =
 // Per sector: opened by a manual door line (it is the line's back
 // sector), or moved by a lift line (it has the line's tag).
 static unsigned char *door_sectors;
+static unsigned char *door_walled;      // a door with a one-sided line: set in a wall
 static unsigned char *lift_sectors;
 static unsigned char *lift_turns;       // per sector, K_Graph_LiftTurnedBack
 static k_vec2_t *door_min, *door_max;   // per door sector, its bounding box
@@ -915,9 +916,11 @@ static void FindMoverSectors(const k_map_t *map)
     int i, s;
 
     free(door_sectors);
+    free(door_walled);
     free(lift_sectors);
     free(lift_turns);
     door_sectors = calloc(count, 1);
+    door_walled = calloc(count, 1);
     lift_sectors = calloc(count, 1);
     lift_turns = calloc(count, 1);
 
@@ -968,6 +971,11 @@ static void FindMoverSectors(const k_map_t *map)
                 door_min[s].y = SDL_min(door_min[s].y, SDL_min(line->v1.y, line->v2.y));
                 door_max[s].x = SDL_max(door_max[s].x, SDL_max(line->v1.x, line->v2.x));
                 door_max[s].y = SDL_max(door_max[s].y, SDL_max(line->v1.y, line->v2.y));
+
+                if (line->back_sector < 0)
+                {
+                    door_walled[s] = 1;
+                }
             }
         }
     }
@@ -1400,25 +1408,31 @@ static boolean OpensDoor(const line_t *line)
 }
 
 // The ceiling of the sector on one side of a line, as a player beside the
-// line meets it. A door counts as open where the player stands in it, can
-// open it with this line (OpensDoor), or is near it all along: at a
-// crossing, near enough that the closed door alone would leave no way
-// through, so the player gets there only through the open door (Doom II
-// MAP16 and MAP03: one-way doors leave strips 8 and 16 deep behind them;
-// MAP16's blue door, locked, at the back of an alcove only 16 deep). Else
-// a closed door's faces would narrow every crossing near a doorway, its own
-// included. Further off, a door that this face does not open, or that is
-// locked without its key, is a block: MAP16's red-key pillar in the mouth
-// of the corridor to the exit, opened from two of its four faces, leaves
-// gaps exactly as wide as the player on either side; MAP21's yellow bars,
-// doors on all faces, leave a 24-unit gap between two of them.
+// line meets it. A door counts as open where the player stands in it, or is
+// near it all along: at a crossing, near enough that the closed door alone
+// would leave no way through, so the player gets there only through the
+// open door (Doom II MAP16 and MAP03: one-way doors leave strips 8 and 16
+// deep behind them; MAP16's blue door, locked, at the back of an alcove
+// only 16 deep). A door set in a wall (it has a one-sided line) also counts
+// as open seen across a face that opens it (OpensDoor): there is no way
+// past it but through it, so whatever its closed faces narrow is on that
+// way (MAP01: a light sector in the 24-deep room before the exit door;
+// MAP24: the 17-deep alcove before an exit door). Else a closed door's
+// faces would narrow every crossing near a doorway. Any other door is a
+// block, so a way past it leads through it, as a door crossing, and gets it
+// opened: MAP26's yellow-key pillar, 16 square in a corridor 64 wide, every
+// face a door line, leaves 24 units on either side, and counted open, the
+// bot squeezed past it and stuck; MAP21's yellow bars, doors on all faces,
+// leave a 24-unit gap between two; MAP16's red-key pillar in the mouth of
+// the corridor to the exit, opened from two of its four faces, gaps exactly
+// as wide as the player.
 static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *standing)
 {
     sector_t *sector = side ? line->backsector : line->frontsector;
     int index = (int) (sector - sectors);
 
     if (index == standing->sector[0] || index == standing->sector[1]
-     || (side == 1 && OpensDoor(line))
+     || (side == 1 && door_walled[index] && OpensDoor(line))
      || (door_sectors[index] && NearDoor(standing, index)))
     {
         return OpenCeiling(sector);

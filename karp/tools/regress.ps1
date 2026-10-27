@@ -13,8 +13,9 @@
     the time it finished in, the keys picked up and when, and the first failed goal of a map that
     did not finish.
 
-    The default maps are the Doom II regression set: MAP01, MAP05, MAP10, MAP12, MAP16 and MAP18
-    finish; MAP17 gets its red key, then sticks at barrels (solid things are not handled yet).
+    The default maps are the Doom II regression set: MAP01, MAP05, MAP10, MAP12, MAP16, MAP18,
+    MAP24 and MAP26 finish; MAP17 gets its red key, then sticks at barrels (solid things are not
+    handled yet).
 
 .PARAMETER Iwad
     The Doom II IWAD. Defaults to the DOOM2_IWAD environment variable.
@@ -42,7 +43,7 @@
 #>
 param(
     [string]$Iwad = $env:DOOM2_IWAD,
-    [string[]]$Maps = @('01', '05', '10', '12', '16', '18', '17'),
+    [string[]]$Maps = @('01', '05', '10', '12', '16', '18', '24', '26', '17'),
     [int]$Seconds = 120,
     [hashtable]$Limits = @{ '17' = 60 },
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),
