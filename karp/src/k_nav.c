@@ -1319,6 +1319,24 @@ static int RouteNeighbor(int cell)
     return -1;
 }
 
+// Whether a crossing from one cell into a neighbouring one is open.
+static boolean OpenTo(int cell, int to)
+{
+    const k_graph_t *graph = K_Graph_Get();
+    int i, end = graph->first_link[cell] + graph->link_count[cell];
+
+    for (i = graph->first_link[cell]; i < end; ++i)
+    {
+        if (graph->links[i].neighbor == to
+         && K_Graph_CanCross(graph->links[i].portal, cell) == K_CROSS_OPEN)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static double CellFloor(int cell)
 {
     const k_map_t *map = K_Map_Get();
@@ -1423,9 +1441,14 @@ static boolean Progress(k_vec2_t at, int cell, boolean teleported)
         status.target = SDL_max(status.target, FirstPointIn(r));
         status.route_cell = r;
     }
-    else if (r >= 0 && r < status.route_cell)
+    else if (r >= 0 && r < status.route_cell
+          && !OpenTo(cell, path.cells[status.route_cell]))
     {
-        // Pushed back: drive out of this cell again.
+        // Pushed back: drive out of this cell again. Not if it only slipped
+        // into an earlier route cell lying alongside, and can walk straight
+        // on into the route cell it was in (Doom II MAP26: a sliver along a
+        // ledge's edge beside two later route cells, where the bot turned
+        // back 150 units for a drift of a unit or two).
         K_Log(K_LOG_NAV, K_LOG_INFO, "back in route cell %d of %d at (%.0f,%.0f) - "
               "going on from there", r, path.num_cells, at.x, at.y);
         status.target = FirstPointIn(r);

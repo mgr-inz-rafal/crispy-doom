@@ -567,8 +567,13 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
 - **Progress:** the cell the player stands on (3.2) is looked up in the route's cells. Moving
   further along the route (perhaps having cut a corner) moves the target waypoint to the first
   one inside that cell, never back; being pushed back to an earlier route cell sets the target to
-  that cell's way out again. The route remembers which cell each leg runs through (`k_path_t.leg_cells`) for
-  this. A waypoint on the way also counts as reached within 24 units (tunable).
+  that cell's way out again. Not when the player only slipped into an earlier route cell lying
+  alongside, one with an open crossing straight into the route cell it was in: Doom II MAP26's
+  ledge round a pit has a sliver of a cell along its edge, beside two later route cells, and a
+  drift of a unit or two into it turned the bot back 150 units (a fall into an earlier, lower cell
+  still counts as pushed back: no open crossing climbs out of it). The route remembers which cell
+  each leg runs through (`k_path_t.leg_cells`) for this. A waypoint on the way also counts as
+  reached within 24 units (tunable).
 - **Off the route:** a cell that is not on the route but is one open crossing from a route cell
   (a corner cut through a neighbouring cell) is tolerated. Anywhere else (fell off a ledge, got
   pushed) the route is replanned from where the player is, with a log line.
@@ -1270,7 +1275,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      alcove 17 deep before an exit door looked too narrow), and judging chords near doors more
      loosely let MAP21's route slip past its locked red door. MAP01 8.2 s, MAP05 31.0 s, MAP10
      45.9 s, MAP12 75.1 s, MAP16 42.2 s, MAP18 32.9 s, MAP24 60.4 s pass; MAP03, MAP17 and MAP21
-     end as before.
+     end as before. Then, seen by the user: on the ledge round the pit in the big semicircular
+     room (sector 13, up the spiral stairs), the bot turned back mid-ledge, went a few steps and
+     turned again. Its centre had drifted a unit or two into a sliver of a cell along the pit edge
+     (cell 96), which the route had already passed through, and that counted as being pushed
+     back (3.4). Now it carries on: yellow key 1.4 s sooner, **48.5 s**.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
