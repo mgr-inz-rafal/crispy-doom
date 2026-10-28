@@ -870,22 +870,6 @@ static void CheckConnectivity(const k_map_t *map)
 // Doors and lifts
 //
 
-// Doors opened by using their own line (EV_VerticalDoor); the door is the
-// line's back sector.
-static boolean IsManualDoor(int special)
-{
-    switch (special)
-    {
-        case 1: case 26: case 27: case 28:      // open, wait, close
-        case 31: case 32: case 33: case 34:     // open and stay
-        case 117: case 118:                     // blazing
-            return true;
-
-        default:
-            return false;
-    }
-}
-
 static boolean IsBlazingDoor(int special)
 {
     return special == 117 || special == 118;
@@ -930,7 +914,7 @@ static void FindMoverSectors(const k_map_t *map)
     {
         const line_t *line = &lines[i];
 
-        if (IsManualDoor(line->special) && map->lines[i].back_sector >= 0)
+        if (K_Specials_ManualDoor(line->special) && map->lines[i].back_sector >= 0)
         {
             door_sectors[map->lines[i].back_sector] = 1;
         }
@@ -1397,8 +1381,9 @@ static fixed_t OpenCeiling(sector_t *sector)
 }
 
 // Where the player is, for judging doors: in up to two sectors (-1 for
-// none), its centre somewhere on the segment from a to b. A door nearer
-// than reach all along it is open (FaceCeiling).
+// none), its centre somewhere on the segment from a to b. A door set in a
+// wall nearer than reach all along it is open; with reach PLAYER_RADIUS
+// (the player's own box) any door is (FaceCeiling).
 typedef struct
 {
     int sector[2];
@@ -1430,28 +1415,31 @@ static boolean OpensDoor(const line_t *line)
 {
     int key = K_Specials_LockKey(line->special);
 
-    return IsManualDoor(line->special) && (key < 0 || K_Specials_HasKey(key));
+    return K_Specials_ManualDoor(line->special) && (key < 0 || K_Specials_HasKey(key));
 }
 
 // The ceiling of the sector on one side of a line, as a player beside the
-// line meets it. A door counts as open where the player stands in it, or is
-// near it all along: at a crossing, near enough that the closed door alone
-// would leave no way through, so the player gets there only through the
-// open door (Doom II MAP16 and MAP03: one-way doors leave strips 8 and 16
-// deep behind them; MAP16's blue door, locked, at the back of an alcove
-// only 16 deep). A door set in a wall (it has a one-sided line) also counts
-// as open seen across a face that opens it (OpensDoor): there is no way
-// past it but through it, so whatever its closed faces narrow is on that
-// way (MAP01: a light sector in the 24-deep room before the exit door;
-// MAP24: the 17-deep alcove before an exit door). Else a closed door's
-// faces would narrow every crossing near a doorway. Any other door is a
-// block, so a way past it leads through it, as a door crossing, and gets it
-// opened: MAP26's yellow-key pillar, 16 square in a corridor 64 wide, every
-// face a door line, leaves 24 units on either side, and counted open, the
-// bot squeezed past it and stuck; MAP21's yellow bars, doors on all faces,
-// leave a 24-unit gap between two; MAP16's red-key pillar in the mouth of
-// the corridor to the exit, opened from two of its four faces, gaps exactly
-// as wide as the player.
+// line meets it. A door counts as open where the player stands in it, or
+// its box is in it. A door set in a wall (it has a one-sided line) also
+// counts as open where the player is near it all along: at a crossing,
+// near enough that the closed door alone would leave no way through, so
+// the player gets there only through the open door (Doom II MAP16 and
+// MAP03: one-way doors leave strips 8 and 16 deep behind them; MAP16's
+// blue door, locked, at the back of an alcove only 16 deep). And seen
+// across a face that opens it (OpensDoor): there is no way past it but
+// through it, so whatever its closed faces narrow is on that way (MAP01: a
+// light sector in the 24-deep room before the exit door; MAP24: the
+// 17-deep alcove before an exit door). Else a closed door's faces would
+// narrow every crossing near a doorway. Any other door is a block, so a
+// way past it leads through it, as a door crossing, or past it once it is
+// opened (K_Graph_NarrowSectors names it): MAP26's yellow-key pillar, 16
+// square in a corridor 64 wide, every face a door line, leaves 24 units on
+// either side, and counted open, the bot squeezed past it and stuck;
+// MAP21's yellow bars, doors on all faces, leave a 24-unit gap between
+// two; MAP16's red-key pillar in the mouth of the corridor to the exit,
+// opened from two of its four faces, gaps exactly as wide as the player;
+// MAP19's three key bars, 8 units apart, are each near all of a crossing
+// between them, and counted open, the gaps looked 64 wide.
 static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *standing)
 {
     sector_t *sector = side ? line->backsector : line->frontsector;
@@ -1459,7 +1447,8 @@ static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *stand
 
     if (index == standing->sector[0] || index == standing->sector[1]
      || (side == 1 && door_walled[index] && OpensDoor(line))
-     || (door_sectors[index] && NearDoor(standing, index)))
+     || (door_sectors[index] && (door_walled[index] || standing->reach <= PLAYER_RADIUS)
+         && NearDoor(standing, index)))
     {
         return OpenCeiling(sector);
     }
@@ -1969,7 +1958,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
 
         // A door opened by using this line from its front side, if it opens
         // high enough.
-        if (line != NULL && IsManualDoor(line->special)
+        if (line != NULL && K_Specials_ManualDoor(line->special)
          && line->frontsector == a && line->backsector == b
          && Headroom(floor_a, ceiling_a, floor_b, SDL_max(ceiling_b, DoorTop(b))))
         {

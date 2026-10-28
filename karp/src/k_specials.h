@@ -39,6 +39,7 @@ typedef enum
     K_MOVE_FLOOR_UP = 1,
     K_MOVE_FLOOR_DOWN = 2,
     K_MOVE_CEILING_UP = 4,
+    K_MOVE_DOOR = 8,        // a manual door: its own line opens it
 } k_move_t;
 
 // A key lying in the level.
@@ -56,9 +57,14 @@ void K_Specials_Build(void);
 k_trigger_t K_Specials_ExitTrigger(int special, int *secret);
 
 // Lines that move the sectors with their tag in a way that can open a way:
-// doors that open, floors, lifts, stairs, ceilings that rise. K_TRIGGER_NONE
+// doors that open, floors, lifts, stairs, ceilings that rise; and manual
+// doors, which open the sector behind them, whatever the tag. K_TRIGGER_NONE
 // for anything else (doors that close, crushers, lights, teleporters).
 k_trigger_t K_Specials_MoverTrigger(int special);
+
+// Doors opened by using their own line from the front (EV_VerticalDoor);
+// the door is the line's back sector.
+int K_Specials_ManualDoor(int special);
 
 // How a mover line moves the sectors it targets, as k_move_t flags (a lift
 // goes down, and back up only to where it was; a perpetual one also up to
@@ -68,8 +74,8 @@ int K_Specials_MoverMoves(int special);
 // A line's live special: one-shot lines lose theirs once used.
 int K_Specials_LineSpecial(int line);
 
-// The lines that move a sector (by its tag), from the specials at level
-// load.
+// The lines that move a sector (by its tag, or as a manual door's line),
+// from the specials at level load.
 int K_Specials_TriggerCount(int sector);
 int K_Specials_TriggerLine(int sector, int index);
 

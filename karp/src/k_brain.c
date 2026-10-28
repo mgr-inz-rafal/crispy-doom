@@ -141,7 +141,11 @@ static failed_t failed[MAX_FAILED];
 static int num_failed;
 static boolean exit_wanted; // GO TO EXIT goes on an empty list
 
-static int keys_lying[K_NUM_KEYS];  // refreshed when planning
+// Refreshed when planning: the keys lying in the level (up to
+// MAX_CANDIDATES of each colour known by place), and where the player was.
+static int keys_lying[K_NUM_KEYS];
+static k_vec2_t keys_at[K_NUM_KEYS][MAX_CANDIDATES];
+static k_vec2_t planned_from;
 static unsigned char *line_uses;    // per line, as a trigger goal's choice
 static k_path_t scratch;
 
@@ -168,7 +172,15 @@ static void GoalName(const goal_t *goal, char *buf, int len)
         // The line's tag: a stair builder's steps after the first are not
         // tagged.
         case GOAL_TRIGGER:
-            if (goal->planned && goal->chosen.kind == K_GOAL_USE_LINE)
+            // By the special at level load: an open-and-stay door loses its
+            // own once used.
+            if (goal->planned && goal->chosen.kind == K_GOAL_USE_LINE
+             && K_Specials_ManualDoor(K_Map_Get()->lines[goal->chosen.line].special))
+            {
+                M_snprintf(buf, len, "OPEN DOOR line %d (sector %d)", goal->chosen.line,
+                           goal->param);
+            }
+            else if (goal->planned && goal->chosen.kind == K_GOAL_USE_LINE)
             {
                 M_snprintf(buf, len, "USE SWITCH line %d (tag %d)", goal->chosen.line,
                            lines[goal->chosen.line].tag);
@@ -514,7 +526,9 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                 k_trigger_t trigger = K_Specials_MoverTrigger(K_Specials_LineSpecial(line));
 
                 if (LineHelps(line, goal->want)
-                 && LineCandidate(line, trigger, trigger == K_TRIGGER_USE ? "switch"
+                 && LineCandidate(line, trigger,
+                                  K_Specials_ManualDoor(K_Specials_LineSpecial(line)) ? "door"
+                                  : trigger == K_TRIGGER_USE ? "switch"
                                   : trigger == K_TRIGGER_SHOOT ? "gun switch"
                                   : "walk-over line", &out[count]))
                 {
@@ -561,15 +575,90 @@ static boolean LiveTrigger(int sector, int want)
     return false;
 }
 
+// How far the player goes to be able to use a line: nowhere if it needs no
+// key or the player has it, else to the nearest key and on to the line
+// (as the crow flies); -1 if there is no key to get.
+static double KeyTrip(int line)
+{
+    const k_line_t *l = &K_Map_Get()->lines[line];
+    k_vec2_t middle = { (l->v1.x + l->v2.x) * 0.5, (l->v1.y + l->v2.y) * 0.5 };
+    int key = K_Specials_LockKey(K_Specials_LineSpecial(line));
+    double best = -1.0;
+    int i;
+
+    if (key < 0 || K_Specials_HasKey(key))
+    {
+        return 0.0;
+    }
+
+    if (keys_lying[key] <= 0 || !Allowed(GOAL_KEY, key))
+    {
+        return -1.0;
+    }
+
+    for (i = 0; i < SDL_min(keys_lying[key], MAX_CANDIDATES); ++i)
+    {
+        k_vec2_t at = keys_at[key][i];
+        double trip = hypot(at.x - planned_from.x, at.y - planned_from.y)
+                    + hypot(middle.x - at.x, middle.y - at.y);
+
+        if (best < 0.0 || trip < best)
+        {
+            best = trip;
+        }
+    }
+
+    return best;
+}
+
+// What opening a sector that narrows a gap takes: nothing if a line still
+// moves it out of the way (bars that lower), or its door opens from a face
+// with no key or one in hand; else the trip to a key and on to the door
+// (KeyTrip); -1 if nothing opens it.
+static double OpeningCost(int sector)
+{
+    double best = -1.0;
+    int i;
+
+    for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
+    {
+        int line = K_Specials_TriggerLine(sector, i);
+        double cost;
+
+        if (LineHelps(line, OPENING_MOVES))
+        {
+            return 0.0;
+        }
+
+        if (!LineHelps(line, K_MOVE_DOOR))
+        {
+            continue;
+        }
+
+        cost = KeyTrip(line);
+
+        if (cost >= 0.0 && (best < 0.0 || cost < best))
+        {
+            best = cost;
+        }
+    }
+
+    return best;
+}
+
 // What would get the player past a blocked crossing, if anything: the key
 // for a locked door; for a step too high, a line that lowers the floor
 // beyond or raises the one the player is on, never one that lowers it (Doom
 // II MAP27: lowering the arm it stood on, to climb the pillar beside it,
 // burned a dozen walk-over lines); for too little headroom, a line that
 // lowers a floor or raises a ceiling on either side; for a gap too narrow,
-// one that does so to a sector narrowing it (bars that lower), or else to
+// one that does so to a sector narrowing it (bars that lower), or a door
+// narrowing it, opened from its face, the one the player can open soonest
+// (OpeningCost); or else a line that lowers a floor or raises a ceiling on
 // either side (a lift the player rides down to where the way on has
-// headroom, Doom II MAP05). want gets the moves that would help.
+// headroom, Doom II MAP05). One sector at a time: if the gap is still too
+// narrow once it moved, the next one is pushed (Doom II MAP19: three key
+// bars, two of which must be open). want gets the moves that would help.
 static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *type,
                       int *param, int *want)
 {
@@ -601,14 +690,34 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
 
     if (crossing == K_CROSS_NARROW)
     {
-        count = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_) - 2);
-        sectors_[count++] = from_sector;
-        sectors_[count++] = to_sector;
+        int narrowing = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_));
+        int best = -1;
+        double best_cost = 0.0;
 
-        for (i = 0; i < count; ++i)
+        for (i = 0; i < narrowing; ++i)
         {
-            wants[i] = OPENING_MOVES;
+            double cost = OpeningCost(sectors_[i]);
+
+            if (cost >= 0.0 && Allowed(GOAL_TRIGGER, sectors_[i])
+             && (best < 0 || cost < best_cost))
+            {
+                best = i;
+                best_cost = cost;
+            }
         }
+
+        if (best >= 0)
+        {
+            *type = GOAL_TRIGGER;
+            *param = sectors_[best];
+            *want = OPENING_MOVES | K_MOVE_DOOR;
+            return true;
+        }
+
+        sectors_[0] = from_sector;
+        wants[0] = OPENING_MOVES;
+        sectors_[1] = to_sector;
+        wants[1] = OPENING_MOVES;
     }
     else if (crossing == K_CROSS_STEP)
     {
@@ -693,13 +802,21 @@ static double BlockCost(int portal, int from, k_crossing_t crossing)
                                                                 : UNFIXABLE_COST;
 }
 
-static void CountKeys(void)
+static void CountKeys(k_vec2_t from)
 {
-    int key;
+    k_keything_t keys[MAX_CANDIDATES];
+    int key, i;
+
+    planned_from = from;
 
     for (key = 0; key < K_NUM_KEYS; ++key)
     {
-        keys_lying[key] = K_Specials_FindKeys(key, NULL, 0);
+        keys_lying[key] = K_Specials_FindKeys(key, keys, MAX_CANDIDATES);
+
+        for (i = 0; i < SDL_min(keys_lying[key], MAX_CANDIDATES); ++i)
+        {
+            keys_at[key][i] = keys[i].at;
+        }
     }
 }
 
@@ -794,7 +911,7 @@ static void PlanGoal(goal_t *goal)
 
     start.x = player.x;
     start.y = player.y;
-    CountKeys();
+    CountKeys(start);
     GoalName(goal, name, sizeof(name));
     num_reasons = 0;
 

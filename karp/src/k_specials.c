@@ -110,9 +110,20 @@ void K_Specials_Build(void)
     trigger_count = calloc(count, sizeof(int));
     num_pairs = 0;
 
-    // Few lines are movers, so the line-by-sector loop stays small.
+    // Few lines are movers, so the line-by-sector loop stays small. A
+    // manual door opens the sector behind it, whatever its tag.
     for (i = 0; i < numlines; ++i)
     {
+        if (K_Specials_ManualDoor(lines[i].special))
+        {
+            if (lines[i].backsector != NULL)
+            {
+                AddPair((int) (lines[i].backsector - sectors), i);
+            }
+
+            continue;
+        }
+
         if (lines[i].tag == 0
          || K_Specials_MoverTrigger(lines[i].special) == K_TRIGGER_NONE)
         {
@@ -204,6 +215,9 @@ k_trigger_t K_Specials_MoverTrigger(int special)
         case 101: case 102: case 131: case 132: case 140:
         // lifts, stairs, donut:
         case 21: case 62: case 122: case 123: case 7: case 127: case 9:
+        // manual doors (the sector behind them):
+        case 1: case 26: case 27: case 28: case 31: case 32: case 33:
+        case 34: case 117: case 118:
             return K_TRIGGER_USE;
 
         // Walk-over lines (W1, WR). Doors that open:
@@ -266,8 +280,28 @@ int K_Specials_MoverMoves(int special)
         case 40:
             return K_MOVE_CEILING_UP | K_MOVE_FLOOR_DOWN;
 
+        // Manual doors: only a gap they narrow asks for them, never a way
+        // through them from behind.
+        case 1: case 26: case 27: case 28: case 31: case 32: case 33:
+        case 34: case 117: case 118:
+            return K_MOVE_DOOR;
+
         default:
             return 0;
+    }
+}
+
+int K_Specials_ManualDoor(int special)
+{
+    switch (special)
+    {
+        case 1: case 26: case 27: case 28:      // open, wait, close
+        case 31: case 32: case 33: case 34:     // open and stay
+        case 117: case 118:                     // blazing
+            return true;
+
+        default:
+            return false;
     }
 }
 
