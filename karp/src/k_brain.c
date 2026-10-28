@@ -128,9 +128,13 @@ typedef struct
     // (a door opening, a lift on its way down), the goal is done: the
     // player goes on and waits there, not at the switch. want: the moves
     // of the sector that would open it (k_move_t); only lines that make one
-    // of them are candidates.
+    // of them are candidates. For a gap inside a cell, portal is -1, and
+    // pinch_cell and pinch_at say where (else pinch_cell is -1): done once
+    // the gap is wide enough.
     int portal, from;
     int want;
+    int pinch_cell;
+    k_vec2_t pinch_at;
 
     // Found no way while sectors were moving: not planned again before
     // leveltime retry_tic; waited is how long it has waited so far.
@@ -284,6 +288,7 @@ static goal_t *Push(goal_type_t type, int param)
     goal->chosen.line = -1;
     goal->portal = -1;
     goal->from = -1;
+    goal->pinch_cell = -1;
     return goal;
 }
 
@@ -656,6 +661,50 @@ static double OpeningCost(int sector)
     return best;
 }
 
+// Of the sectors narrowing a gap, the one the player can open soonest
+// (OpeningCost), as an index; -1 if none can be.
+static int OpenSoonest(const int *narrowing, int count)
+{
+    int best = -1;
+    double best_cost = 0.0;
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        double cost = OpeningCost(narrowing[i]);
+
+        if (cost >= 0.0 && Allowed(GOAL_TRIGGER, narrowing[i])
+         && (best < 0 || cost < best_cost))
+        {
+            best = i;
+            best_cost = cost;
+        }
+    }
+
+    return best;
+}
+
+// What would get the player through a gap inside a cell: as for a gap too
+// narrow at a crossing, opening a sector that narrows it (Doom II MAP11: a
+// fence of pillars 16 apart, the gaps between them 24 long, behind the red
+// door; walk-over lines open or lower every other pillar for a while).
+static boolean FixForPinch(int cell, k_vec2_t at, goal_type_t *type, int *param, int *want)
+{
+    int narrowing[8];
+    int count = K_Graph_PinchSectors(cell, at, narrowing, arrlen(narrowing));
+    int best = OpenSoonest(narrowing, count);
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    *type = GOAL_TRIGGER;
+    *param = narrowing[best];
+    *want = OPENING_MOVES | K_MOVE_DOOR;
+    return true;
+}
+
 // What would get the player past a blocked crossing, if anything: the key
 // for a locked door; for a step too high, a line that lowers the floor
 // beyond or raises the one the player is on, never one that lowers it (Doom
@@ -703,20 +752,7 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     if (crossing == K_CROSS_NARROW)
     {
         int narrowing = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_));
-        int best = -1;
-        double best_cost = 0.0;
-
-        for (i = 0; i < narrowing; ++i)
-        {
-            double cost = OpeningCost(sectors_[i]);
-
-            if (cost >= 0.0 && Allowed(GOAL_TRIGGER, sectors_[i])
-             && (best < 0 || cost < best_cost))
-            {
-                best = i;
-                best_cost = cost;
-            }
-        }
+        int best = OpenSoonest(sectors_, narrowing);
 
         if (best >= 0)
         {
@@ -851,10 +887,19 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int
     *from = path->blocked_from;
     *later = false;
 
-    // A gap inside a cell is no crossing's: nothing found fixes it.
-    if (path->blocked_pinch
-     || !FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param,
-                want))
+    // A gap inside a cell is no crossing's: no portal, but the cell (and the
+    // path's blocked_at).
+    if (path->blocked_pinch)
+    {
+        *portal = -1;
+
+        if (!FixForPinch(path->blocked_from, path->blocked_at, type, param, want))
+        {
+            return false;
+        }
+    }
+    else if (!FixFor(path->blocked_portal, path->blocked_from, path->blocked_by, type, param,
+                     want))
     {
         return false;
     }
@@ -903,6 +948,15 @@ static double BlockCost(int portal, int from, k_crossing_t crossing)
 
     return FixFor(portal, from, crossing, &type, &param, &want) ? FIXABLE_COST
                                                                 : UNFIXABLE_COST;
+}
+
+// Set as the pathfinder's cost for a gap inside a cell.
+static double PinchCost(int cell, k_vec2_t at)
+{
+    goal_type_t type;
+    int param, want;
+
+    return FixForPinch(cell, at, &type, &param, &want) ? FIXABLE_COST : UNFIXABLE_COST;
 }
 
 static void CountKeys(k_vec2_t from)
@@ -1001,6 +1055,7 @@ static void PlanGoal(goal_t *goal)
     double open_length = 0.0, blocked_score = 0.0;
     goal_type_t fix_type = GOAL_GOTO;
     int fix_param = 0, fix_want = 0, fix_portal = -1, fix_from = -1;
+    k_vec2_t fix_pinch_at = { 0.0, 0.0 };
     char reason[K_LOG_LINE_LEN], blocker[K_LOG_LINE_LEN] = "";
     char name[64];
     k_pose_t player;
@@ -1127,6 +1182,7 @@ static void PlanGoal(goal_t *goal)
                 fix_want = want;
                 fix_portal = portal;
                 fix_from = from;
+                fix_pinch_at = scratch.blocked_at;
 
                 if (key_door >= 0)
                 {
@@ -1174,6 +1230,12 @@ static void PlanGoal(goal_t *goal)
             fix->portal = fix_portal;
             fix->from = fix_from;
             fix->want = fix_want;
+
+            if (fix_portal < 0)
+            {
+                fix->pinch_cell = fix_from;
+                fix->pinch_at = fix_pinch_at;
+            }
         }
 
         GoalName(fix, fix_name, sizeof(fix_name));
@@ -1217,6 +1279,17 @@ static boolean DoneIfOpen(const goal_t *goal)
 {
     k_crossing_t crossing;
     char how[96];
+
+    if (goal->type == GOAL_TRIGGER && goal->pinch_cell >= 0)
+    {
+        if (K_Graph_PinchNarrow(goal->pinch_cell, goal->pinch_at))
+        {
+            return false;
+        }
+
+        DoneGoal("the gap is wide enough now, or widening");
+        return true;
+    }
 
     if (goal->type != GOAL_TRIGGER || goal->portal < 0)
     {
@@ -1312,6 +1385,7 @@ void K_Brain_Reset(void)
     line_uses = calloc(SDL_max(numlines, 1), 1);
 
     K_Path_SetBlockCost(BlockCost);
+    K_Path_SetPinchCost(PinchCost);
 }
 
 void K_Brain_RequestGoto(double x, double y)

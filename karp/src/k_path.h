@@ -103,6 +103,12 @@ typedef double (*k_blockcost_t)(int portal, int from_cell, k_crossing_t crossing
 
 void K_Path_SetBlockCost(k_blockcost_t cost);
 
+// The same for a gap inside a cell (K_Graph_Pinched), by the cell and where
+// the gap is. Without one, it costs as any blocked crossing.
+typedef double (*k_pinchcost_t)(int cell, k_vec2_t at);
+
+void K_Path_SetPinchCost(k_pinchcost_t cost);
+
 void K_Path_Free(k_path_t *path);
 
 // "found", "blocked", ...

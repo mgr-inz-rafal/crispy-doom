@@ -2354,22 +2354,23 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
     return best;
 }
 
-int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
+// The sectors that make the obstacle lines near a stance obstacles: the
+// far side of two-sided lines, too high to step onto or too low to fit
+// under, up to max. Returns how many.
+static int NarrowingSectors(const stance_t *stance, int *found_sectors, int max)
 {
     const k_map_t *map = K_Map_Get();
     int lines_found[MAX_NEAR_LINES];
-    stance_t stance;
     int count, found = 0;
     int i, side, j;
 
-    Stance(portal, from, &stance);
-    count = NearObstacles(&stance, CLEARANCE, lines_found, MAX_NEAR_LINES);
+    count = NearObstacles(stance, CLEARANCE, lines_found, MAX_NEAR_LINES);
 
     for (i = 0; i < count; ++i)
     {
         const line_t *line = &lines[lines_found[i]];
-        int past = StanceSide(&stance, &map->lines[lines_found[i]]);
-        fixed_t floor = stance.floor[past], ceiling = stance.ceiling[past];
+        int past = StanceSide(stance, &map->lines[lines_found[i]]);
+        fixed_t floor = stance->floor[past], ceiling = stance->ceiling[past];
 
         if (line->backsector == NULL)
         {
@@ -2382,7 +2383,7 @@ int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
         {
             sector_t *sector = side ? line->backsector : line->frontsector;
             int index = (int) (sector - sectors);
-            fixed_t top = FaceCeiling(line, side, &stance.standing);
+            fixed_t top = FaceCeiling(line, side, &stance->standing);
 
             if (sector->floorheight - floor <= MAX_STEP_UP
              && Headroom(floor, ceiling, sector->floorheight, top))
@@ -2404,18 +2405,59 @@ int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
     return found;
 }
 
+int K_Graph_NarrowSectors(int portal, int from, int *found_sectors, int max)
+{
+    stance_t stance;
+
+    Stance(portal, from, &stance);
+    return NarrowingSectors(&stance, found_sectors, max);
+}
+
+// A player standing in the cell, going across the chord: judged along the
+// chord and CHORD_REACH past its ends (across, which the stance points to).
+static void ChordStance(int cell, const chord_t *chord, k_portal_t *across, stance_t *stance)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t dir = Sub(chord->b, chord->a);
+    double length = Length(dir);
+
+    dir.x /= length;
+    dir.y /= length;
+
+    memset(across, 0, sizeof(*across));
+    across->cell[0] = across->cell[1] = cell;
+    across->a.x = chord->a.x - dir.x * CHORD_REACH;
+    across->a.y = chord->a.y - dir.y * CHORD_REACH;
+    across->b.x = chord->b.x + dir.x * CHORD_REACH;
+    across->b.y = chord->b.y + dir.y * CHORD_REACH;
+    across->line = -1;
+    across->teleport_from = -1;
+    across->jump = -1;
+
+    stance->portal = across;
+    stance->normal.x = -dir.y;
+    stance->normal.y = dir.x;
+    StandingHeights(cell, &stance->floor[0], &stance->ceiling[0]);
+    stance->floor[1] = stance->floor[0];
+    stance->ceiling[1] = stance->ceiling[0];
+    stance->standing.sector[0] = map->subsectors[map->cells[cell].subsector].sector;
+    stance->standing.sector[1] = stance->standing.sector[0];
+    stance->standing.a = across->a;
+    stance->standing.b = across->b;
+    stance->standing.reach = CLEARANCE;
+    stance->crossing = false;
+}
+
 // Whether no point on the chord, nor CHORD_REACH past its ends, is
 // CLEARANCE from every obstacle, for a player standing in the cell: as
 // Narrow judges a crossing, sampled more finely. Once a tic.
 static boolean ChordNarrow(int cell, chord_t *chord)
 {
-    const k_map_t *map = K_Map_Get();
-    k_vec2_t dir = Sub(chord->b, chord->a);
-    double length = Length(dir);
     int found[MAX_NEAR_LINES];
     int blocks[MAX_NEAR_BLOCKS];
     k_portal_t across;
     stance_t stance;
+    double length;
     int count, num_blocks, samples, s;
 
     if (chord->judged == leveltime + 1)
@@ -2423,31 +2465,8 @@ static boolean ChordNarrow(int cell, chord_t *chord)
         return chord->narrow;
     }
 
-    dir.x /= length;
-    dir.y /= length;
-
-    memset(&across, 0, sizeof(across));
-    across.cell[0] = across.cell[1] = cell;
-    across.a.x = chord->a.x - dir.x * CHORD_REACH;
-    across.a.y = chord->a.y - dir.y * CHORD_REACH;
-    across.b.x = chord->b.x + dir.x * CHORD_REACH;
-    across.b.y = chord->b.y + dir.y * CHORD_REACH;
-    across.line = -1;
-    across.teleport_from = -1;
-    length += 2.0 * CHORD_REACH;
-
-    stance.portal = &across;
-    stance.normal.x = -dir.y;
-    stance.normal.y = dir.x;
-    StandingHeights(cell, &stance.floor[0], &stance.ceiling[0]);
-    stance.floor[1] = stance.floor[0];
-    stance.ceiling[1] = stance.ceiling[0];
-    stance.standing.sector[0] = map->subsectors[map->cells[cell].subsector].sector;
-    stance.standing.sector[1] = stance.standing.sector[0];
-    stance.standing.a = across.a;
-    stance.standing.b = across.b;
-    stance.standing.reach = CLEARANCE;
-    stance.crossing = false;
+    ChordStance(cell, chord, &across, &stance);
+    length = Length(Sub(across.b, across.a));
 
     count = NearObstacles(&stance, CLEARANCE, found, MAX_NEAR_LINES);
     num_blocks = NearBlocks(across.a, across.b, CLEARANCE, blocks, MAX_NEAR_BLOCKS);
@@ -2516,6 +2535,52 @@ int K_Graph_Pinched(int cell, k_vec2_t from_a, k_vec2_t from_b,
     }
 
     return false;
+}
+
+// The chord of a cell whose middle is at (as K_Graph_Pinched gives it), or
+// NULL.
+static chord_t *ChordAt(int cell, k_vec2_t at)
+{
+    const k_map_t *map = K_Map_Get();
+    int i;
+
+    if (cell < 0 || chord_first == NULL || graph.generation != map->generation)
+    {
+        return NULL;
+    }
+
+    for (i = chord_first[cell]; i < chord_first[cell + 1]; ++i)
+    {
+        if (fabs((chords[i].a.x + chords[i].b.x) * 0.5 - at.x) < 0.01
+         && fabs((chords[i].a.y + chords[i].b.y) * 0.5 - at.y) < 0.01)
+        {
+            return &chords[i];
+        }
+    }
+
+    return NULL;
+}
+
+int K_Graph_PinchSectors(int cell, k_vec2_t at, int *found_sectors, int max)
+{
+    chord_t *chord = ChordAt(cell, at);
+    k_portal_t across;
+    stance_t stance;
+
+    if (chord == NULL)
+    {
+        return 0;
+    }
+
+    ChordStance(cell, chord, &across, &stance);
+    return NarrowingSectors(&stance, found_sectors, max);
+}
+
+int K_Graph_PinchNarrow(int cell, k_vec2_t at)
+{
+    chord_t *chord = ChordAt(cell, at);
+
+    return chord != NULL && ChordNarrow(cell, chord);
 }
 
 int K_Graph_Passable(k_crossing_t crossing)

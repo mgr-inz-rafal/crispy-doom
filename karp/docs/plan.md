@@ -488,8 +488,12 @@ narrow if no point on it is 17 units from every obstacle, sampled every 2 units,
 past its ends, since the player's box can hang over open floor beyond (else every thin cell beside
 a wall would look like a gap). Going through a cell from one stretch of its border to another (a
 portal, or a point: the start, the goal, a teleporter's destination) is pinched if a narrow chord
-has them on opposite sides. Nothing the brain can find fixes a pinch (it is no crossing's): the
-pathfinder costs it as a wall (3.3).
+has them on opposite sides. A pinch is no crossing's, but it has sectors that narrow it, found as
+for a narrow crossing from the obstacle lines near its chord (`K_Graph_PinchSectors`), and the
+brain can open one of those (3.5): Doom II MAP11's fence of pillars 16 apart behind the red door
+leaves gaps 24 long, each pinched inside its own cell, and walk-over lines open or lower every
+other pillar for a while. Until that, the fence cost as a wall, so the bot planned straight up a
+136-unit step from the nukage instead, and gave up.
 
 **Where a route crosses a portal** (`K_Graph_PortalPoint`): not always its middle, but the point
 on it that is at least 24 units from every obstacle, the one nearest the middle if several are;
@@ -653,8 +657,9 @@ near-perfect conditions; found at level load, judged live.
   crossings. Crossings are judged live (`K_Graph_CanCross`).
 - **Through a cell**: a search node is a portal crossed one way, so expanding it goes through its
   cell to the next portal; that way is pinched if a narrow chord lies across it (3.2.1). A pinch
-  costs as a crossing with no fix (10^8). It is also reported like a blocked crossing, as "a gap
-  narrower than the player at (x, y)", with no fix for the brain to look for.
+  costs what the brain says, by where it is (`K_Path_SetPinchCost`): 10^6 if it can open a sector
+  narrowing it, else 10^8. It is also reported like a blocked crossing, as "a gap narrower than
+  the player at (x, y)".
 - **Waypoints**: the route's line passes each portal at `K_Graph_PortalPoint` (3.2.1), not exactly
   at the middle the search costed, so it keeps clear of wall corners.
 - **Legs along a wall.** When a route enters and leaves a cell by two portals on the same edge,
@@ -998,6 +1003,9 @@ it cannot be reached):
     down to where the way on has headroom (Doom II MAP05: a passage whose ceiling is level with
     the floor in front of it until that floor, a lift, comes down); only lines that lower a floor
     or raise a ceiling;
+  - a **gap inside a cell** (a pinch, 3.2.1) -> the same as a gap too narrow at a crossing: USE
+    TRIGGER for the sector narrowing it that the player can open soonest (Doom II MAP11: line 516
+    opens the fence's pillar doors). The goal is done once the gap is wide enough, or widening;
   - a **jump that does not work now** (3.2.2) -> one found as if a sector had moved: USE TRIGGER
     for that sector, to move it there (Doom II MAP09: switch 126 raises floor 6, switch 157 opens
     door 33, line 380 builds the stairs); one found through a door that is closed: USE TRIGGER for
@@ -1375,6 +1383,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    - MAP10: finished in 45.4 s with no changes (yellow key, blue key, nine doors, exit switch).
    - MAP11: the exit area (the north part of the central circle) is reached by a **jump**, per
      the user; the bot sees only a 296-unit step at line 796. Skipped for now, to come back to.
+     (Finished since, see the jumps below: what it lacked was the fence of pillars.)
    - MAP12: finished in 84.9 s (yellow and blue keys, a teleporter, eight switches, perpetual
      lifts, exit line). Fixes it took (3.2.1, 3.4, 3.5):
      - a diagonal blue door between two short jambs on one line looked like a closed sector:
@@ -1767,6 +1776,20 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      the way to the exit it worked switches 442, 403 and 428 twice each (the user): lift 123,
      lowered first, was back up by the time door 130 further on was open again. Fixed by "lifts
      last" (3.5): **94.6 s**, every switch once.
+   - MAP11 ("Circle of Death"): **finished in 91.2 s**, after a hand-played trace (the user). At
+     first the bot gave up at once: switch 615, which lowers the way to the exit, stands on a
+     ledge 136 above the nukage, reached up spiral stairs behind the red door and a fence of
+     pillars 16 apart (sectors 23-27, 34, 35). Walk-over line 516 opens the four pillar doors
+     (blazing, they shut again) and line 539 lowers the three pillar lifts; either leaves gaps 56
+     wide. The gap between two pillars is a crossing narrowed by them, which the brain could fix,
+     but each gap is 24 long and pinched inside its own cell too, and a pinch cost as a wall, so
+     the cheapest route was the unfixable step from the nukage. Now a pinch is fixed like a narrow
+     crossing (3.2.1, 3.5). The bot got the blue key, worked switches 433 and 462, jumped onto the
+     red key's ledge, crossed line 516, went through the fence and up the stairs to switch 615,
+     and on to the exit over two more jumps.
+     Seen: after switch 615, USE TRIGGER for sector 4 failed ("no line moves the sector any
+     more"): the switch had moved it too, though not low enough to step onto. Harmless, the exit
+     goal found its way by jumps.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1879,9 +1902,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       back up (optional, the user's note; see the MAP17 playtest).
       **Done as one model** (3.2.2, 3.3, 3.4): gap links and running jumps are both straight runs
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
-      (MAP24 takes a jump too). MAP06, MAP08 and MAP09 finish too; jumps that only appear once a
-      sector has moved are searched for again when it stops, and at level load as if it had
-      moved (3.2.2). Left: the maps not tried yet (MAP11, 13, 14, 15, 20, 22, 25, 29), and MAP04
+      (MAP24 takes a jump too). MAP06, MAP08, MAP09 and MAP11 finish too; jumps that only appear
+      once a sector has moved are searched for again when it stops, and at level load as if it
+      had moved (3.2.2). Left: the maps not tried yet (MAP13, 14, 15, 20, 22, 25, 29), and MAP04
       (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav

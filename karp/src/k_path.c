@@ -82,6 +82,7 @@ static int heap_size;
 static int heap_capacity;
 
 static k_blockcost_t block_cost;
+static k_pinchcost_t pinch_cost;
 
 // The search in progress.
 static const k_map_t *map;
@@ -335,12 +336,11 @@ static void NodeEntry(int node, k_vec2_t *a, k_vec2_t *b)
     }
 }
 
-// A gap inside a cell (K_Graph_Pinched) is no crossing's, so no fix the
-// brain could find gets the player through: costed as a wall would be.
-static double PinchCost(int portal, int cell)
+// A gap inside a cell (K_Graph_Pinched) is no crossing's: the brain judges
+// it by the sectors that narrow it.
+static double PinchCost(int cell, k_vec2_t at)
 {
-    return block_cost != NULL && portal >= 0 ? block_cost(portal, cell, K_CROSS_WALL)
-                                             : BLOCKED_PENALTY;
+    return pinch_cost != NULL ? pinch_cost(cell, at) : BLOCKED_PENALTY;
 }
 
 static void PrepareNodes(void)
@@ -406,7 +406,7 @@ static boolean Search(k_path_t *path)
     {
         int node = Pop();
         int cell, i, end;
-        k_vec2_t at, entry_a, entry_b;
+        k_vec2_t at, entry_a, entry_b, pinch;
 
         if (done[node] == search)
         {
@@ -429,9 +429,9 @@ static boolean Search(k_path_t *path)
         {
             double step = Distance(at, goal_point);
 
-            if (K_Graph_Pinched(cell, entry_a, entry_b, goal_point, goal_point, NULL))
+            if (K_Graph_Pinched(cell, entry_a, entry_b, goal_point, goal_point, &pinch))
             {
-                step += PinchCost(node == start_node ? -1 : node / 2, cell);
+                step += PinchCost(cell, pinch);
             }
 
             Relax(goal_node, node, step);
@@ -472,9 +472,9 @@ static boolean Search(k_path_t *path)
                     step += WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
                 }
 
-                if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->a, NULL))
+                if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->a, &pinch))
                 {
-                    step += PinchCost(link->portal, cell);
+                    step += PinchCost(cell, pinch);
                 }
 
                 Relax(2 * link->portal + 1, node, step);
@@ -494,9 +494,9 @@ static boolean Search(k_path_t *path)
             }
 
             // The way through the cell, from where the node came in.
-            if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->b, NULL))
+            if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->b, &pinch))
             {
-                step += PinchCost(link->portal, cell);
+                step += PinchCost(cell, pinch);
             }
 
             Relax(2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1),
@@ -868,6 +868,11 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
 void K_Path_SetBlockCost(k_blockcost_t cost)
 {
     block_cost = cost;
+}
+
+void K_Path_SetPinchCost(k_pinchcost_t cost)
+{
+    pinch_cost = cost;
 }
 
 void K_Path_Free(k_path_t *path)

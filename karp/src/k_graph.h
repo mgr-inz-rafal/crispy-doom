@@ -165,6 +165,13 @@ int K_Graph_Passable(k_crossing_t crossing);
 int K_Graph_Pinched(int cell, k_vec2_t from_a, k_vec2_t from_b,
                     k_vec2_t to_a, k_vec2_t to_b, k_vec2_t *where);
 
+// A gap inside a cell, by the cell and where K_Graph_Pinched put it: the
+// sectors that make it narrow, as K_Graph_NarrowSectors (Doom II MAP11: a
+// fence of pillars 16 apart, which lines open or lower), up to max; and
+// whether it is still narrower than the player.
+int K_Graph_PinchSectors(int cell, k_vec2_t at, int *sectors, int max);
+int K_Graph_PinchNarrow(int cell, k_vec2_t at);
+
 // How long the action a crossing needs is expected to take, in tics: 0
 // for an open one. For a teleporter, the time the player stands frozen
 // on arrival.
