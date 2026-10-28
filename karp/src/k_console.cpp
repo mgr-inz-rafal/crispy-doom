@@ -73,6 +73,7 @@ static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
     ImVec4(0.95f, 0.80f, 0.35f, 1.0f),  // K_LOG_BRAIN
     ImVec4(0.50f, 0.85f, 0.50f, 1.0f),  // K_LOG_NAV
     ImVec4(0.75f, 0.60f, 0.95f, 1.0f),  // K_LOG_CTRL
+    ImVec4(0.40f, 0.85f, 0.90f, 1.0f),  // K_LOG_PLAYER
 };
 
 static const ImVec4 warning_color = ImVec4(1.00f, 0.85f, 0.30f, 1.0f);

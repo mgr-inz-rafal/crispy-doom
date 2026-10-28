@@ -31,11 +31,12 @@ static boolean enabled[K_LOG_NUMCATEGORIES] =
     true,       // K_LOG_BRAIN
     true,       // K_LOG_NAV
     false,      // K_LOG_CTRL
+    true,       // K_LOG_PLAYER
 };
 
 static const char *category_names[K_LOG_NUMCATEGORIES] =
 {
-    "SYS", "MAP", "BRAIN", "NAV", "CTRL",
+    "SYS", "MAP", "BRAIN", "NAV", "CTRL", "PLAYER",
 };
 
 static const char *level_prefixes[] =

@@ -20,7 +20,8 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_nav.c"           "${KARP_DIR}/src/k_nav.h"
     "${KARP_DIR}/src/k_path.c"          "${KARP_DIR}/src/k_path.h"
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h"
-    "${KARP_DIR}/src/k_specials.c"      "${KARP_DIR}/src/k_specials.h")
+    "${KARP_DIR}/src/k_specials.c"      "${KARP_DIR}/src/k_specials.h"
+    "${KARP_DIR}/src/k_trace.c"         "${KARP_DIR}/src/k_trace.h")
 
 set(IMGUI_SOURCE_FILES
     "${IMGUI_DIR}/imgui.cpp"            "${IMGUI_DIR}/imgui.h"

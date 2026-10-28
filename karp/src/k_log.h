@@ -28,6 +28,7 @@ typedef enum
     K_LOG_BRAIN,        // priority changes and the reasons for them
     K_LOG_NAV,          // paths, replans, stuck, arrival
     K_LOG_CTRL,         // controller details, disabled by default
+    K_LOG_PLAYER,       // what a human driving does (k_trace.c)
     K_LOG_NUMCATEGORIES
 } k_logcat_t;
 

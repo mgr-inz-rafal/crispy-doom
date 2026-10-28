@@ -97,6 +97,7 @@ karp/
     k_settings.h / k_settings.c  Karp's own persistent settings (karp.cfg), e.g. console placement
     k_specials.h / k_specials.c  what lines and things do: exit lines, lines that move sectors
                                  (switches, walk-over lines), keys lying in the level
+    k_trace.h / k_trace.c     player trace: what a human driving does, in the log
     k_console.h / k_console.cpp  Karp Console (SDL window, ImGui, map canvas, tabs, log pane)
   third_party/imgui/          Dear ImGui v1.93.0 (latest release at plan time): core files,
                               backends/imgui_impl_sdl2.*, backends/imgui_impl_sdlrenderer2.*,
@@ -1083,7 +1084,8 @@ The log is the bot's "thought stream": what it decided and why, not a per-tic du
 - Ring buffer of ~2000 entries: `{ leveltime, category, level, text }`.
 - Categories: `SYS` (startup, config, windows), `MAP` (load stats, sanity checks), `BRAIN`
   (priority changes and the reasons for them), `NAV` (paths, replans, stuck, arrival), `CTRL`
-  (controller details, off by default). Later stages add their own, e.g. `COMBAT`, `ITEMS`.
+  (controller details, off by default), `PLAYER` (what a human driving does, 3.10). Later stages
+  add their own, e.g. `COMBAT`, `ITEMS`.
 - API: `K_Log(category, level, fmt, ...)`.
 - **Log on state changes only**, never every tic. Identical consecutive lines collapse into one
   with a repeat counter (`... (x12)`), so a stuck loop cannot flood the pane.
@@ -1124,6 +1126,27 @@ Later stages will write their decisions into the same stream, e.g. "looking for 
 - Writes go to `karp.cfg.tmp`, then replace `karp.cfg`, so a crash mid-write cannot corrupt it.
 - Later console preferences (log pane height, overlay toggles, category filters) go in the same
   file.
+
+### 3.10 `k_trace.c` - player trace
+
+When a level is hard to read from its data, the user plays it through by hand and the log shows
+the way the bot should find. With `-karpconsole` and no `-autoplay` (a human drives), each tic
+`K_Trace_Tick` compares the player and the level with the tic before and logs the differences
+under `PLAYER`. Read-only, like the rest of Karp (2.4):
+- **Where the player goes**: every sector entered (with its heights), a point every 256 units, a
+  teleport (a move of more than 100 units in a tic), every line with a special crossed (last tic's
+  special: a walk-over line used once loses it in the tic it is crossed).
+- **What it presses**: use, with what the press reaches as `P_UseLines` traces it (64 units
+  straight ahead, stopping at the first line with a special, or at one with no opening), and from
+  which side; fire, with the weapon and the facing. The press was handled earlier in the tic, so
+  a one-shot line has lost its special already; last tic's specials are used.
+- **What changes**: lines used up, sectors that start or stop moving (a mover thinker), solid
+  things gone (barrels blown up).
+- **The player**: health up and down (damage as a warning), keys and weapons picked up, the
+  weapon in hand.
+
+Started from `K_Ticker` before the exit check, so the exit line crossed shows before "level
+finished". Doom II MAP23 was the first map read this way (see the playtests in section 4).
 
 ## 4. Milestones
 
@@ -1460,7 +1483,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
    - MAP23: the start hall holds 208 barrels: a fence north of the start (12-unit gaps), rows
      with 44-unit gaps down the hall (passable). The planner prefers the route east over a
      128-unit step at line 9, since every route out crosses something unfixable further on,
-     presumably a barrel fence to blow up (shooting barrels: follow-up 3, second part). Earlier
+     presumably a barrel fence to blow up (it was not: a gap link, see "MAP23 played through by
+     hand" below). Earlier
      the brain took the door switch at line 9 as the fix for that step, which it is not (it
      raises the strip's ceiling and leaves its floor 128 up); since the fixes go by direction
      (3.5), it no longer does.
@@ -1491,6 +1515,34 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      different reason: the red door at line 210, whose key it cannot reach, instead of a gap next
      to it.
 
+   **MAP23 played through by hand** (the player trace, 3.10; 171 s, with some detours). Route
+   experiments first showed that barrels were not what stopped the planner: with barrel crossings
+   counted as fixable, every route to the exit still climbed the 128-unit step at line 9, and the
+   teleporter behind the south door only led back into the hall. The way, from the trace:
+   - Off the start square (line 0 opens the shotgun closet), south through the slalom, door 5,
+     line 52 (opens the east strip, sector 35), the teleporter (tag 3) to a landing among barrels
+     (448,-576), north between two rows of barrels to sector 16, a teleporter to the west room
+     (floor 192). There line 113 opens the strip door into the hall (sector 53) and switch 111
+     raises the hall's south triangle (sector 46) to 128, making it a lift (switches 108 and 109).
+   - From the triangle at 128 into the east strip (sector 35, 128) at its corner: the only line
+     between them (114) is 16 units long, beside a wall, and the player's box crosses a sliver of
+     hall floor (0) with its centre (lines 108 and 9 crossed in one tic) without ever leaving the
+     128 floors. For the point model it is a drop, and line 114 too narrow: **a gap link**
+     (follow-up 7). The user confirms there is no other way into the east part.
+   - East stairs, sector 4, the pit (floor -128, damaging) and its teleporters to the west part
+     and to sector 5; from there, the yellow skull key (walk-over lines 386, 230 and 289 work the
+     doors on the way); back by teleporters to sector 13, door 350, the yellow door (line 359),
+     and the exit room.
+   - Barrels: the start hall's need no shooting (the slalom is passable), nor the landing's (gaps
+     of 44-76 units; the user shot them from the pad and lost 73 health to four blasts, a
+     berserk pack nearby put it back to 100). One must go: barrel (1184,-320) stands in the
+     middle of the 64-unit way into the exit room, 22 units from each wall, and it chains to
+     three barrels on a ledge beside the corridor, the last 64 units from the yellow door: from
+     the corridor that is about 80 health. The user shot the ledge barrel from outside the yellow
+     door (966,-356); the others went off out of sight and did no damage. A blast only hurts what
+     the barrel can see, and the bot must know that (follow-up 3, second part).
+   So MAP23 waits for gap links first, then barrels.
+
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
    so the bot waits for as long as the sector moves; a door may not open high enough, and how
@@ -1512,13 +1564,42 @@ Each milestone builds and runs; the user reviews and commits between milestones.
          cells under it judged live (a barrel blown up opens the way); steering goes round
          them. Doom II MAP03 finishes; MAP17 gets all its keys; MAP19 finished once its key bars
          could be opened together; MAP23 needs more (see the playtests above).
-      2. **Shooting barrels** to clear the way: a crossing blocked by a barrel gets a fix, a
-         SHOOT BARREL goal: stand where it is in sight and out of its blast (128 units plus the
-         player's radius, and a barrel sets off its neighbours), aim, fire until it is gone. Not
-         killing itself is the point. Later, barrels near monsters are worth blowing up first.
-         MAP23 is built around shooting barrels and running between them before they go off,
-         which a generic bot may not manage: it may need a hardcoded route, or a soulsphere from
-         the level before to live through a blast (the user's note).
+      2. **Shooting barrels**: a wall of things that can be destroyed. Barrels block like
+         torches, but the brain knows the wall can go. Designed with the user (the first combat
+         code); the user's points, with what the engine says:
+         - **Avoid it unless it pays.** A crossing into a barrel's cell, and a gap or pinch a
+           barrel narrows (MAP23's exit: the barrel stands mid-way, not in the way's cell), is
+           no longer unfixable: it costs time like a door, the aiming and shooting, the wait for
+           the chain, a reluctance penalty (about 10 s, tunable) and the predicted damage turned
+           into time. So a 30 s detour loses to blowing the barrels, a 5 s one wins.
+         - **The blast** (`A_Explode`, `P_RadiusAttack`): a barrel (20 health, radius 10)
+           explodes 15 tics after it dies, damaging every shootable thing it can see whose box is
+           within 128: 128 less the larger of the x and y distances, less the thing's radius.
+           The player (radius 16) is hurt within 144; a barrel takes 20 or more within 118, so
+           it dies too and goes off 15 tics later: the chain, and its timing, follow from that.
+           Armour takes a third (green) or half (blue). Karp may not call `P_CheckSight` (2.4),
+           so it needs a sight check of its own on its map data.
+         - **Mind the distance; the chain.** Shoot from where the predicted damage is least: out
+           of the chain's sight (round a corner, through a doorway, as the user did on MAP23),
+           else far enough. Keep away while the chain runs, without spending long on it: chains
+           usually run away from the player, and it outruns them (16.7 units a tic against one
+           barrel every 15 tics).
+         - **If the way needs it, do it**, even with barrels close: accept the damage while
+           health stays above a margin; else it is not fixable yet. Later: fetch health first
+           when low.
+         - **Weapon**: the pistol or the chaingun (the first shot of a burst is accurate), the
+           shotgun up close; never the fist or the chainsaw.
+         - Done as a nav action at the crossing, like a door: walk to the firing spot (a clear
+           shot, the least predicted damage), aim, fire until the barrel is gone, wait or keep
+           away while the chain runs, replan.
+         - **For later, with monsters:** shoot a barrel when monsters are near it (and not in
+           the line of fire) for its blast; keep a bit away from barrels while monsters are
+           about; monsters can set barrels off too.
+         - First test before MAP23 can be finished: a click into the shotgun closet north of the
+           start, behind a fence of barrels with 12-unit gaps, to be shot from 64-96 units away
+           with the whole hall chaining.
+         MAP23's start hall was thought to need a hardcoded route or a soulsphere (the user's
+         first note); played through, it needs one barrel shot, from a spot out of sight.
       3. **Monsters** are never built into the map: they move. When one is in the way and is not
          to be killed, the steering that goes round blocks goes round it too, with some random
          strafing against the randomness of how monsters move (the user's note), then waiting
@@ -1560,6 +1641,10 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       needs them: stepping stones with 24-unit gaps, one overlapping the next by only 8 units.
       So does MAP22: from a raised lift to a ledge at the same height, 16 units away. And
       MAP25: off the start platform, across a 16-unit niche, dropping 344 onto a teleporter pad.
+      And MAP23: from the raised triangle (sector 46, a lift at 128) into the east strip (sector
+      35, 128) at its corner, over a sliver of hall floor; the line between them is 16 units long
+      beside a wall, so the player's centre passes over the sliver while its box stays on the
+      128 floors (the user: the only way into the east part).
       By the user's choice, gaps and jumps were to come **last**, after the other follow-ups.
       But twelve of the first twenty-two Doom II maps need them (MAP02, MAP04, MAP06, MAP08,
       MAP09, MAP11, MAP13, MAP14, MAP15, MAP20, MAP21, MAP22; MAP14's over several gaps in a

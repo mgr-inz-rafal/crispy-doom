@@ -23,6 +23,7 @@
 #include "k_nav.h"
 #include "k_settings.h"
 #include "k_specials.h"
+#include "k_trace.h"
 
 static boolean autoplay_enabled;
 static boolean console_enabled;
@@ -164,6 +165,7 @@ void K_LevelLoaded(void)
     K_Specials_Build();
     K_Brain_Reset();
     K_Nav_Reset();
+    K_Trace_Reset();
     level_completed = false;
 }
 
@@ -186,6 +188,13 @@ void K_Ticker(void)
         K_Log(K_LOG_SYS, K_LOG_WARN, "netgame - the bot stays idle, stage 1 "
               "is single player only");
         netgame_logged = true;
+    }
+
+    // A human drives: the log follows what the player does. First, so the
+    // exit line crossed shows before the level ends.
+    if (console_enabled && !autoplay_enabled && gamestate == GS_LEVEL)
+    {
+        K_Trace_Tick();
     }
 
     // An exit sets this during the tic; the intermission starts next tic.
