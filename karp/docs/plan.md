@@ -608,7 +608,13 @@ near-perfect conditions; found at level load, judged live.
   the slime, and switch 572 raises it again). But off a lift that is down, or on its way, and comes back up
   to the floor the jump was found on, it is a ride (`K_CROSS_RIDE`, the wait the lift's state
   gives): Doom II MAP06's lift is lowered by the walk-over line the player crosses to get on it,
-  so the jump only works once it is back up (the user's description). It costs its distance plus 2 s (70 tics), so a walk not much
+  so the jump only works once it is back up (the user's description). Off a floor on its way down
+  for good, it is a gap if the floor will be more than a step below where the jump starts by the
+  time the player can get there (as the crow flies, at running speed): Doom II MAP13's walk-over
+  line 902 lowers the ring round the red key's platform, and the bot planned to teleport into the
+  pit, wait for the ring to come down within a step, get on and jump from it onto the platform,
+  which only works while the ring is high. MAP08's sinking pillars, under 100 units ahead, still
+  count. It costs its distance plus 2 s (70 tics), so a walk not much
   longer wins (the user: jump where it saves a lot, or where nothing else gets there). The graph
   log and the Map tab count jumps; the overlay draws each dashed orange from the run-up's start
   to the touchdown, with a ring there, faint while it does not work.
@@ -1790,6 +1796,17 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      Seen: after switch 615, USE TRIGGER for sector 4 failed ("no line moves the sector any
      more"): the switch had moved it too, though not low enough to step onto. Harmless, the exit
      goal found its way by jumps.
+   - MAP13 ("Downtown"): **finished in 98.3 s** as it was, then **93.2 s**. The red key lies on a
+     platform (sector 165, 392) in a pit (164, 200) ringed by a ledge (163, 448), which walk-over
+     line 902 lowers for good. Right after crossing it, the bot planned to teleport into the pit,
+     wait for the ring to come down within a step of the pit, get on it and jump onto the
+     platform: but the jump needs the ring high. Now a jump off a floor sinking away is a gap
+     (3.2.2), and the bot goes for the blue key and the teleporter onto the platform at once.
+     Not a fault: the yellow key is reached over a perpetual lift (sector 20, lines 918 and 952
+     start and stop it) that runs 384 units at a unit a tic, about 25 s down and up.
+     Seen, not fixed: after the jump towards the blue door (line 1077), the bot stood at the door
+     for a second, stuck, before a replan opened it; perhaps a waypoint in front of the door that
+     the box cannot quite reach after the landing.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1902,9 +1919,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       back up (optional, the user's note; see the MAP17 playtest).
       **Done as one model** (3.2.2, 3.3, 3.4): gap links and running jumps are both straight runs
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
-      (MAP24 takes a jump too). MAP06, MAP08, MAP09 and MAP11 finish too; jumps that only appear
-      once a sector has moved are searched for again when it stops, and at level load as if it
-      had moved (3.2.2). Left: the maps not tried yet (MAP13, 14, 15, 20, 22, 25, 29), and MAP04
+      (MAP24 takes a jump too). MAP06, MAP08, MAP09, MAP11 and MAP13 finish too; jumps that only
+      appear once a sector has moved are searched for again when it stops, and at level load as
+      if it had moved (3.2.2). Left: the maps not tried yet (MAP14, 15, 20, 22, 25, 29), and MAP04
       (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav

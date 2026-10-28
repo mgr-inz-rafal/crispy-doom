@@ -59,6 +59,9 @@
 #define PLAYER_HEIGHT (56 * FRACUNIT)
 #define PLAYER_RADIUS 16.0
 
+// Running speed, map units per tic: the soonest the player gets anywhere.
+#define RUN_SPEED 16.7
+
 // Movers (p_doors.c, p_plats.c), in map units per tic: doors move at 2,
 // blazing ones at 8; lifts at 4, blazing ones at 8. A lift waits 3 seconds
 // at the bottom.
@@ -2215,6 +2218,45 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
 //
 // Under a standing block there is no way in, whatever the heights: the
 // player cannot get past a solid thing, only round it, until it is gone.
+// How many tics the player takes to get to a point at the earliest: as the
+// crow flies, at running speed; once a tic for where the player is.
+static double ArrivalTics(k_vec2_t to)
+{
+    static int judged = -1;
+    static k_vec2_t at;
+    k_pose_t pose;
+
+    if (judged != leveltime)
+    {
+        judged = leveltime;
+
+        if (K_Map_GetPlayer(&pose))
+        {
+            at.x = pose.x;
+            at.y = pose.y;
+        }
+    }
+
+    return Length(Sub(to, at)) / RUN_SPEED;
+}
+
+// Whether a jump starts off a floor on its way down for good that will be
+// too low for it by the time the player can get there.
+static boolean SinksAway(const sector_t *sector, const k_jump_t *jump)
+{
+    const floormove_t *floor = FloorMoverOf(sector);
+    double then;
+
+    if (floor == NULL || floor->direction != -1)
+    {
+        return false;
+    }
+
+    then = (sector->floorheight - floor->speed * ArrivalTics(jump->start)) / (double) FRACUNIT;
+    then = SDL_max(then, floor->floordestheight / (double) FRACUNIT);
+    return then < jump->from_floor - MAX_STEP_UP / (double) FRACUNIT;
+}
+
 static k_crossing_t Judge(int portal_index, int from, double *wait)
 {
     const k_portal_t *portal = &graph.portals[portal_index];
@@ -2224,9 +2266,18 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
     // A jump goes one way, if the run lands now (k_jump.h). Off a lift that
     // is down, or on its way, and comes back up to where the jump starts,
     // it is a ride: wait on it (Doom II MAP06: the walk-over line onto the
-    // lift the jump starts from lowers it).
+    // lift the jump starts from lowers it). Off a floor on its way down for
+    // good that will be too low by the time the player can get there, it is
+    // gone (Doom II MAP13: line 902 lowers the ring round the red key's
+    // platform, which the jump onto it starts from, and the bot planned to
+    // wait for the ring to come down, step on and jump). Not so a sinking
+    // pillar the player is about to land on (MAP08, hopped off one after
+    // another).
     if (portal->jump >= 0)
     {
+        const k_map_t *map = K_Map_Get();
+        sector_t *a = &sectors[map->subsectors[map->cells[from].subsector].sector];
+
         *wait = 0.0;
 
         if (from != portal->cell[0])
@@ -2234,10 +2285,13 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
             return K_CROSS_WALL;
         }
 
+        if (SinksAway(a, K_Jump_Get(portal->jump)))
+        {
+            return K_CROSS_GAP;
+        }
+
         if (!K_Jump_Possible(portal->jump))
         {
-            const k_map_t *map = K_Map_Get();
-            sector_t *a = &sectors[map->subsectors[map->cells[from].subsector].sector];
             const plat_t *plat = PlatOf(a);
 
             if (plat != NULL && plat->status != in_stasis
