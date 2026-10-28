@@ -310,6 +310,145 @@ int K_Specials_LineSpecial(int line)
     return lines[line].special;
 }
 
+// How much higher each step of a stair builder's stairs is (EV_BuildStairs:
+// build8, turbo16).
+static fixed_t StairStep(int special)
+{
+    return (special == 100 || special == 127 ? 16 : 8) * FRACUNIT;
+}
+
+// Where a stair builder line raises a sector on its stairs: a tagged sector
+// a step above its floor, each step after it a step more (EV_BuildStairs,
+// along the chain AddStairs follows). False if the sector is on none.
+static boolean StairHeight(int line, int target, fixed_t *height)
+{
+    int s, i, n;
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        int texture = sectors[s].floorpic;
+        int step = s;
+
+        if (sectors[s].tag != lines[line].tag)
+        {
+            continue;
+        }
+
+        *height = sectors[s].floorheight + StairStep(lines[line].special);
+
+        // A chain that comes round to itself ends within numsectors steps.
+        for (n = 0; n < numsectors; ++n)
+        {
+            const sector_t *sector = &sectors[step];
+            int next = -1;
+
+            if (step == target)
+            {
+                return true;
+            }
+
+            for (i = 0; i < sector->linecount && next < 0; ++i)
+            {
+                const line_t *l = sector->lines[i];
+
+                if ((l->flags & ML_TWOSIDED) && l->frontsector == sector
+                 && l->backsector->floorpic == texture)
+                {
+                    next = (int) (l->backsector - sectors);
+                }
+            }
+
+            if (next < 0)
+            {
+                break;
+            }
+
+            step = next;
+            *height += StairStep(lines[line].special);
+        }
+    }
+
+    return false;
+}
+
+int K_Specials_MoverTarget(int line, int sector, double *floor, double *ceiling)
+{
+    sector_t *s = &sectors[sector];
+    fixed_t f = s->floorheight, c = s->ceilingheight, highest;
+
+    switch (lines[line].special)
+    {
+        // Doors that open (EV_DoDoor, EV_DoLockedDoor): to 4 under the
+        // lowest neighbouring ceiling.
+        case 2: case 4: case 29: case 46: case 61: case 63: case 86: case 90:
+        case 99: case 103: case 105: case 106: case 108: case 109: case 111:
+        case 112: case 114: case 115: case 133: case 134: case 135: case 136:
+        case 137:
+            c = P_FindLowestCeilingSurrounding(s) - 4 * FRACUNIT;
+            break;
+
+        // Floors up to the lowest neighbouring ceiling, no higher than
+        // their own (raiseFloor):
+        case 5: case 24: case 64: case 91: case 101:
+            f = SDL_min(P_FindLowestCeilingSurrounding(s), c);
+            break;
+
+        // up to the next floor up (raiseFloorToNearest, raiseFloorTurbo; the
+        // plats' raiseToNearestAndChange):
+        case 18: case 20: case 22: case 47: case 68: case 69: case 95: case 119:
+        case 128: case 129: case 130: case 131: case 132:
+            f = P_FindNextHighestFloor(s, f);
+            break;
+
+        // up by 24, 32 or 512 (raiseFloor24, the plats' raiseAndChange,
+        // raiseFloor512):
+        case 15: case 58: case 59: case 66: case 92: case 93:
+            f += 24 * FRACUNIT;
+            break;
+
+        case 14: case 67:
+            f += 32 * FRACUNIT;
+            break;
+
+        case 140:
+            f += 512 * FRACUNIT;
+            break;
+
+        // stairs:
+        case 7: case 8: case 100: case 127:
+            if (!StairHeight(line, sector, &f))
+            {
+                return false;
+            }
+            break;
+
+        // Floors down to the highest neighbouring floor (lowerFloor), or 8
+        // above it (turboLower), or to the lowest (lowerFloorToLowest,
+        // lowerAndChange):
+        case 19: case 45: case 83: case 102:
+            f = P_FindHighestFloorSurrounding(s);
+            break;
+
+        case 36: case 70: case 71: case 98:
+            highest = P_FindHighestFloorSurrounding(s);
+            f = highest != f ? highest + 8 * FRACUNIT : highest;
+            break;
+
+        case 23: case 37: case 38: case 60: case 82: case 84:
+            f = P_FindLowestFloorSurrounding(s);
+            break;
+
+        // Lifts come back, perpetual ones never stop; donuts, raising to a
+        // texture's height and the rest are not worked out.
+        default:
+            return false;
+    }
+
+    *floor = f / (double) FRACUNIT;
+    *ceiling = c / (double) FRACUNIT;
+    return true;
+}
+
 int K_Specials_TriggerCount(int sector)
 {
     return trigger_count != NULL ? trigger_count[sector] : 0;

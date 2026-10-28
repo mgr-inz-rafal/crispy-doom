@@ -35,12 +35,22 @@ typedef struct
     double from_floor;      // the floor it runs on, when it was found
     double land_floor;      // the floor it lands on, then
     int land_sector;        // the sector landed in
+    int as_if_sector;       // found as if this sector were where a line
+                            // sends it, -1 if as things were
+    double as_if_floor;     // its floor and ceiling then
+    double as_if_ceiling;
+    int door;               // a door it was found with open that was closed,
+                            // -1 if none
 } k_jump_t;
 
-// Called by the graph build, once the line grid and the portals are there:
-// looks for jumps off every edge the floor drops more than 24 from, across
-// whatever lies beyond. A jump is kept only if it works with a margin: with
-// 85% of the thrust, and from starts 6 units to either side.
+// Called by the graph build, once the line grid and the portals are there,
+// and the specials: looks for jumps off every edge the floor drops more than
+// 24 from, across whatever lies beyond. A jump is kept only if it works with
+// a margin: with 85% of the thrust, and from starts 6 units to either side.
+// Then again around each sector a line moves, as if it were where the line
+// sends it, with every door open: those jumps work only once it gets there
+// (Doom II MAP09: one onto a floor a switch raises, one out of a door a
+// switch opens).
 void K_Jump_Find(void);
 
 // The same, again, off the edges with an end in the box (min, max), once a

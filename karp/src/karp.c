@@ -160,9 +160,11 @@ void K_LevelLoaded(void)
         return;
     }
 
+    // The specials first: the graph's jump search asks where lines send
+    // sectors.
     K_Map_Build();
-    K_Graph_Build();
     K_Specials_Build();
+    K_Graph_Build();
     K_Brain_Reset();
     K_Nav_Reset();
     K_Trace_Reset();

@@ -536,9 +536,15 @@ near-perfect conditions; found at level load, judged live.
   in halves above 15 (positive moves only, as the engine does), gravity of 1 a tic (2 the first),
   and the floor and ceiling under the 32x32 box from the sector under its centre and every
   two-sided line it straddles (`P_CheckPosition`). Walls, impassable lines and standing solid
-  things stop it, as do a step over 24 and headroom under 56 (`P_TryMove`). The player stands on
-  the highest floor under its box, so a gap narrower than the player needs no speed, and a wider
-  one is flown 32 units shorter than it is wide: Doom II MAP02's pit is 96 wide, flown 64.
+  things stop a move, as do a step over 24 and headroom under 56 (`P_TryMove`); a move stopped by
+  a line slides along it, as `P_SlideMove` does (traces from the box's leading corners, up to the
+  wall less a fudge, the rest along it; else one axis, then the other), and the run fails only
+  where the player cannot move at all. The player stands on the highest floor under its box, so
+  a gap narrower than the player needs no speed, and a wider one is flown 32 units shorter than
+  it is wide: Doom II MAP02's pit is 96 wide, flown 64. Sliding gets the box round a wall's
+  corner: Doom II MAP09's floors 6 and 4 touch only at a corner of door 8, closed until line 250
+  past floor 4 opens it; the player slides along the door's face and steps across (the user did,
+  and so does the bot now).
 - **Landed** means standing, box and centre, on a floor more than 24 above the lowest one the
   centre passed over: one it could not climb to from there. Whatever lies in between is crossed
   as the engine would: one pit, or (MAP14, the user's example) a sidewalk, a low fence and water.
@@ -551,7 +557,8 @@ near-perfect conditions; found at level load, judged live.
   flown over a pit and many sectors, hops off a pillar's top 16 square, level with the lift, 8
   units out.
 - **Finding them**, at level load: off every portal the floor drops more than 24 across, from
-  points every 48 units along it, rays straight out and 25 degrees to either side, each with as
+  points every 48 units along it, rays straight out and 25 and 45 degrees to either side (MAP09's
+  jump out of door 33 runs along its wall onto a ledge 48 degrees off to the side), each with as
   long a run-up as the takeoff floor allows behind the edge (up to 128 units; none at all may do:
   Doom II MAP08's strip of slime 17 wide behind the yellow door leaves 22 units to take off from),
   and again with a run-up of 8. Kept if the run lands in another cell, and still lands in the
@@ -573,6 +580,21 @@ near-perfect conditions; found at level load, judged live.
   within 512 units of it are searched again (`K_Jump_FindNear`). Jumps already found stay as they
   are, new ones are added as portals after them, and the links are rebuilt ("sector 84 stopped
   moving: 1 new jumps").
+- **As if a sector had moved.** That is too late when the brain must move the sector first to
+  have the jump at all: Doom II MAP09's way to the yellow key takes three jumps that do not exist
+  at level load. One lands on floor 6 once switch 126 raises it, one runs out of door 33 once
+  switch 157 opens it, and one steps from the top of stairs that line 380 builds onto the sill of
+  door 101, which switch 455 opens. So at level load, after the search above, each sector a line
+  moves is searched round again (its edges within 512 units) as if it were where the line sends
+  it (`K_Specials_MoverTarget`, from the special as the engine works it out: a door 4 under the
+  lowest neighbouring ceiling, a floor to the next floor up, the lowest or highest neighbouring
+  floor, by 24, 32 or 512, a step of stairs along the chain; not lifts, which come back, nor
+  donuts or raising to a texture), with every door open (manual ones and those a line opens).
+  Kept only if the run goes over that sector, and only between cells no jump joins yet: one that
+  works as things are is better. Such a jump records the sector, its heights then, and the first
+  door it went through that is closed. It does not work as things are, so it is a blocked
+  crossing (`K_CROSS_GAP`) whose fix moves the sector there, then opens that door (3.5). MAP09: 53
+  jumps, and 35 more once one of 25 sectors has moved, in 100 ms.
 - **In the graph** a jump is a portal of its own after the shared stretches of border
   (`k_portal_t.jump`), linked from its run-up's cell only: `a` is the run-up's start, `b` the
   touchdown. Judged live, once a tic, by running it again with full and 85% thrust (heights
@@ -976,9 +998,12 @@ it cannot be reached):
     down to where the way on has headroom (Doom II MAP05: a passage whose ceiling is level with
     the floor in front of it until that floor, a lift, comes down); only lines that lower a floor
     or raise a ceiling;
-  - a **jump that does not work now** (3.2.2) -> USE TRIGGER for the takeoff sector, if some line
-    raises its floor (it is below where the jump was found), or for the landing sector, if some
-    line lowers it (Doom II MAP08's island, switch 572);
+  - a **jump that does not work now** (3.2.2) -> one found as if a sector had moved: USE TRIGGER
+    for that sector, to move it there (Doom II MAP09: switch 126 raises floor 6, switch 157 opens
+    door 33, line 380 builds the stairs); one found through a door that is closed: USE TRIGGER for
+    the door (MAP09: switch 455 opens door 101 at the top of the stairs). Else for the takeoff
+    sector, if some line raises its floor (it is below where the jump was found), or for the
+    landing sector, if some line lowers it (Doom II MAP08's island, switch 572);
   - which way a line moves its sectors comes from its special (`K_Specials_MoverMoves`: floor
     up, floor down, ceiling up), and a USE TRIGGER goal remembers the moves that would help:
     only lines that make one of them are its candidates. A lift only lowers: it comes back up to
@@ -1340,7 +1365,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      below.)
    - MAP09: another **jump**, found by the user playing it: from a lift at about (700,1647)
      (sector 12) across to about (380,1444) (sector 6, floor -64). Without it the bot sees no
-     way on and chases switches it cannot reach. Skipped for now, to come back to.
+     way on and chases switches it cannot reach. Skipped for now, to come back to. (Finished
+     since, see the jumps below: the jump is from the lift onto floor 6 once switch 126 raises it.)
    - MAP10: finished in 45.4 s with no changes (yellow key, blue key, nine doors, exit switch).
    - MAP11: the exit area (the north part of the central circle) is reached by a **jump**, per
      the user; the bot sees only a 296-unit step at line 796. Skipped for now, to come back to.
@@ -1718,6 +1744,23 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      press working, found the jump still not working, and walked back to press again (about 2.3 s
      lost). A switch whose sector is still moving should be waited for before it is pressed, or a
      press that did not take (the line kept its special) should not count as done.
+   - MAP09 ("The Pit"): **finished in 105.2 s**, after a hand-played trace (the user). At first the
+     bot gave up at once: the yellow key is reached over three jumps that only exist once a
+     sector has moved (floor 6 raised by switch 126, door 33 opened by switch 157, the stairs from
+     line 380 with door 101 opened by switch 455), so it saw no way at all. Now they are found as
+     if those sectors had moved, and their fixes are the switches (3.2.2, 3.5). Two more things
+     were needed: rays at 45 degrees (the jump out of door 33 runs along its wall onto a ledge off
+     to the side), and wall sliding in the run (floors 6 and 4 touch only at a corner of door 8,
+     closed until a line past floor 4 opens it; the player slides along the door's face to get
+     across). Stairs were already known (k_specials follows the chain). The bot built the stairs,
+     raised floor 6, rode lift 12 and jumped onto it, crossed at the corner, opened doors 8, 3 and
+     33, jumped out of 33, got the blue key, opened door 101 from switch 455 and went up the
+     stairs onto its sill, as the user did.
+     Seen, not fixed: the jump out of door 33 left the edge at 3.8 units a tic, where the check
+     has 13.5, 38 units off its line along the door's north wall, and fell short; the bot walked
+     round (6 s) and made it the second time at 4.4, landing on the corner of the ledge. And on
+     the way to the exit it worked switches 442, 403 and 428 twice each: lifts that went back up
+     while it worked the next one (as MAP12's "keys first").
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1830,9 +1873,10 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       back up (optional, the user's note; see the MAP17 playtest).
       **Done as one model** (3.2.2, 3.3, 3.4): gap links and running jumps are both straight runs
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
-      (MAP24 takes a jump too). MAP06 and MAP08 finish too; jumps that only appear once a sector
-      has moved are searched for again when it stops (3.2.2). Left: the maps not tried yet
-      (MAP09, 11, 13, 14, 15, 20, 22, 25, 29), and MAP04 (see the playtests).
+      (MAP24 takes a jump too). MAP06, MAP08 and MAP09 finish too; jumps that only appear once a
+      sector has moved are searched for again when it stops, and at level load as if it had
+      moved (3.2.2). Left: the maps not tried yet (MAP11, 13, 14, 15, 20, 22, 25, 29), and MAP04
+      (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not

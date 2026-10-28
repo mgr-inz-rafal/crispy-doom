@@ -134,10 +134,13 @@ void K_Graph_Tick(void);
 // Whether a sector is a manual door (opened by using its own line).
 int K_Graph_IsDoor(int sector);
 
-// A sector's ceiling as the player meets it on its way: a manual door's at
-// its open height (it opens it), else where a door already opening is
-// going, else the ceiling.
-double K_Graph_DoorCeiling(int sector);
+// Where a door in the sector opens to: 4 under the lowest neighbouring
+// ceiling.
+double K_Graph_DoorTop(int sector);
+
+// A sector's ceiling, taking a door already opening (a switch opened it) as
+// open, to where it is going.
+double K_Graph_OpeningCeiling(int sector);
 
 // Whether the player can cross the portal when leaving the given cell.
 k_crossing_t K_Graph_CanCross(int portal, int from_cell);

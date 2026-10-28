@@ -4,7 +4,8 @@
 //	Karp's own data so nothing in the game is touched (plan.md, 2.4):
 //	P_MovePlayer's thrust, P_XYMovement's moves in halves and friction,
 //	P_ZMovement's gravity, P_TryMove's checks, with P_CheckPosition's floor
-//	and ceiling under the box from the lines it straddles.
+//	and ceiling under the box from the lines it straddles, and P_SlideMove
+//	along a wall that stops a move.
 //
 //	Takeoff edges are the portals the floor drops more than 24 across.
 //	From points along each, rays go out straight and to either side; each
@@ -33,9 +34,12 @@
 #include "p_local.h"
 #include "r_state.h"
 
+#include "m_misc.h"
+
 #include "k_graph.h"
 #include "k_jump.h"
 #include "k_log.h"
+#include "k_specials.h"
 
 #define K_PI 3.14159265358979323846
 
@@ -60,9 +64,12 @@
 #define RUNUP_SHORT 8.0
 
 // Takeoff points along an edge, one per SAMPLE_SPACING; rays straight out
-// and RAY_ANGLE degrees to either side.
+// and at these angles to either side, in degrees. The steep ones reach a
+// landing round a corner: Doom II MAP09's out of a door, along its wall, onto
+// a ledge 48 degrees off to the side.
 #define SAMPLE_SPACING 48.0
-#define RAY_ANGLE 25.0
+
+static const double ray_angles[] = { 0.0, 25.0, -25.0, 45.0, -45.0 };
 
 // The margin (the user: no jump that needs near-perfect conditions): it
 // must still land with MARGIN_THRUST of the thrust, and from starts
@@ -80,11 +87,20 @@
 #define STOP_SPEED 1.0
 #define STOP_TICS 35
 
+// P_SlideMove stops this much of the move short of the wall.
+#define SLIDE_FUDGE (0x800 / 65536.0)
+
 #define MAX_LINES 128
 #define MAX_BLOCKS 32
 
-// Only this many jumps are logged one by one.
+// Only this many jumps are logged one by one (and as many of those found
+// as if a sector had moved).
 #define MAX_REPORTS 12
+
+// Searching as if a sector had moved: the edges this near it, and up to
+// MAX_TARGETS places its lines send it.
+#define AS_IF_REACH 512.0
+#define MAX_TARGETS 4
 
 typedef enum
 {
@@ -104,6 +120,9 @@ typedef struct
     k_vec2_t land;
     double land_floor;
     int land_sector;
+    int door;               // the first door it took as open that is closed,
+                            // -1 if none
+    boolean as_if_used;     // it went over the sector searched as if moved
 } run_t;
 
 typedef struct
@@ -122,9 +141,30 @@ static unsigned char *possible;
 static boolean doors_open;          // manual doors count as open
                                     // (CheckPosition)
 
+// Searching as if a sector were where a line sends it (K_Jump_Find): its
+// floor and ceiling then, and every door open.
+static int as_if = -1;
+static double as_if_floor, as_if_ceiling;
+static unsigned char *door_like;    // per sector: a manual door, or one a
+                                    // line opens
+static int assumed_door;            // the first door taken as open that is
+                                    // closed, -1 if none (CheckPosition)
+static boolean as_if_used;          // the box was over that sector
+
 static double Height(fixed_t height)
 {
     return height / (double) FRACUNIT;
+}
+
+static double Floor(const sector_t *sector)
+{
+    if (sector - sectors == as_if)
+    {
+        as_if_used = true;
+        return as_if_floor;
+    }
+
+    return Height(sector->floorheight);
 }
 
 static sector_t *SectorAt(double x, double y)
@@ -141,20 +181,45 @@ static int CellSector(int cell)
 
 static double CellFloor(int cell)
 {
-    double floor, ceiling;
-
-    K_Map_SectorHeights(CellSector(cell), &floor, &ceiling);
-    return floor;
+    return Floor(&sectors[CellSector(cell)]);
 }
 
-// A sector's ceiling for the run: a manual door at its open height while
-// doors_open.
+// A sector's ceiling for the run: a door already opening at its top; a
+// manual door open while doors_open, and any door while searching as if a
+// sector had moved.
 static double Ceiling(const sector_t *sector)
 {
     int index = (int) (sector - sectors);
+    double ceiling = K_Graph_OpeningCeiling(index);
+    double open;
 
-    return doors_open && K_Graph_IsDoor(index) ? K_Graph_DoorCeiling(index)
-                                               : Height(sector->ceilingheight);
+    if (index == as_if)
+    {
+        as_if_used = true;
+        return as_if_ceiling;
+    }
+
+    if (!(doors_open && K_Graph_IsDoor(index)) && !(as_if >= 0 && door_like[index]))
+    {
+        return ceiling;
+    }
+
+    open = SDL_max(ceiling, K_Graph_DoorTop(index));
+
+    if (as_if >= 0 && open > ceiling + 0.5 && assumed_door < 0)
+    {
+        assumed_door = index;
+    }
+
+    return open;
+}
+
+// The cell a run starts or lands in. Searching as if a sector had moved,
+// the floors the map knows are not those of the search, but the centre is
+// over the floor it stands on then.
+static int StandingCell(k_vec2_t at, double floor)
+{
+    return as_if >= 0 ? K_Map_CellAt(at.x, at.y) : K_Map_StandingCell(at.x, at.y, floor);
 }
 
 // Whether the box from (x0, y0) to (x1, y1) straddles the line through the
@@ -191,7 +256,7 @@ static boolean CheckPosition(double x, double y, double *floorz, double *ceiling
     sector_t *sector = SectorAt(x, y);
     int count, i;
 
-    *floorz = Height(sector->floorheight);
+    *floorz = Floor(sector);
     *ceilingz = Ceiling(sector);
 
     count = K_Map_BlocksNear(min, max, blocks, MAX_BLOCKS);
@@ -228,8 +293,7 @@ static boolean CheckPosition(double x, double y, double *floorz, double *ceiling
 
         *ceilingz = SDL_min(*ceilingz, SDL_min(Ceiling(line->frontsector),
                                                Ceiling(line->backsector)));
-        *floorz = SDL_max(*floorz, Height(SDL_max(line->frontsector->floorheight,
-                                                  line->backsector->floorheight)));
+        *floorz = SDL_max(*floorz, SDL_max(Floor(line->frontsector), Floor(line->backsector)));
     }
 
     return true;
@@ -255,12 +319,140 @@ static boolean TryMove(body_t *body, double x, double y)
     return true;
 }
 
+// Whether a line stops the player sliding along (PTR_SlideTraverse): a wall
+// it is in front of, or a two-sided line it cannot get through. Impassable
+// lines do not count, as in the engine.
+static boolean SlideBlocks(const body_t *body, int index)
+{
+    const k_line_t *kline = &K_Map_Get()->lines[index];
+    const line_t *line = &lines[index];
+    double top, bottom;
+
+    if (line->backsector == NULL)
+    {
+        // P_PointOnLineSide: in front, not behind it.
+        return (kline->v2.x - kline->v1.x) * (body->y - kline->v1.y)
+             < (kline->v2.y - kline->v1.y) * (body->x - kline->v1.x);
+    }
+
+    top = SDL_min(Ceiling(line->frontsector), Ceiling(line->backsector));
+    bottom = SDL_max(Floor(line->frontsector), Floor(line->backsector));
+
+    return top - bottom < PLAYER_HEIGHT || top - body->z < PLAYER_HEIGHT
+        || bottom - body->z > MAX_STEP;
+}
+
+// One of P_SlideMove's traces, from a corner of the box along the momentum:
+// the nearest line across it that stops the player, as a fraction of the
+// momentum, if nearer than *best.
+static void SlideTrace(const body_t *body, double x0, double y0, double *best, int *best_line)
+{
+    const k_map_t *map = K_Map_Get();
+    double dx = body->momx, dy = body->momy;
+    k_vec2_t min = { SDL_min(x0, x0 + dx), SDL_min(y0, y0 + dy) };
+    k_vec2_t max = { SDL_max(x0, x0 + dx), SDL_max(y0, y0 + dy) };
+    int found[MAX_LINES];
+    int count = K_Graph_LinesNear(min, max, found, MAX_LINES);
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        const k_line_t *line = &map->lines[found[i]];
+        double lx = line->v2.x - line->v1.x, ly = line->v2.y - line->v1.y;
+        double side1 = dx * (line->v1.y - y0) - dy * (line->v1.x - x0);
+        double side2 = dx * (line->v2.y - y0) - dy * (line->v2.x - x0);
+        double denom = dx * ly - dy * lx;
+        double frac;
+
+        // Its ends on either side of the trace (PIT_AddLineIntercepts).
+        if ((side1 > 0.0) == (side2 > 0.0) || fabs(denom) < 1e-12)
+        {
+            continue;
+        }
+
+        frac = ((y0 - line->v1.y) * lx - (x0 - line->v1.x) * ly) / denom;
+
+        if (frac < 0.0 || frac > 1.0 || frac >= *best || !SlideBlocks(body, found[i]))
+        {
+            continue;
+        }
+
+        *best = frac;
+        *best_line = found[i];
+    }
+}
+
+// P_SlideMove: a move the player could not make slides it along the wall it
+// ran into instead, and sets its momentum along it. The box goes round a
+// wall's corner this way: Doom II MAP09's floor touches the next one only at
+// a corner of a closed door, which the player slides along to get across.
+static void SlideMove(body_t *body)
+{
+    int hitcount;
+
+    for (hitcount = 1; hitcount < 3; ++hitcount)
+    {
+        double rx = body->momx > 0.0 ? PLAYER_RADIUS : -PLAYER_RADIUS;
+        double ry = body->momy > 0.0 ? PLAYER_RADIUS : -PLAYER_RADIUS;
+        double best = 1.0 + 1.0 / FRACUNIT;
+        int line = -1;
+        double move_x, move_y, lx, ly, along;
+
+        // From the leading corners.
+        SlideTrace(body, body->x + rx, body->y + ry, &best, &line);
+        SlideTrace(body, body->x - rx, body->y + ry, &best, &line);
+        SlideTrace(body, body->x + rx, body->y - ry, &best, &line);
+
+        if (line < 0)
+        {
+            break;
+        }
+
+        // Up to the wall, a little short of it.
+        best -= SLIDE_FUDGE;
+
+        if (best > 0.0
+         && !TryMove(body, body->x + body->momx * best, body->y + body->momy * best))
+        {
+            break;
+        }
+
+        // The rest of the move, along the wall (P_HitSlideLine).
+        best = SDL_min(1.0 - (best + SLIDE_FUDGE), 1.0);
+
+        if (best <= 0.0)
+        {
+            return;
+        }
+
+        lx = K_Map_Get()->lines[line].v2.x - K_Map_Get()->lines[line].v1.x;
+        ly = K_Map_Get()->lines[line].v2.y - K_Map_Get()->lines[line].v1.y;
+        along = (body->momx * lx + body->momy * ly) * best / (lx * lx + ly * ly);
+        move_x = lx * along;
+        move_y = ly * along;
+        body->momx = move_x;
+        body->momy = move_y;
+
+        if (TryMove(body, body->x + move_x, body->y + move_y))
+        {
+            return;
+        }
+    }
+
+    // No wall found, or the slide failed too: one axis, then the other.
+    if (!TryMove(body, body->x, body->y + body->momy))
+    {
+        TryMove(body, body->x + body->momx, body->y);
+    }
+}
+
 // One tic of the player's movement: the thrust (on the ground only), the
 // move in halves while more than half of MAX_MOVE (only a positive move is
-// checked, as in the engine), friction on the ground, gravity. False if a
-// move is stopped.
+// checked, as in the engine), sliding along what stops it, friction on the
+// ground, gravity. False if it could not move at all.
 static boolean Tic(body_t *body, double thrust_x, double thrust_y)
 {
+    double from_x = body->x, from_y = body->y;
     double xmove, ymove;
 
     if (body->z <= body->floorz)
@@ -294,9 +486,14 @@ static boolean Tic(body_t *body, double thrust_x, double thrust_y)
 
         if (!TryMove(body, tx, ty))
         {
-            return false;
+            SlideMove(body);
         }
     } while (xmove != 0.0 || ymove != 0.0);
+
+    if (fabs(body->x - from_x) < 1e-6 && fabs(body->y - from_y) < 1e-6)
+    {
+        return false;
+    }
 
     if (body->z <= body->floorz)
     {
@@ -370,8 +567,11 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
 
     memset(run, 0, sizeof(*run));
     run->land_sector = -1;
+    run->door = -1;
     run->edge = start;
     doors_open = true;
+    assumed_door = -1;
+    as_if_used = false;
 
     if (!CheckPosition(start.x, start.y, &body.floorz, &body.ceilingz)
      || body.ceilingz - body.floorz < PLAYER_HEIGHT)
@@ -411,14 +611,14 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
         doors_open = false;
 
         under = SectorAt(body.x, body.y);
-        lowest = SDL_min(lowest, Height(under->floorheight));
+        lowest = SDL_min(lowest, Floor(under));
 
         // On the ground, its centre over the floor it stands on: landed if
         // that is too high to climb to from the lowest floor passed over,
         // and it stops there; if it cannot stop, it runs on (a pillar's top
         // on the way). Fell if it is down among them. Over an edge, the box
         // still stands on the floor it is leaving.
-        if (body.z <= body.floorz && fabs(Height(under->floorheight) - body.floorz) < 0.01)
+        if (body.z <= body.floorz && fabs(Floor(under) - body.floorz) < 0.01)
         {
             if (body.floorz > lowest + MAX_STEP)
             {
@@ -429,6 +629,8 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
                     run->land.y = body.y;
                     run->land_floor = body.floorz;
                     run->land_sector = (int) (under - sectors);
+                    run->door = assumed_door;
+                    run->as_if_used = as_if_used;
                     return;
                 }
             }
@@ -463,13 +665,14 @@ static void TryRunUp(k_vec2_t at, k_vec2_t dir, double back, double from_floor)
 
     Run(start, dir, THRUST, &run);
 
-    if (run.result != RUN_LANDED)
+    // Searching as if a sector had moved, only the jumps that go over it.
+    if (run.result != RUN_LANDED || (as_if >= 0 && !run.as_if_used))
     {
         return;
     }
 
-    from_cell = K_Map_StandingCell(start.x, start.y, from_floor);
-    to_cell = K_Map_StandingCell(run.land.x, run.land.y, run.land_floor);
+    from_cell = StandingCell(start, from_floor);
+    to_cell = StandingCell(run.land, run.land_floor);
 
     if (from_cell < 0 || to_cell < 0 || from_cell == to_cell)
     {
@@ -536,6 +739,10 @@ static void TryRunUp(k_vec2_t at, k_vec2_t dir, double back, double from_floor)
     jump->from_floor = from_floor;
     jump->land_floor = run.land_floor;
     jump->land_sector = run.land_sector;
+    jump->as_if_sector = as_if;
+    jump->as_if_floor = as_if_floor;
+    jump->as_if_ceiling = as_if_ceiling;
+    jump->door = run.door;
 }
 
 // The jumps off the edge at `at`, along dir, from the floor and sector it
@@ -561,7 +768,7 @@ static void TryJump(k_vec2_t at, k_vec2_t dir, double from_floor, int from_secto
 
         if (!CheckPosition(x, y, &floorz, &ceilingz) || fabs(floorz - from_floor) > 0.01
          || ceilingz - floorz < PLAYER_HEIGHT
-         || fabs(Height(sector->floorheight) - from_floor) > 0.01
+         || fabs(Floor(sector) - from_floor) > 0.01
          || (index != from_sector && (K_Graph_IsDoor(index) || K_Graph_IsDoor(from_sector))))
         {
             break;
@@ -636,9 +843,9 @@ static int SearchEdges(const k_vec2_t *min, const k_vec2_t *max)
                 double t = (s + 0.5) / samples;
                 k_vec2_t at = { portal->a.x + along.x * t, portal->a.y + along.y * t };
 
-                for (a = -1; a <= 1; ++a)
+                for (a = 0; a < (int) (sizeof(ray_angles) / sizeof(*ray_angles)); ++a)
                 {
-                    double angle = a * RAY_ANGLE * K_PI / 180.0;
+                    double angle = ray_angles[a] * K_PI / 180.0;
                     k_vec2_t dir = { normal.x * cos(angle) - normal.y * sin(angle),
                                      normal.x * sin(angle) + normal.y * cos(angle) };
 
@@ -663,22 +870,148 @@ static void GrowJudging(int old_count)
 static void LogJump(int index)
 {
     const k_jump_t *jump = &jumps[index];
+    char as_if_text[64] = "";
+
+    if (jump->as_if_sector >= 0)
+    {
+        M_snprintf(as_if_text, sizeof(as_if_text), " - once sector %d moves (floor %.0f, "
+                   "ceiling %.0f)", jump->as_if_sector, jump->as_if_floor, jump->as_if_ceiling);
+    }
 
     K_Log(K_LOG_MAP, K_LOG_INFO, "jump from (%.0f,%.0f) cell %d to (%.0f,%.0f) cell %d: "
-          "%.0f units off the edge at %.1f units a tic", jump->start.x, jump->start.y,
+          "%.0f units off the edge at %.1f units a tic%s", jump->start.x, jump->start.y,
           jump->from_cell, jump->land.x, jump->land.y, jump->to_cell, jump->flight,
-          jump->speed);
+          jump->speed, as_if_text);
+}
+
+// The box round a sector's lines, grown by AS_IF_REACH; false if it has none.
+static boolean SectorBox(int sector, k_vec2_t *min, k_vec2_t *max)
+{
+    const k_map_t *map = K_Map_Get();
+    int i;
+
+    min->x = min->y = HUGE_VAL;
+    max->x = max->y = -HUGE_VAL;
+
+    for (i = 0; i < map->num_lines; ++i)
+    {
+        const k_line_t *line = &map->lines[i];
+
+        if (line->front_sector == sector || line->back_sector == sector)
+        {
+            min->x = SDL_min(min->x, SDL_min(line->v1.x, line->v2.x));
+            min->y = SDL_min(min->y, SDL_min(line->v1.y, line->v2.y));
+            max->x = SDL_max(max->x, SDL_max(line->v1.x, line->v2.x));
+            max->y = SDL_max(max->y, SDL_max(line->v1.y, line->v2.y));
+        }
+    }
+
+    min->x -= AS_IF_REACH;
+    min->y -= AS_IF_REACH;
+    max->x += AS_IF_REACH;
+    max->y += AS_IF_REACH;
+    return min->x < max->x;
+}
+
+// The doors every search as if a sector had moved takes as open: manual
+// ones, and those a line opens.
+static void FindDoors(void)
+{
+    int s, k;
+
+    free(door_like);
+    door_like = calloc(SDL_max(numsectors, 1), 1);
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        door_like[s] = K_Graph_IsDoor(s);
+
+        for (k = 0; k < K_Specials_TriggerCount(s); ++k)
+        {
+            int special = K_Specials_LineSpecial(K_Specials_TriggerLine(s, k));
+
+            if (K_Specials_MoverMoves(special) & K_MOVE_CEILING_UP)
+            {
+                door_like[s] = 1;
+            }
+        }
+    }
+}
+
+// The jumps around each sector a line moves, as if it were where the line
+// sends it (each place once), with every door open. Jumps found already
+// stay as they are: one between the same cells that works as things are is
+// better. Returns how many sectors were searched as moved.
+static int SearchAsIf(void)
+{
+    int searched = 0;
+    int s, k, j;
+
+    FindDoors();
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        double targets[MAX_TARGETS][2];
+        int num_targets = 0;
+        k_vec2_t min, max;
+
+        if (!SectorBox(s, &min, &max))
+        {
+            continue;
+        }
+
+        for (k = 0; k < K_Specials_TriggerCount(s) && num_targets < MAX_TARGETS; ++k)
+        {
+            double floor, ceiling;
+
+            if (!K_Specials_MoverTarget(K_Specials_TriggerLine(s, k), s, &floor, &ceiling)
+             || (fabs(floor - Height(sectors[s].floorheight)) < 0.5
+              && fabs(ceiling - Height(sectors[s].ceilingheight)) < 0.5))
+            {
+                continue;
+            }
+
+            for (j = 0; j < num_targets; ++j)
+            {
+                if (fabs(targets[j][0] - floor) < 0.5 && fabs(targets[j][1] - ceiling) < 0.5)
+                {
+                    break;
+                }
+            }
+
+            if (j < num_targets)
+            {
+                continue;
+            }
+
+            targets[num_targets][0] = floor;
+            targets[num_targets][1] = ceiling;
+            ++num_targets;
+
+            as_if = s;
+            as_if_floor = floor;
+            as_if_ceiling = ceiling;
+            fixed_jumps = num_jumps;
+            SearchEdges(&min, &max);
+            as_if = -1;
+            ++searched;
+        }
+    }
+
+    return searched;
 }
 
 void K_Jump_Find(void)
 {
     const k_map_t *map = K_Map_Get();
     Uint64 begin = SDL_GetPerformanceCounter();
-    int edges, p;
+    int edges, found, moved, p;
 
     num_jumps = 0;
     fixed_jumps = 0;
     edges = SearchEdges(NULL, NULL);
+    found = num_jumps;
+    moved = SearchAsIf();
 
     free(judged);
     free(possible);
@@ -691,8 +1024,14 @@ void K_Jump_Find(void)
         LogJump(p);
     }
 
-    K_Log(K_LOG_MAP, K_LOG_INFO, "%s: %d jumps off %d edges, %.1f ms", map->name, num_jumps,
-          edges, (SDL_GetPerformanceCounter() - begin) * 1000.0 / SDL_GetPerformanceFrequency());
+    for (p = SDL_max(found, MAX_REPORTS); p < num_jumps && p < found + MAX_REPORTS; ++p)
+    {
+        LogJump(p);
+    }
+
+    K_Log(K_LOG_MAP, K_LOG_INFO, "%s: %d jumps off %d edges, and %d more once one of %d "
+          "sectors has moved, %.1f ms", map->name, found, edges, num_jumps - found, moved,
+          (SDL_GetPerformanceCounter() - begin) * 1000.0 / SDL_GetPerformanceFrequency());
 }
 
 int K_Jump_FindNear(k_vec2_t min, k_vec2_t max)

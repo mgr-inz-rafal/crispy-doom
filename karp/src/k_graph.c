@@ -1524,9 +1524,14 @@ int K_Graph_IsDoor(int sector)
     return door_sectors != NULL && door_sectors[sector];
 }
 
-double K_Graph_DoorCeiling(int sector)
+double K_Graph_DoorTop(int sector)
 {
-    return OpenCeiling(&sectors[sector]) / (double) FRACUNIT;
+    return DoorTop(&sectors[sector]) / (double) FRACUNIT;
+}
+
+double K_Graph_OpeningCeiling(int sector)
+{
+    return OpeningCeiling(&sectors[sector]) / (double) FRACUNIT;
 }
 
 // Where the player is, for judging doors: in up to two sectors (-1 for

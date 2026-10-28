@@ -76,6 +76,9 @@
 // goes to the nearest point within PICKUP_REACH on each axis (some margin)
 // that is on floor and STAND_CLEARANCE from anything that stops it, its
 // radius plus one. Searched in steps of PICKUP_STEP.
+// A door that leaves less headroom than the player's height is shut.
+#define PLAYER_HEIGHT 56.0
+
 #define PICKUP_REACH 28.0
 #define PICKUP_STEP 4.0
 #define STAND_CLEARANCE 17.0
@@ -744,14 +747,52 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     }
     else if (crossing == K_CROSS_GAP && p->jump >= 0)
     {
-        // A jump that worked when it was found: its takeoff floor has gone
-        // down since, or its landing up (Doom II MAP08: walking over line
-        // 599 lowers the floor the jump back over the slime starts from,
-        // and switch 572 raises it again).
+        // A jump found as if a sector had moved: move it there (Doom II
+        // MAP09: switch 126 raises the floor a jump lands on, switch 157
+        // opens the door another starts from). One found with a door open
+        // that is closed: open it (MAP09: switch 455 opens the door at the
+        // top of the stairs). A jump that worked when it was found: its
+        // takeoff floor has gone down since, or its landing up (Doom II
+        // MAP08: walking over line 599 lowers the floor the jump back over
+        // the slime starts from, and switch 572 raises it again).
         const k_jump_t *jump = K_Jump_Get(p->jump);
         double floor, ceiling;
 
         count = 0;
+
+        if (jump->as_if_sector >= 0)
+        {
+            K_Map_SectorHeights(jump->as_if_sector, &floor, &ceiling);
+
+            if (floor < jump->as_if_floor - 0.5)
+            {
+                sectors_[count] = jump->as_if_sector;
+                wants[count++] = K_MOVE_FLOOR_UP;
+            }
+            else if (floor > jump->as_if_floor + 0.5)
+            {
+                sectors_[count] = jump->as_if_sector;
+                wants[count++] = K_MOVE_FLOOR_DOWN;
+            }
+
+            if (ceiling < jump->as_if_ceiling - 0.5)
+            {
+                sectors_[count] = jump->as_if_sector;
+                wants[count++] = K_MOVE_CEILING_UP;
+            }
+        }
+
+        if (jump->door >= 0)
+        {
+            K_Map_SectorHeights(jump->door, &floor, &ceiling);
+
+            if (ceiling - floor < PLAYER_HEIGHT)
+            {
+                sectors_[count] = jump->door;
+                wants[count++] = K_MOVE_CEILING_UP;
+            }
+        }
+
         K_Map_SectorHeights(from_sector, &floor, &ceiling);
 
         if (floor < jump->from_floor - 0.5)

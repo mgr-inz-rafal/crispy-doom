@@ -74,6 +74,12 @@ int K_Specials_MoverMoves(int special);
 // A line's live special: one-shot lines lose theirs once used.
 int K_Specials_LineSpecial(int line);
 
+// Where a mover line sends a sector it moves, worked out from the heights
+// now: the floor and ceiling once it gets there (a door open, a floor at its
+// destination, a step of stairs). False for a mover that does not stay
+// (lifts) or one not worked out (donuts, raising to a texture's height).
+int K_Specials_MoverTarget(int line, int sector, double *floor, double *ceiling);
+
 // The lines that move a sector (by its tag, or as a manual door's line),
 // from the specials at level load.
 int K_Specials_TriggerCount(int sector);
