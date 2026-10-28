@@ -27,6 +27,14 @@ typedef enum
                             // that is used up
 } k_pathresult_t;
 
+// How a leg of the route is taken.
+typedef enum
+{
+    K_LEG_WALK,
+    K_LEG_TELEPORT,         // not walked: the teleporter takes the player
+    K_LEG_JUMP,             // run straight at full speed and fly
+} k_leg_t;
+
 typedef struct
 {
     k_pathresult_t result;
@@ -34,8 +42,9 @@ typedef struct
 
     // The route from the start's cell to the goal's cell; portals[i] joins
     // cells[i] and cells[i + 1], or is a teleport line crossed out of
-    // cells[i] that lands the player in cells[i + 1]. When blocked, this is
-    // the route with the fewest blocked crossings, to show why.
+    // cells[i] that lands the player in cells[i + 1], or a jump from
+    // cells[i] to cells[i + 1]. When blocked, this is the route with the
+    // fewest blocked crossings, to show why.
     int num_cells;
     int *cells;
     int *portals;
@@ -48,14 +57,15 @@ typedef struct
     // points[i] to points[i + 1].
     //
     // At a teleporter the route goes on from a point just past its line
-    // (to be sure to cross it) to its destination: jumps[i] is set for
-    // that leg, which is not walked. It belongs to the cell after the
-    // teleporter.
+    // (to be sure to cross it) to its destination: legs[i] is
+    // K_LEG_TELEPORT for that leg, which is not walked. A jump's leg runs
+    // from the run-up's start to the touchdown, K_LEG_JUMP. Either belongs
+    // to the cell after.
     int num_points;
     k_vec2_t *points;
     int *leg_cells;
-    unsigned char *jumps;
-    double length;          // walked, without the jumps
+    unsigned char *legs;    // k_leg_t
+    double length;          // walked or run, without the teleports
 
     // K_PATH_BLOCKED: the first crossing on the route that is blocked (the
     // portal, and the cell it is crossed from), why, and by how much (the

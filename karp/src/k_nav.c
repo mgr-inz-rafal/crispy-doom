@@ -31,6 +31,11 @@
 //	from the destination. No slowing down: a teleport stops the player
 //	anyway, and freezes it for a moment, which the prediction knows.
 //
+//	Jumps (k_jump.h): from the run-up's start the player runs straight at
+//	full speed along the line to the touchdown, held on the line while on
+//	the ground; in the air nothing steers. The cells it crosses on the way
+//	are off the route; down in the gap, it missed, and replans.
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -150,6 +155,11 @@
 // is a unit off every one.
 #define STAND_CLEARANCE 17.0
 
+// Running a jump, the player is eased back onto its line at JUMP_LINE_GAIN
+// of how far off it is, a tic, up to JUMP_LINE_SPEED.
+#define JUMP_LINE_GAIN 0.5
+#define JUMP_LINE_SPEED 4.0
+
 // Going round solid things: the engine stops a move that would overlap
 // one, a whole step before the boxes touch, so this starts further out
 // than for walls.
@@ -224,6 +234,23 @@ static int history_next;
 static k_vec2_t stuck_at;
 static k_vec2_t last_at;    // after the previous tic
 static double last_floor;   // the floor stood on then
+
+// How far into a jump the player is. Landed, it brakes to below
+// SETTLE_SPEED (for at most SETTLE_TICS) before going on, as the jump was
+// checked to stop on its landing (k_jump.c): it can be a narrow ledge.
+typedef enum
+{
+    JUMP_NONE,
+    JUMP_RUNUP,
+    JUMP_AIR,
+    JUMP_SETTLE,
+} jumpphase_t;
+
+#define SETTLE_SPEED 2.0
+#define SETTLE_TICS 35
+
+static jumpphase_t jump_phase;
+static int settle_tics;
 
 static double Distance(k_vec2_t a, k_vec2_t b)
 {
@@ -397,23 +424,32 @@ static k_crossing_t CrossingOut(int r)
 }
 
 // Whether the route leaves cell r by teleporter, as planned: the leg
-// after the point past its line is the jump.
+// after the point past its line is the teleport.
 static boolean TeleportOut(int r)
 {
-    return path.jumps[ExitPoint(r)];
+    return path.legs[ExitPoint(r)] == K_LEG_TELEPORT;
+}
+
+// Whether the target is the end of a jump's leg: the player is running it.
+static boolean OnJump(int target)
+{
+    return target > 0 && target < path.num_points && path.legs[target - 1] == K_LEG_JUMP;
 }
 
 // The first crossing from the player's route cell on that is not open yet
 // (a door, a lift, a teleporter...), or -1. Not just the next one: the
 // player can stand just off the route, in a cell beside it, while the
-// route cell it last was in leads on openly.
+// route cell it last was in leads on openly. A jump that works is run like
+// an open crossing.
 static int NextClosedCrossing(void)
 {
     int r;
 
     for (r = SDL_max(status.route_cell, 0); r < path.num_cells - 1; ++r)
     {
-        if (CrossingOut(r) != K_CROSS_OPEN || TeleportOut(r))
+        k_crossing_t crossing = CrossingOut(r);
+
+        if ((crossing != K_CROSS_OPEN && crossing != K_CROSS_JUMP) || TeleportOut(r))
         {
             return r;
         }
@@ -438,7 +474,8 @@ static int TargetLimit(void)
 // The speed to take a waypoint at, from how sharply the route turns there,
 // out of the top speed there (careful near an edge). 0 in front of a door
 // or lift; full speed into a teleporter, which stops the player anyway,
-// and out of one, where there is no corner.
+// and out of one, where there is no corner, and at a jump's touchdown,
+// reached in the air. A jump's run-up start is a corner like any other.
 static double CornerSpeed(int k)
 {
     k_vec2_t a = path.points[k - 1], b = path.points[k], c = path.points[k + 1];
@@ -446,13 +483,16 @@ static double CornerSpeed(int k)
     double top = careful[k] ? SDL_min(CAREFUL_SPEED, tuning.max_speed) : tuning.max_speed;
     double turn_cos = 1.0;
     int r = path.leg_cells[k - 1];
+    k_crossing_t crossing;
 
-    if (path.jumps[k] || path.jumps[k - 1])
+    if (path.legs[k] == K_LEG_TELEPORT || path.legs[k - 1] != K_LEG_WALK)
     {
         return tuning.max_speed;
     }
 
-    if (path.leg_cells[k] != r && CrossingOut(r) != K_CROSS_OPEN)
+    crossing = path.leg_cells[k] != r ? CrossingOut(r) : K_CROSS_OPEN;
+
+    if (crossing != K_CROSS_OPEN && crossing != K_CROSS_JUMP)
     {
         return 0.0;
     }
@@ -484,6 +524,12 @@ static double SpeedLimit(const body_t *body, int target)
     int last = path.num_points - 1;
     int k;
 
+    // Running a jump: full speed, whatever lies beyond.
+    if (OnJump(target))
+    {
+        return tuning.max_speed;
+    }
+
     for (k = target; k <= last && along < LOOKAHEAD; ++k)
     {
         double corner = k == last ? 0.0 : CornerSpeed(k);
@@ -491,8 +537,9 @@ static double SpeedLimit(const body_t *body, int target)
 
         limit = SDL_min(limit, sqrt(corner * corner + 2.0 * braking * along));
 
-        // Past a stop, or a teleporter, nothing ahead needs slowing for now.
-        if (corner == 0.0 || path.jumps[k])
+        // Past a stop, a teleporter or a jump's run-up start, nothing ahead
+        // needs slowing for now.
+        if (corner == 0.0 || path.legs[k] != K_LEG_WALK)
         {
             break;
         }
@@ -741,6 +788,21 @@ static void AvoidBlocks(const body_t *body, k_vec2_t target, double *vx, double 
     }
 }
 
+// Running a jump: straight along its line at full speed, eased back onto
+// the line when off it. The run was checked clear, so nothing is steered
+// round; in the air the command does nothing anyway.
+static void SteerJump(const body_t *body, int target, k_command_t *command)
+{
+    k_vec2_t from = path.points[target - 1], to = path.points[target];
+    double length = SDL_max(Distance(from, to), 1e-6);
+    double ux = (to.x - from.x) / length, uy = (to.y - from.y) / length;
+    double off = (body->y - from.y) * ux - (body->x - from.x) * uy;    // left of it
+    double back = SDL_max(-JUMP_LINE_SPEED, SDL_min(off * JUMP_LINE_GAIN, JUMP_LINE_SPEED));
+
+    Steer(body, ux * tuning.max_speed + uy * back, uy * tuning.max_speed - ux * back,
+          NULL, true, command);
+}
+
 static void SteerAlongRoute(const body_t *body, k_command_t *command)
 {
     int target = status.target;
@@ -754,6 +816,19 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
      && Distance(at, path.points[target]) < AdvanceRadius(target))
     {
         ++target;
+    }
+
+    // Just landed from a jump: stop first.
+    if (jump_phase == JUMP_SETTLE)
+    {
+        Steer(body, 0.0, 0.0, NULL, false, command);
+        return;
+    }
+
+    if (OnJump(target))
+    {
+        SteerJump(body, target, command);
+        return;
     }
 
     distance = Distance(at, path.points[target]);
@@ -984,6 +1059,7 @@ void K_Nav_BuildCommand(int tic, k_command_t *command)
 static void Fail(const char *problem)
 {
     status.state = K_NAV_FAILED;
+    status.blocked = false;
     M_StringCopy(status.problem, problem, sizeof(status.problem));
 }
 
@@ -1461,7 +1537,8 @@ static void MarkCareful(void)
                      && ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y))
                         / (in * out) < turn_cos;
 
-        if (path.jumps[k] || path.jumps[k - 1] || (!turns && after >= before))
+        if (path.legs[k] != K_LEG_WALK || path.legs[k - 1] != K_LEG_WALK
+         || (!turns && after >= before))
         {
             continue;
         }
@@ -1478,6 +1555,7 @@ static void StartRoute(void)
     status.remaining = path.length;
     history_count = 0;
     history_next = 0;
+    jump_phase = JUMP_NONE;
     EndAction();
 }
 
@@ -1498,6 +1576,7 @@ static boolean Replan(k_vec2_t at, const char *why)
         K_Log(K_LOG_NAV, K_LOG_WARN, "%s - no path: %s", why, text);
         M_snprintf(problem, sizeof(problem), "no path: %s", text);
         Fail(problem);
+        status.blocked = path.result == K_PATH_BLOCKED;
         return false;
     }
 
@@ -1510,11 +1589,33 @@ static boolean Replan(k_vec2_t at, const char *why)
 // Returns false if the route was replaced or failed. Off the route but
 // next to it, the player carries on; teleported, it goes on from that
 // route cell (the route cell it was in is far away), else it replans.
-static boolean Progress(k_vec2_t at, int cell, boolean teleported)
+// Running a jump, it crosses cells off the route, or earlier on it (the
+// rest of the run-up's floor, the gap), until it lands: only getting on,
+// on the ground, counts (Doom II MAP24: a run-up across an earlier route
+// cell turned the player back from the edge; flying over a later one, the
+// corner after the landing was cut, straight over the nukage). On the
+// ground more than a step below the floor it lands on, it is down in the
+// gap: it missed.
+static boolean Progress(k_vec2_t at, const k_pose_t *pose, boolean teleported)
 {
+    int cell = pose->cell;
     int r = RouteIndex(cell);
     int limit;
     char why[96];
+
+    if ((r <= status.route_cell || !pose->onground) && OnJump(status.target))
+    {
+        double landing = CellFloor(path.cells[path.leg_cells[status.target - 1]]);
+
+        if (pose->onground && pose->floor < landing - MAX_CLIMB)
+        {
+            M_snprintf(why, sizeof(why), "missed the jump: down at (%.0f,%.0f), %.0f below",
+                       at.x, at.y, landing - pose->floor);
+            return Replan(at, why);
+        }
+
+        return true;
+    }
 
     // The move that crosses a teleport line goes on from the destination
     // (P_XYMovement moves in steps), so at speed the player lands a few
@@ -1561,6 +1662,62 @@ static boolean Progress(k_vec2_t at, int cell, boolean teleported)
     return true;
 }
 
+// A jump's run-up, takeoff, landing and stop, in the log. Touching down
+// ends the flight: the target moves on, and the player stops first. A step
+// across a gap narrower than the player never leaves the ground: it ends
+// when the target moves past the touchdown.
+static void TrackJump(const k_pose_t *pose, k_vec2_t at)
+{
+    switch (jump_phase)
+    {
+        case JUMP_NONE:
+            if (OnJump(status.target))
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "running up for the jump to (%.0f,%.0f)",
+                      path.points[status.target].x, path.points[status.target].y);
+                jump_phase = JUMP_RUNUP;
+            }
+            break;
+
+        case JUMP_RUNUP:
+            if (!OnJump(status.target))
+            {
+                jump_phase = JUMP_SETTLE;
+                settle_tics = 0;
+            }
+            else if (!pose->onground)
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "off the edge at (%.0f,%.0f) at %.1f units a tic",
+                      at.x, at.y, status.speed);
+                jump_phase = JUMP_AIR;
+            }
+            break;
+
+        case JUMP_AIR:
+            if (pose->onground)
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "landed at (%.0f,%.0f), floor %.0f, at %.1f "
+                      "units a tic", at.x, at.y, pose->floor, status.speed);
+
+                if (OnJump(status.target))
+                {
+                    ++status.target;
+                }
+
+                jump_phase = JUMP_SETTLE;
+                settle_tics = 0;
+            }
+            break;
+
+        case JUMP_SETTLE:
+            if (status.speed < SETTLE_SPEED || ++settle_tics > SETTLE_TICS)
+            {
+                jump_phase = JUMP_NONE;
+            }
+            break;
+    }
+}
+
 // Whether the player has hardly moved over the last STUCK_TICS tics.
 static boolean Stuck(k_vec2_t at)
 {
@@ -1585,7 +1742,7 @@ static double Remaining(k_vec2_t at)
 
     for (k = status.target; k < path.num_points - 1; ++k)
     {
-        if (!path.jumps[k])
+        if (path.legs[k] != K_LEG_TELEPORT)
         {
             remaining += Distance(path.points[k], path.points[k + 1]);
         }
@@ -1624,8 +1781,9 @@ k_navstate_t K_Nav_Tick(void)
     {
         CheckPrediction(at);
 
-        // Off a ledge, on purpose or not: no way back up the same way.
-        if (last_floor - pose.floor > MAX_CLIMB)
+        // Off a ledge, on purpose or not: no way back up the same way. (Not
+        // over a jump's gap, which it flies across.)
+        if (last_floor - pose.floor > MAX_CLIMB && jump_phase == JUMP_NONE)
         {
             K_Log(K_LOG_NAV, K_LOG_INFO, "dropped %.0f units at (%.0f,%.0f), into cell %d",
                   last_floor - pose.floor, at.x, at.y, pose.cell);
@@ -1635,10 +1793,12 @@ k_navstate_t K_Nav_Tick(void)
     last_at = at;
     last_floor = pose.floor;
 
-    if (!Progress(at, pose.cell, teleported) || !UpdateAction(at, status.speed))
+    if (!Progress(at, &pose, teleported) || !UpdateAction(at, status.speed))
     {
         return status.state;
     }
+
+    TrackJump(&pose, at);
 
     if (status.target == path.num_points - 1 && Distance(at, goal) < ARRIVE_RADIUS
      && status.speed < ARRIVE_SPEED && action.kind == K_ACTION_NONE)
@@ -1717,6 +1877,7 @@ void K_Nav_Reset(void)
     cross_first = false;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
+    jump_phase = JUMP_NONE;
     EndAction();
 
     for (i = 0; i < SENT_SIZE; ++i)

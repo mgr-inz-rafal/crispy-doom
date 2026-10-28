@@ -27,6 +27,10 @@ typedef struct
     int teleport_from;      // along a teleport line: the cell on its front
                             // side, crossing out of which teleports the
                             // player; -1 otherwise
+    int jump;               // a jump (K_Jump_Get), not a shared stretch of
+                            // border: crossed from cell[0] only, a is the
+                            // run-up's start and b the touchdown; -1
+                            // otherwise
 } k_portal_t;
 
 // A teleporter: the walk-over lines with one tag that teleport the player
@@ -63,6 +67,8 @@ typedef enum
                             // bars or raised blocks
     K_CROSS_THING,          // a solid thing stands there (k_block_t): a
                             // decoration, a barrel
+    K_CROSS_GAP,            // a jump that does not work now (the heights
+                            // moved, something stands in the way)
 
     // Passable after an action:
     K_CROSS_DOOR,           // a closed door the player can open: use its
@@ -75,6 +81,10 @@ typedef enum
     // Passable, but not into the cell beyond:
     K_CROSS_TELEPORT,       // a teleport line, from its front side: the
                             // player lands at the teleporter's destination
+
+    // Passable, running straight at full speed:
+    K_CROSS_JUMP,           // a jump (k_jump.h): from the run-up's start
+                            // over a gap to the touchdown
     K_NUM_CROSSINGS
 } k_crossing_t;
 
@@ -125,7 +135,7 @@ k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 // middle as possible.
 k_vec2_t K_Graph_PortalPoint(int portal, int from_cell);
 
-// Open, passable after an action (a door, a lift), or a teleporter.
+// Open, passable after an action (a door, a lift), a teleporter or a jump.
 int K_Graph_Passable(k_crossing_t crossing);
 
 // Whether going through the cell from one stretch of its border to another
@@ -159,6 +169,11 @@ int K_Graph_NarrowSectors(int portal, int from_cell, int *sectors, int max);
 
 // Its name ("blue", "yellow", "red"), or NULL.
 const char *K_Graph_LockName(int portal);
+
+// The linedefs (indices into the map's lines) whose grid cells reach into
+// the box from min to max, each once, up to max_found: those it may touch.
+// Returns how many.
+int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found);
 
 // How far a point on the floor is from the nearest line a player standing
 // there could not overlap (a wall, an impassable line, a side too high to

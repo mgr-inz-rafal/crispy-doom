@@ -59,6 +59,11 @@
 #define MOVE_TICS (15 * TICRATE)
 #define MAX_TRIGGERS 3
 
+// A goal whose way shut while the player was on it (a door closing before
+// it got through) is planned again, which pushes the fix, up to this many
+// times before the candidate counts as not working out.
+#define MAX_SHUT 3
+
 // No way to any candidate while sectors are still moving (stairs being
 // built, a floor going down): plan again after RETRY_TICS, for up to
 // MAX_WAIT_TICS in all before the goal fails.
@@ -105,6 +110,7 @@ typedef struct
 
     k_vec2_t tried[MAX_TRIED];  // candidates that failed
     int num_tried;
+    int shut;                   // times its way shut on the way (MAX_SHUT)
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for.
     double floor, ceiling;
@@ -1313,7 +1319,25 @@ void K_Brain_Tick(void)
             break;
 
         case K_NAV_FAILED:
-            CandidateFailed(goal, K_Nav_GetStatus()->problem);
+            // The way shut on the way, but is there, blocked (Doom II
+            // MAP02: a fast door closed before the player got back to it,
+            // and its only blue key was given up for good): planned again,
+            // which pushes the fix (the door's switch), not given up.
+            if (K_Nav_GetStatus()->blocked && goal->shut < MAX_SHUT)
+            {
+                char name[64];
+
+                ++goal->shut;
+                GoalName(goal, name, sizeof(name));
+                K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: the way shut on the way (%s) - planning "
+                      "again (%d/%d)", name, K_Nav_GetStatus()->problem, goal->shut, MAX_SHUT);
+                goal->planned = false;
+                K_Nav_Clear();
+            }
+            else
+            {
+                CandidateFailed(goal, K_Nav_GetStatus()->problem);
+            }
             break;
 
         default:

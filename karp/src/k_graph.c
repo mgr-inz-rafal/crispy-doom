@@ -27,6 +27,7 @@
 #include "r_state.h"
 
 #include "k_graph.h"
+#include "k_jump.h"
 #include "k_log.h"
 #include "k_specials.h"
 
@@ -80,6 +81,10 @@
 // A teleported player can neither move nor turn for this many tics
 // (EV_Teleport).
 #define TELEPORT_FREEZE 18.0
+
+// A jump costs this many tics more than its run: a walk not much longer
+// wins (the user: jump where it saves a lot, or nothing else gets there).
+#define JUMP_WAIT 70.0
 
 // A crossing is a way through only if some point on it is this far from
 // anything that stops the player: its radius (16), plus a unit. A gap
@@ -145,8 +150,8 @@ static int *cell_items;
 static const char *crossing_names[K_NUM_CROSSINGS] =
 {
     "open", "wall", "blocking line", "step too high", "no headroom",
-    "locked door", "too narrow", "solid thing", "door", "lift", "lift ride",
-    "teleporter",
+    "locked door", "too narrow", "solid thing", "jump not possible", "door", "lift",
+    "lift ride", "teleporter", "jump",
 };
 
 // Per sector: opened by a manual door line (it is the line's back
@@ -417,6 +422,7 @@ static void AddPortal(int e, int f, double t0, double t1)
     portal->b = PointAlong(edges[e].a, edges[e].b, t1);
     portal->line = -1;
     portal->teleport_from = -1;
+    portal->jump = -1;
 
     AddCover(e, t0, t1);
 
@@ -697,6 +703,7 @@ static boolean NearWall(const k_map_t *map, k_vec2_t point)
     return false;
 }
 
+// A link both ways per portal, but a jump is linked from its run-up only.
 static void BuildLinks(const k_map_t *map)
 {
     int count = SDL_max(map->num_cells, 1);
@@ -708,13 +715,17 @@ static void BuildLinks(const k_map_t *map)
     free(graph.links);
     graph.first_link = calloc(count, sizeof(int));
     graph.link_count = calloc(count, sizeof(int));
-    graph.num_links = 2 * graph.num_portals;
-    graph.links = malloc(SDL_max(graph.num_links, 1) * sizeof(*graph.links));
+    graph.num_links = 0;
+    graph.links = malloc(SDL_max(2 * graph.num_portals, 1) * sizeof(*graph.links));
 
     for (i = 0; i < graph.num_portals; ++i)
     {
         ++graph.link_count[graph.portals[i].cell[0]];
-        ++graph.link_count[graph.portals[i].cell[1]];
+
+        if (graph.portals[i].jump < 0)
+        {
+            ++graph.link_count[graph.portals[i].cell[1]];
+        }
     }
 
     for (i = 1; i < map->num_cells; ++i)
@@ -732,11 +743,41 @@ static void BuildLinks(const k_map_t *map)
 
         graph.links[fill[c0]].portal = i;
         graph.links[fill[c0]++].neighbor = c1;
-        graph.links[fill[c1]].portal = i;
-        graph.links[fill[c1]++].neighbor = c0;
+        ++graph.num_links;
+
+        if (graph.portals[i].jump < 0)
+        {
+            graph.links[fill[c1]].portal = i;
+            graph.links[fill[c1]++].neighbor = c0;
+            ++graph.num_links;
+        }
     }
 
     free(fill);
+}
+
+// Jumps (k_jump.h) join cells as portals do, one way: a portal each, after
+// the shared stretches of border, with a the run-up's start and b the
+// touchdown.
+static void AddJumps(void)
+{
+    int j;
+
+    K_Jump_Find();
+
+    for (j = 0; j < K_Jump_Count(); ++j)
+    {
+        const k_jump_t *jump = K_Jump_Get(j);
+        k_portal_t *portal = &graph.portals[NewPortal()];
+
+        portal->cell[0] = jump->from_cell;
+        portal->cell[1] = jump->to_cell;
+        portal->a = jump->start;
+        portal->b = jump->land;
+        portal->line = -1;
+        portal->teleport_from = -1;
+        portal->jump = j;
+    }
 }
 
 //
@@ -840,12 +881,16 @@ static void CheckConnectivity(const k_map_t *map)
         parent[i] = i;
     }
 
+    // Walking only: jumps do not count.
     for (i = 0; i < graph.num_portals; ++i)
     {
         int a = FindRoot(parent, graph.portals[i].cell[0]);
         int b = FindRoot(parent, graph.portals[i].cell[1]);
 
-        parent[a] = b;
+        if (graph.portals[i].jump < 0)
+        {
+            parent[a] = b;
+        }
     }
 
     for (i = 0; i < map->num_cells; ++i)
@@ -1296,6 +1341,7 @@ void K_Graph_Build(void)
     BuildGrid(map);
     MatchEdges(map);
     SplitPortals(map);
+    AddJumps();
     BuildLinks(map);
     FindMoverSectors(map);
     FindTeleporters(map);
@@ -1308,9 +1354,10 @@ void K_Graph_Build(void)
                    / SDL_GetPerformanceFrequency();
 
     K_Log(K_LOG_MAP, graph.holes > 0 ? K_LOG_WARN : K_LOG_INFO,
-          "%s graph: %d portals, %d teleporters, %d chords, %d holes (%.0f units), "
+          "%s graph: %d portals, %d jumps, %d teleporters, %d chords, %d holes (%.0f units), "
           "%d isolated, %d components (largest %d of %d cells), %.1f ms",
-          map->name, graph.num_portals, graph.num_teleports, num_chords, graph.holes,
+          map->name, graph.num_portals - K_Jump_Count(), K_Jump_Count(),
+          graph.num_teleports, num_chords, graph.holes,
           graph.hole_length, graph.isolated_cells, graph.components,
           graph.largest_component, map->num_cells, graph.build_ms);
 }
@@ -1524,6 +1571,17 @@ static boolean LiftComing(const sector_t *sector)
     const plat_t *plat = PlatOf(sector);
 
     return plat != NULL && (plat->type == perpetualRaise || plat->status == down);
+}
+
+// Whether the floor of a cell is on its way down now: a lift coming, or a
+// floor lowering.
+static boolean ComingDown(int cell)
+{
+    const k_map_t *map = K_Map_Get();
+    const sector_t *sector = &sectors[map->subsectors[map->cells[cell].subsector].sector];
+    const floormove_t *floor = FloorMoverOf(sector);
+
+    return LiftComing(sector) || (floor != NULL && floor->direction == -1);
 }
 
 // Tics until a lift that is coming is at the bottom (EV_DoPlat,
@@ -1929,6 +1987,23 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
             return K_CROSS_LIFT;
         }
 
+        // The floor beyond on its way down to within a step (a switch set it
+        // going): waited for at the crossing, like a lift coming down, not
+        // at the switch (Doom II MAP02: switch 130 lowers sector 15 a unit a
+        // tic, 2 s to a step, with the step 640 units off).
+        {
+            const floormove_t *falling = FloorMoverOf(b);
+            fixed_t low_enough = floor_a + MAX_STEP_UP;
+
+            if (falling != NULL && falling->direction == -1
+             && falling->floordestheight <= low_enough
+             && Headroom(floor_a, ceiling_a, low_enough, ceiling_b))
+            {
+                *wait = (double) (floor_b - low_enough) / falling->speed;
+                return K_CROSS_LIFT;
+            }
+        }
+
         return K_CROSS_STEP;
     }
 
@@ -1944,6 +2019,21 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
         {
             *wait = LiftArrival(a) + TurnWait(from_sector);
             return K_CROSS_RIDE;
+        }
+
+        // On a floor lowering to where the way off fits: the same (Doom II
+        // MAP02: a bar across a channel, its top 2 units under its ceiling
+        // until it is down).
+        {
+            const floormove_t *falling = FloorMoverOf(a);
+
+            if (falling != NULL && falling->direction == -1
+             && floor_b - falling->floordestheight <= MAX_STEP_UP
+             && Headroom(falling->floordestheight, ceiling_a, floor_b, ceiling_b))
+            {
+                *wait = (double) (floor_a - falling->floordestheight) / falling->speed;
+                return K_CROSS_RIDE;
+            }
         }
 
         // A door already opening (however it was opened; one-shot doors
@@ -1986,7 +2076,9 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
 // takes the player elsewhere. A ride is not judged for width now, low
 // down, where the sides of the way off are walls (Doom II MAP03: the
 // teleporter at the end of a rising strip, as wide as the player, between
-// a closet's faces), but when it gets there.
+// a closet's faces), but when it gets there. Nor a floor beyond on its way
+// down to the crossing, whose far side is a wall until it is down (Doom
+// II MAP02: bars 16 wide across a channel, lowered by switches).
 //
 // Under a standing block there is no way in, whatever the heights: the
 // player cannot get past a solid thing, only round it, until it is gone.
@@ -1996,6 +2088,25 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
     k_crossing_t crossing;
     stance_t stance;
 
+    // A jump goes one way, if the run lands now (k_jump.h).
+    if (portal->jump >= 0)
+    {
+        *wait = 0.0;
+
+        if (from != portal->cell[0])
+        {
+            return K_CROSS_WALL;
+        }
+
+        if (!K_Jump_Possible(portal->jump))
+        {
+            return K_CROSS_GAP;
+        }
+
+        *wait = JUMP_WAIT;
+        return K_CROSS_JUMP;
+    }
+
     if (K_Map_CellBlock(portal->cell[0] == from ? portal->cell[1] : portal->cell[0]) >= 0)
     {
         *wait = 0.0;
@@ -2004,7 +2115,9 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
 
     crossing = JudgeHeights(portal_index, from, wait);
 
-    if (!K_Graph_Passable(crossing) || from < 0 || crossing == K_CROSS_RIDE)
+    if (!K_Graph_Passable(crossing) || from < 0 || crossing == K_CROSS_RIDE
+     || (crossing == K_CROSS_LIFT && ComingDown(portal->cell[0] == from ? portal->cell[1]
+                                                                        : portal->cell[0])))
     {
         return crossing;
     }
@@ -2046,6 +2159,12 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
     k_vec2_t best = PointAlong(portal->a, portal->b, length * 0.5);
     stance_t stance;
     int count, num_blocks, s, i;
+
+    // A jump is taken from the run-up's start.
+    if (portal->jump >= 0)
+    {
+        return portal->a;
+    }
 
     Stance(portal_index, from, &stance);
     count = NearObstacles(&stance, WAYPOINT_CLEARANCE, found, MAX_NEAR_LINES);
@@ -2256,7 +2375,45 @@ int K_Graph_Passable(k_crossing_t crossing)
 {
     return crossing == K_CROSS_OPEN || crossing == K_CROSS_DOOR
         || crossing == K_CROSS_LIFT || crossing == K_CROSS_RIDE
-        || crossing == K_CROSS_TELEPORT;
+        || crossing == K_CROSS_TELEPORT || crossing == K_CROSS_JUMP;
+}
+
+int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found)
+{
+    int x, y, x0, y0, x1, y1, k, i;
+    int count = 0;
+
+    CellRange(min, max, &x0, &y0, &x1, &y1);
+
+    for (y = y0; y <= y1; ++y)
+    {
+        for (x = x0; x <= x1; ++x)
+        {
+            int cell = y * grid_width + x;
+
+            for (k = cell_first[cell]; k < cell_first[cell + 1] && count < max_found; ++k)
+            {
+                int line = cell_items[k] - num_edges;
+
+                if (line < 0)
+                {
+                    continue;
+                }
+
+                // A line spanning several grid cells comes up more than once.
+                for (i = 0; i < count && found[i] != line; ++i)
+                {
+                }
+
+                if (i == count)
+                {
+                    found[count++] = line;
+                }
+            }
+        }
+    }
+
+    return count;
 }
 
 int K_Graph_Teleport(int portal, int from)

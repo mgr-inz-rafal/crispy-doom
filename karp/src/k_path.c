@@ -19,6 +19,11 @@
 //	flying to any teleporter and on from its destination: still never more
 //	than any route costs, so A* still finds the shortest one.
 //
+//	A jump (k_jump.h) is a portal of its own, out of the cell its run-up
+//	starts in: the route goes to the run-up's start, then straight to the
+//	touchdown. It costs that distance and a little more, so a walk not much
+//	longer wins; one that does not work now is not taken at all.
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -140,6 +145,11 @@ static k_vec2_t NodePosition(int node)
     if (node == goal_node)
     {
         return goal_point;
+    }
+
+    if (graph->portals[node / 2].jump >= 0)
+    {
+        return graph->portals[node / 2].b;
     }
 
     teleport = NodeTeleport(node);
@@ -310,11 +320,11 @@ static int Pop(void)
 // Search
 //
 
-// Where a node enters its cell: at the start or a teleporter's destination
-// (a point), else across its portal.
+// Where a node enters its cell: at the start, a teleporter's destination or
+// a jump's touchdown (a point), else across its portal.
 static void NodeEntry(int node, k_vec2_t *a, k_vec2_t *b)
 {
-    if (node == start_node || NodeTeleport(node) >= 0)
+    if (node == start_node || graph->portals[node / 2].jump >= 0 || NodeTeleport(node) >= 0)
     {
         *a = *b = NodePosition(node);
     }
@@ -442,8 +452,30 @@ static boolean Search(k_path_t *path)
                 continue;
             }
 
-            step = Distance(at, PortalMiddle(graph, link->portal));
             crossing = K_Graph_CanCross(link->portal, cell);
+
+            // A jump: to the run-up's start, then straight on to the
+            // touchdown; one that does not work now is no way at all.
+            if (portal->jump >= 0)
+            {
+                if (crossing != K_CROSS_JUMP)
+                {
+                    continue;
+                }
+
+                step = Distance(at, portal->a) + Distance(portal->a, portal->b)
+                     + WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
+
+                if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->a, NULL))
+                {
+                    step += PinchCost(link->portal, cell);
+                }
+
+                Relax(2 * link->portal + 1, node, step);
+                continue;
+            }
+
+            step = Distance(at, PortalMiddle(graph, link->portal));
 
             if (!K_Graph_Passable(crossing))
             {
@@ -491,8 +523,7 @@ static void EnsureCapacity(k_path_t *path, int cells)
                            (4 * path->capacity + 2) * sizeof(*path->points));
     path->leg_cells = realloc(path->leg_cells,
                               (4 * path->capacity + 2) * sizeof(*path->leg_cells));
-    path->jumps = realloc(path->jumps,
-                          (4 * path->capacity + 2) * sizeof(*path->jumps));
+    path->legs = realloc(path->legs, (4 * path->capacity + 2) * sizeof(*path->legs));
 }
 
 static void Reconstruct(k_path_t *path)
@@ -555,7 +586,8 @@ static boolean OnWall(int cell, k_vec2_t point)
 
         CellHeights(graph->links[i].neighbor, &neighbor_floor, &neighbor_ceiling);
 
-        if (SegmentDistance(portal->a, portal->b, point) < BORDER_DISTANCE
+        if (portal->jump < 0
+         && SegmentDistance(portal->a, portal->b, point) < BORDER_DISTANCE
          && fabs(neighbor_floor - floor) <= LEDGE_HEIGHT
          && K_Map_CellBlock(graph->links[i].neighbor) < 0)
         {
@@ -585,11 +617,11 @@ static boolean LegAlongWall(int cell, k_vec2_t a, k_vec2_t b)
     return false;
 }
 
-// Adds a point; the leg to it is in route cell `cell`.
-static void AddPoint(k_path_t *path, k_vec2_t point, int cell, boolean jump)
+// Adds a point; the leg to it is in route cell `cell`, taken as `leg`.
+static void AddPoint(k_path_t *path, k_vec2_t point, int cell, k_leg_t leg)
 {
     path->leg_cells[path->num_points - 1] = cell;
-    path->jumps[path->num_points - 1] = jump;
+    path->legs[path->num_points - 1] = leg;
     path->points[path->num_points++] = point;
 }
 
@@ -625,25 +657,30 @@ static void BuildPoints(k_path_t *path)
         if (i > 0 && LegAlongWall(path->cells[i],
                                   path->points[path->num_points - 1], middle))
         {
-            AddPoint(path, map->cells[path->cells[i]].centroid, i, false);
+            AddPoint(path, map->cells[path->cells[i]].centroid, i, K_LEG_WALK);
         }
 
-        AddPoint(path, middle, i, false);
+        AddPoint(path, middle, i, K_LEG_WALK);
 
-        if (teleport >= 0)
+        // A jump: from the run-up's start straight to the touchdown.
+        if (graph->portals[path->portals[i]].jump >= 0)
         {
-            AddPoint(path, PastLine(path->portals[i], middle), i, false);
-            AddPoint(path, graph->teleports[teleport].to, i + 1, true);
+            AddPoint(path, graph->portals[path->portals[i]].b, i + 1, K_LEG_JUMP);
+        }
+        else if (teleport >= 0)
+        {
+            AddPoint(path, PastLine(path->portals[i], middle), i, K_LEG_WALK);
+            AddPoint(path, graph->teleports[teleport].to, i + 1, K_LEG_TELEPORT);
         }
     }
 
-    AddPoint(path, goal_point, path->num_cells - 1, false);
-    path->jumps[path->num_points - 1] = false;
+    AddPoint(path, goal_point, path->num_cells - 1, K_LEG_WALK);
+    path->legs[path->num_points - 1] = K_LEG_WALK;
     path->length = 0.0;
 
     for (i = 0; i < path->num_points - 1; ++i)
     {
-        if (!path->jumps[i])
+        if (path->legs[i] != K_LEG_TELEPORT)
         {
             path->length += Distance(path->points[i], path->points[i + 1]);
         }
@@ -657,7 +694,8 @@ static void CellHeights(int cell, double *floor, double *ceiling)
 }
 
 // A gap on the way through route cell i: from the start, a teleporter's
-// destination or the portal in, to the portal out or the goal.
+// destination, a jump's touchdown or the portal in, to the portal out, a
+// jump's run-up or the goal.
 static boolean PinchedAt(const k_path_t *path, int i, k_vec2_t *where)
 {
     k_vec2_t in_a, in_b, out_a, out_b;
@@ -666,6 +704,10 @@ static boolean PinchedAt(const k_path_t *path, int i, k_vec2_t *where)
     if (i == 0)
     {
         in_a = in_b = start_point;
+    }
+    else if (graph->portals[path->portals[i - 1]].jump >= 0)
+    {
+        in_a = in_b = graph->portals[path->portals[i - 1]].b;
     }
     else if (teleport >= 0)
     {
@@ -680,6 +722,10 @@ static boolean PinchedAt(const k_path_t *path, int i, k_vec2_t *where)
     if (i == path->num_cells - 1)
     {
         out_a = out_b = goal_point;
+    }
+    else if (graph->portals[path->portals[i]].jump >= 0)
+    {
+        out_a = out_b = graph->portals[path->portals[i]].a;
     }
     else
     {
@@ -824,7 +870,7 @@ void K_Path_Free(k_path_t *path)
     free(path->portals);
     free(path->points);
     free(path->leg_cells);
-    free(path->jumps);
+    free(path->legs);
     memset(path, 0, sizeof(*path));
 }
 
@@ -929,6 +975,10 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
 
             break;
         }
+
+        case K_CROSS_GAP:
+            M_snprintf(buf, buf_len, "a jump at %s that does not work now", where);
+            break;
 
         default:
             M_snprintf(buf, buf_len, "a one-sided line at %s", where);

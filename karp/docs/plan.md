@@ -403,6 +403,13 @@ become passable after an action, also judged live, with the engine's own rules:
   under the way off, the crossing off is a lift ride: ride it down. The wait is worked out from
   the lift's state (`T_PlatRaise`: still to go up, the wait at the top, the way down). Doom II
   MAP12's exit area is reached over perpetual lifts that go up and down all the time.
+- **Floors that come down:** the same for a floor beyond on its way down (`T_MoveFloor`, a switch
+  or walk-over line set it going) to within 24 of the player's floor: a lift crossing, waited at,
+  not a step; and off a floor lowering to where the way off fits, a ride down. Neither, nor a lift
+  coming, is judged for width before it gets there: Doom II MAP02's switches 130 and 311 lower
+  bars 16 wide across a water channel (a unit a tic, 2 s to a step), whose far faces stay walls
+  16 units behind the crossing while they are up. So the brain's USE TRIGGER is done right after
+  the press, and the bot waits at the bar, not at the switch (MAP02 4 s faster, MAP12 3.7 s).
 - Standing in a door sector means its door is open, so crossings out of one are judged with the
   door's open height: a manual door's, and that of any door already opening (a switch opened it,
   and the route goes on through it before it is fully up). The clearance check takes them as
@@ -518,6 +525,48 @@ border; from ~1,600 holes in the first version), most of them under 30 units: se
 outlines that both tests read as void, narrow strips, and a few neighbouring cells whose edges did
 not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one component.
 
+#### 3.2.2 `k_jump.c` - jumps
+
+Designed with the user: one model for gaps narrower than the player and for running jumps;
+straight runs only (vanilla maps never need strafe-running); a margin, never a jump that needs
+near-perfect conditions; found at level load, judged live.
+- **The run.** A jump is a straight run from a standing start, checked with the engine's own
+  movement replayed on Karp's data (nothing in the game is touched, 2.4): forward thrust (50, so
+  1.5625 a tic) and friction (0.90625) on the ground only, momentum capped at 30 a tic and moved
+  in halves above 15 (positive moves only, as the engine does), gravity of 1 a tic (2 the first),
+  and the floor and ceiling under the 32x32 box from the sector under its centre and every
+  two-sided line it straddles (`P_CheckPosition`). Walls, impassable lines and standing solid
+  things stop it, as do a step over 24 and headroom under 56 (`P_TryMove`). The player stands on
+  the highest floor under its box, so a gap narrower than the player needs no speed, and a wider
+  one is flown 32 units shorter than it is wide: Doom II MAP02's pit is 96 wide, flown 64.
+- **Landed** means standing, box and centre, on a floor more than 24 above the lowest one the
+  centre passed over: one it could not climb to from there. Whatever lies in between is crossed
+  as the engine would: one pit, or (MAP14, the user's example) a sidewalk, a low fence and water.
+  Landed is not enough: the run goes on braking, 2 tics coasting (the bot's commands for them
+  were built in the air, with no thrust), then full thrust against the momentum, and must stop
+  (under 1 a tic, or against a wall) before the box leaves the landing floor. Doom II MAP24: a
+  jump from a platform over the nukage onto a walkway 16 wide, which a player braking slides
+  along but does not leave.
+- **Finding them**, at level load: off every portal the floor drops more than 24 across, from
+  points every 48 units along it, rays straight out and 25 degrees to either side, each with as
+  long a run-up as the takeoff floor allows behind the edge (up to 128 units, at least 24). Kept
+  if the run lands in another cell, and still lands in the same sector with 85% of the thrust
+  and from starts 6 units to either side; one per pair of cells, the shortest. MAP02: 9 jumps in
+  1.1 ms; MAP24: 64 off 500 edges in 20 ms. (A rough count over the WAD before building it: about
+  40 candidates a map, at most 173 on MAP14, a few percent of the portals: no bloat.)
+- **In the graph** a jump is a portal of its own after the shared stretches of border
+  (`k_portal_t.jump`), linked from its run-up's cell only: `a` is the run-up's start, `b` the
+  touchdown. Judged live, once a tic, by running it again with full and 85% thrust (heights
+  move, a solid thing can stand in the way): `K_CROSS_JUMP` if it works, else `K_CROSS_GAP`, which
+  the search does not take at all. It costs its distance plus 2 s (70 tics), so a walk not much
+  longer wins (the user: jump where it saves a lot, or where nothing else gets there). The graph
+  log and the Map tab count jumps; the overlay draws each dashed orange from the run-up's start
+  to the touchdown, with a ring there, faint while it does not work.
+- Not yet: jumps that only appear once a floor has moved (MAP23's triangle, at 128 after switch
+  111; MAP22's raised lift), since the search runs on the heights at level load; the plan is a
+  local search again when a sector stops moving. With combat: clear the monsters near a jump
+  first (the user: they stand at any height and can knock the player off).
+
 ### 3.3 `k_path.c` - pathfinder
 
 `K_Path_Find(path, start, goal)` plans from a start point to a goal point:
@@ -545,6 +594,11 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
   around its lines plus the heuristic at its destination (those are worked out per search, letting
   one teleporter lead to another, until they settle). It still never overestimates and stays
   consistent, so the search still finds the shortest route.
+- **Jumps** (3.2.2). A jump's portal is crossed from its run-up's cell only, into the landing
+  cell: it costs the way to the run-up's start, the run to the touchdown and its 2 s, never less
+  than the straight line, so the heuristic stays as it is. The node stands at the touchdown, and
+  enters its cell there, a point (for the pinch check, as a teleporter's destination); the way
+  out of the run-up's cell is its start. A jump that does not work now is skipped.
 - **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
   search then gives the shortest open route if there is one, and otherwise the route with the
   cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
@@ -571,8 +625,9 @@ not match. Graph builds take under 6 ms per map. E1M1: 425 portals, 0 holes, one
   progress tracking in M6), the points to follow (start, portal middles, the occasional centroid,
   goal), the length, the first blocked crossing with its kind and height, nodes searched and time.
   At a teleporter the points go on from the point on its line to one 32 units past it (so the
-  player surely crosses it), then to the destination; that last leg is marked as a jump
-  (`k_path_t.jumps`), is not walked and does not count in the length.
+  player surely crosses it), then to the destination; that last leg is marked as a teleport
+  (`k_path_t.legs`, `K_LEG_TELEPORT`), is not walked and does not count in the length. At a jump
+  they go to the run-up's start, then to the touchdown, a leg marked `K_LEG_JUMP`.
 - **Results:** `FOUND`; `BLOCKED` (every route crosses something the player cannot cross now: a
   step too high, a closed door, a blocking line); `UNCONNECTED` (nothing connects them, no portal
   nor teleporter, e.g. a closed-off area); `NO_START` / `NO_GOAL` (not on any floor).
@@ -799,6 +854,24 @@ up from the player's current one on first.
 - If the teleporter on the route stops working before the bot gets there (a once-only one used
   up, or blocked), the route is replanned.
 
+**Jumps on the route** (3.2.2). A jump that works is run like an open crossing: no stop at the
+run-up's start, a corner like any other on the way to it. From there the bot runs straight at
+full speed along the line to the touchdown, eased back onto the line while on the ground
+(nothing steers in the air, and the run was checked clear, so walls and solid things are not
+gone round). The speed profile does not brake for anything past it.
+- While the jump lasts, only getting on, on the ground, counts as progress: the run-up crosses
+  cells off the route or earlier on it (Doom II MAP24: one turned the bot back from the edge), and
+  flying over a later route cell cut the corner after the landing, straight over the nukage.
+- Touching down ends the flight: the target moves past the touchdown, and the bot brakes to
+  under 2 a tic (at most 1 s) before going on, as the jump was checked to stop there (MAP24's
+  walkway is 16 wide). A step across a gap narrower than the player never leaves the ground and
+  ends when the target moves past the touchdown.
+- On the ground more than a step below the landing floor, it is down in the gap: "missed the
+  jump", and the route is replanned. A jump that stops working on the way (heights moved) is
+  replanned too, as any crossing that closes.
+- The log shows "running up for the jump to (x,y)", "off the edge at (x,y) at v units a tic" and
+  "landed at (x,y)", and no "dropped" while flying over the gap.
+
 **Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
 before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
 the way. The first run found one bug: one-shot doors lose their line special the moment they
@@ -929,6 +1002,11 @@ three uses that way).
 **Guards against loops and early give-ups:**
 - a candidate that does not work out (nav fails, the press moves nothing, the key was not picked
   up) is not chosen again for that goal; the next candidate is tried;
+- but when nav fails because its way shut on the way and a route is still there, blocked (a door
+  closing before the player got back to it), the goal is planned again, which pushes the fix (the
+  door's switch), up to 3 times: Doom II MAP02's fast door (special 114, closes after 4 s) shut
+  while the bot stood at a switch, and its only blue key was given up for good, the bot pressing
+  the door's switch every 5 s from then on;
 - a goal whose candidates all fail is marked failed for the rest of the level, never pushed
   again, and the goal below looks for another way;
 - a goal already on the stack is never pushed again (a key behind its own door);
@@ -1543,6 +1621,29 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      the barrel can see, and the bot must know that (follow-up 3, second part).
    So MAP23 waits for gap links first, then barrels.
 
+   **Jumps** (3.2.2, follow-up 7). MAP02 played through by hand first (the trace): the red key's
+   area is reached by a running jump west over a pit 96 wide (sector 73, floor -40, 8 below the
+   takeoff floor) into a window 96 wide (line 248) with a ceiling 72 high; flown 64 units, at
+   least 9.1 a tic, where running gives 16.7. Agreed with the user: one model, straight jumps
+   only, a margin, monsters cleared first (later); measured: no bloat (3.2.2).
+   - MAP02: the jump worked at once (off the edge at (1453,251) at 13.0 a tic, landed at
+     (1388,251)). Two older gaps showed up behind it, on ground the bot had never reached: it
+     waited 2 s at each switch that lowers a bar (sectors 15 and 16), since a floor going down was
+     no crossing to wait at, and the bars' far faces made the crossing look too narrow until they
+     were down (3.2.1, floors that come down); and the fast door between the switches shut while
+     it waited, so the blue key was given up for good (3.5, a way that shut on the way).
+     **Finished in 42.2 s.**
+   - MAP24 (in the regression set, 60.4 s) found a shortcut by jump: from a teleporter's arrival
+     platform over the nukage onto a walkway 16 wide, and fell off it, again and again. Three
+     things: the check stopped at touchdown (now it brakes and must stop on the landing); the
+     run-up crossed an earlier route cell, which sent the bot back from the edge; and flying over
+     a later route cell cut the corner after the landing, straight over the nukage (3.4, jumps on
+     the route). **Finished in 62.1 s**, by the jump.
+   - Regressions: everything finishes. New: MAP02 42.2 s, MAP21 62.5 s, MAP17 152.3 s (it now
+     gets past the step that stopped it). MAP12 74.1 s (77.8). The rest unchanged. Seen by the
+     user, not looked into yet: on MAP21 the bot lowered a lift in a nukage pit, did not step on,
+     called it again, and only then rode it.
+
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
    so the bot waits for as long as the sector moves; a door may not open high enough, and how
@@ -1652,6 +1753,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       from a ledge 48 higher), so they will probably have to come sooner. Jumps would also save
       time where falling in is not needed: Doom II MAP17's ditch at switch 491 costs a 15 s ride
       back up (optional, the user's note; see the MAP17 playtest).
+      **Done as one model** (3.2.2, 3.3, 3.4): gap links and running jumps are both straight runs
+      checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
+      (MAP24 takes a jump too). Left: the maps not tried yet (MAP04, 06, 08, 09, 11, 13, 14, 15,
+      20, 22, 25, 29), and jumps that only appear once a floor has moved (MAP22, MAP23), which
+      need a search again when a sector stops moving.
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -1663,10 +1769,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       that is already opening). Missing the window makes it cross the line again (3 times at most).
       Done (3.2.1, 3.5): a lift on its way down, or a perpetual one, is waited for, and a trigger
       goal ends as soon as the way it was pushed for opens or starts opening, so the bot heads
-      for the lift right away. Other floors on their way down (`T_MoveFloor`, not a lift) are
+      for the lift right away. Other floors on their way down (`T_MoveFloor`, not a lift) were
       not judged as crossings to wait at, but when no way is left while anything still moves,
       the brain waits and plans again (3.5), so the bot no longer gives up on a step that is
-      shrinking (Doom II MAP13).
+      shrinking (Doom II MAP13). Now they are (3.2.1, floors that come down): Doom II MAP02's
+      bars lowered by switches had the bot standing 2 s at each switch.
    10. **Boss-death triggers** (needs monsters and combat, so a later stage). Some levels move
        sectors when the last monster of a kind dies, not from any line (`A_BossDeath` and
        `A_KeenDie` in `p_enemy.c`):
@@ -1723,7 +1830,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        bot plans again as a human would. A door can also stay open longer than its timer says:
        a closing door goes back up when it meets a monster, so a prediction would give up on
        doors too early once monsters are in. What is left to do is only that a way shut like
-       this is not given up on for good (follow-up 11).
+       this is not given up on for good (follow-up 11). Partly done (3.5): when nav's way shuts
+       on the way and a blocked route is still there, the goal is planned again, which pushes
+       the switch (Doom II MAP02's fast door, its only blue key given up before). A one-way
+       door like MAP27's has no switch to push from behind, so that case still falls to
+       follow-up 11.
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -1734,8 +1845,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  03, 05, 10, 12, 16, 18, 19, 24, 26, 27, 28, 31 (they finish) and MAP17 (all three keys, then a
-  step it finds no fix for) in parallel, with
+  02, 03, 05, 10, 12, 16, 17, 18, 19, 21, 24, 26, 27, 28, 31 (all finish) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the

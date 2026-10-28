@@ -77,6 +77,8 @@ typedef struct
     int action_line;        // the line it uses, -1 if none
     char action_text[96];   // e.g. "door at line 151: waiting"
     char problem[200];      // K_NAV_FAILED: why
+    int blocked;            // K_NAV_FAILED: the way shut on the way, e.g. a
+                            // door closed; a route is there, but blocked
 } k_navstatus_t;
 
 // The bot's input for one tic, in ticcmd units.

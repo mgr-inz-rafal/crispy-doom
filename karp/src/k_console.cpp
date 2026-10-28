@@ -22,6 +22,7 @@
 #include "k_brain.h"
 #include "k_console.h"
 #include "k_graph.h"
+#include "k_jump.h"
 #include "k_log.h"
 #include "k_map.h"
 #include "k_nav.h"
@@ -542,6 +543,7 @@ static void DrawCentroids(ImDrawList *draw, const k_map_t *map,
 }
 
 static const ImU32 teleport_color = IM_COL32(200, 100, 255, 255);
+static const ImU32 jump_color = IM_COL32(255, 150, 40, 255);
 
 static void DrawDashedLine(ImDrawList *draw, const ImVec2 &a, const ImVec2 &b,
                            ImU32 color, float thickness)
@@ -592,6 +594,22 @@ static void DrawNavGraph(ImDrawList *draw, const k_map_t *map,
     for (int i = 0; i < graph->num_portals; ++i)
     {
         const k_portal_t *portal = &graph->portals[i];
+
+        // A jump: dashed from the run-up's start to the touchdown, a ring
+        // there; faint while it does not work.
+        if (portal->jump >= 0)
+        {
+            bool works = K_Graph_CanCross(i, portal->cell[0]) == K_CROSS_JUMP;
+            ImU32 color = works ? jump_color
+                                : (jump_color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 90);
+            ImVec2 to = MapToScreen(center, portal->b.x, portal->b.y);
+
+            DrawDashedLine(draw, MapToScreen(center, portal->a.x, portal->a.y), to, color,
+                           thickness);
+            draw->AddCircle(to, 4.0f * ui_scale, color, 0, thickness);
+            continue;
+        }
+
         k_crossing_t forward_crossing = K_Graph_CanCross(i, portal->cell[0]);
         k_crossing_t backward_crossing = K_Graph_CanCross(i, portal->cell[1]);
         bool forward = K_Graph_Passable(forward_crossing) != 0;
@@ -805,8 +823,8 @@ static void DrawRouteCells(ImDrawList *draw, const k_map_t *map,
 }
 
 // The line to follow, its waypoints, and on a blocked route the crossing
-// that blocks it, in red. A teleport is dashed. Legs taken carefully, and
-// the waypoints between them, stand out in their own colour.
+// that blocks it, in red. A teleport or a jump is dashed. Legs taken
+// carefully, and the waypoints between them, stand out in their own colour.
 static void DrawRoute(ImDrawList *draw, const k_path_t *path,
                       const ImVec2 &center)
 {
@@ -823,10 +841,10 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
                                             path->points[i].y));
     }
 
-    // The walked stretches between the jumps.
+    // The walked stretches between the teleports and jumps.
     for (int i = 0; i < path->num_points; ++i)
     {
-        if (i < path->num_points - 1 && !path->jumps[i])
+        if (i < path->num_points - 1 && path->legs[i] == K_LEG_WALK)
         {
             continue;
         }
@@ -840,7 +858,8 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
         if (i < path->num_points - 1)
         {
             DrawDashedLine(draw, screen_points[i], screen_points[i + 1],
-                           teleport_color, thickness);
+                           path->legs[i] == K_LEG_JUMP ? jump_color : teleport_color,
+                           thickness);
         }
 
         first = i + 1;
@@ -848,7 +867,7 @@ static void DrawRoute(ImDrawList *draw, const k_path_t *path,
 
     for (int i = 0; i < path->num_points - 1; ++i)
     {
-        if (!path->jumps[i] && K_Nav_CarefulLeg(i))
+        if (path->legs[i] == K_LEG_WALK && K_Nav_CarefulLeg(i))
         {
             draw->AddLine(screen_points[i], screen_points[i + 1], careful, 2.0f * thickness);
         }
@@ -1243,7 +1262,17 @@ static void DrawMapTab(void)
 
     if (ImGui::BeginTable("graph_stats", 2, ImGuiTableFlags_RowBg))
     {
-        StatRow("Portals", "%d", graph->num_portals);
+        StatRow("Portals", "%d", graph->num_portals - K_Jump_Count());
+        StatRow("Jumps", "%d", K_Jump_Count());
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Straight runs over a gap to a floor that cannot be "
+                              "climbed to from below: a running jump, or a step "
+                              "across a gap narrower than the player. Dashed "
+                              "orange on the graph overlay.");
+        }
+
         ProblemRow("Holes", graph->holes);
 
         if (ImGui::IsItemHovered())
