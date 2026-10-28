@@ -127,6 +127,18 @@ void K_Graph_Build(void);
 
 const k_graph_t *K_Graph_Get(void);
 
+// Once a tic in a level: when a sector stops moving (a door open, a floor
+// risen), looks for jumps again around it and adds the new ones (k_jump.h).
+void K_Graph_Tick(void);
+
+// Whether a sector is a manual door (opened by using its own line).
+int K_Graph_IsDoor(int sector);
+
+// A sector's ceiling as the player meets it on its way: a manual door's at
+// its open height (it opens it), else where a door already opening is
+// going, else the ceiling.
+double K_Graph_DoorCeiling(int sector);
+
 // Whether the player can cross the portal when leaving the given cell.
 k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 
@@ -208,6 +220,10 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t 
 double K_Graph_DropDistance(k_vec2_t at, double floor, double reach);
 
 k_mover_t K_Graph_SectorMover(int sector);
+
+// Whether a sector's floor is lowering (a floor, not a lift, on its way
+// down): no time to stand about on it (Doom II MAP08's sinking pillars).
+int K_Graph_FloorSinking(int sector);
 
 // A lift the player rode turned back before it could get off: something
 // the map does not show is in its way (a monster at its edge, a barrel).

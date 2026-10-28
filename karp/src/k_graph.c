@@ -154,6 +154,13 @@ static const char *crossing_names[K_NUM_CROSSINGS] =
     "lift ride", "teleporter", "jump",
 };
 
+// Per sector: a mover ran last tic (K_Graph_Tick).
+static unsigned char *moving_sectors;
+
+// Once a sector stops moving, jumps are looked for again off the edges
+// within this much of it: a jump's run-up and flight together.
+#define JUMP_REACH 512.0
+
 // Per sector: opened by a manual door line (it is the line's back
 // sector), or moved by a lift line (it has the line's tag).
 static unsigned char *door_sectors;
@@ -759,6 +766,20 @@ static void BuildLinks(const k_map_t *map)
 // Jumps (k_jump.h) join cells as portals do, one way: a portal each, after
 // the shared stretches of border, with a the run-up's start and b the
 // touchdown.
+static void AddJumpPortal(int j)
+{
+    const k_jump_t *jump = K_Jump_Get(j);
+    k_portal_t *portal = &graph.portals[NewPortal()];
+
+    portal->cell[0] = jump->from_cell;
+    portal->cell[1] = jump->to_cell;
+    portal->a = jump->start;
+    portal->b = jump->land;
+    portal->line = -1;
+    portal->teleport_from = -1;
+    portal->jump = j;
+}
+
 static void AddJumps(void)
 {
     int j;
@@ -767,16 +788,7 @@ static void AddJumps(void)
 
     for (j = 0; j < K_Jump_Count(); ++j)
     {
-        const k_jump_t *jump = K_Jump_Get(j);
-        k_portal_t *portal = &graph.portals[NewPortal()];
-
-        portal->cell[0] = jump->from_cell;
-        portal->cell[1] = jump->to_cell;
-        portal->a = jump->start;
-        portal->b = jump->land;
-        portal->line = -1;
-        portal->teleport_from = -1;
-        portal->jump = j;
+        AddJumpPortal(j);
     }
 }
 
@@ -1333,6 +1345,7 @@ void K_Graph_Build(void)
 {
     const k_map_t *map = K_Map_Get();
     Uint64 start = SDL_GetPerformanceCounter();
+    int i;
 
     graph.num_portals = 0;
     num_covers = 0;
@@ -1341,13 +1354,21 @@ void K_Graph_Build(void)
     BuildGrid(map);
     MatchEdges(map);
     SplitPortals(map);
+    FindMoverSectors(map);
     AddJumps();
     BuildLinks(map);
-    FindMoverSectors(map);
     FindTeleporters(map);
     FindChords(map);
     CheckHoles(map);
     CheckConnectivity(map);
+
+    free(moving_sectors);
+    moving_sectors = calloc(SDL_max(numsectors, 1), 1);
+
+    for (i = 0; i < numsectors; ++i)
+    {
+        moving_sectors[i] = sectors[i].specialdata != NULL;
+    }
 
     graph.generation = map->generation;
     graph.build_ms = (SDL_GetPerformanceCounter() - start) * 1000.0
@@ -1365,6 +1386,77 @@ void K_Graph_Build(void)
 const k_graph_t *K_Graph_Get(void)
 {
     return &graph;
+}
+
+// Jumps again around a sector that has stopped moving (K_Jump_FindNear):
+// off the edges within JUMP_REACH of it. New ones become portals, and the
+// links are built again; the portals before them keep their indices.
+static void StoppedSector(const k_map_t *map, int sector)
+{
+    k_vec2_t min = { HUGE_VAL, HUGE_VAL }, max = { -HUGE_VAL, -HUGE_VAL };
+    int i, before;
+
+    for (i = 0; i < map->num_lines; ++i)
+    {
+        const k_line_t *line = &map->lines[i];
+
+        if (line->front_sector == sector || line->back_sector == sector)
+        {
+            min.x = SDL_min(min.x, SDL_min(line->v1.x, line->v2.x));
+            min.y = SDL_min(min.y, SDL_min(line->v1.y, line->v2.y));
+            max.x = SDL_max(max.x, SDL_max(line->v1.x, line->v2.x));
+            max.y = SDL_max(max.y, SDL_max(line->v1.y, line->v2.y));
+        }
+    }
+
+    if (min.x > max.x)
+    {
+        return;
+    }
+
+    min.x -= JUMP_REACH;
+    min.y -= JUMP_REACH;
+    max.x += JUMP_REACH;
+    max.y += JUMP_REACH;
+    before = K_Jump_Count();
+
+    if (K_Jump_FindNear(min, max) == 0)
+    {
+        return;
+    }
+
+    K_Log(K_LOG_MAP, K_LOG_INFO, "sector %d stopped moving: %d new jumps", sector,
+          K_Jump_Count() - before);
+
+    for (i = before; i < K_Jump_Count(); ++i)
+    {
+        AddJumpPortal(i);
+    }
+
+    BuildLinks(map);
+}
+
+void K_Graph_Tick(void)
+{
+    const k_map_t *map = K_Map_Get();
+    int s;
+
+    if (moving_sectors == NULL || graph.generation != map->generation)
+    {
+        return;
+    }
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        boolean now = sectors[s].specialdata != NULL;
+
+        if (moving_sectors[s] && !now)
+        {
+            StoppedSector(map, s);
+        }
+
+        moving_sectors[s] = now;
+    }
 }
 
 static const plat_t *PlatOf(const sector_t *sector)
@@ -1425,6 +1517,16 @@ static fixed_t OpenCeiling(sector_t *sector)
     }
 
     return top;
+}
+
+int K_Graph_IsDoor(int sector)
+{
+    return door_sectors != NULL && door_sectors[sector];
+}
+
+double K_Graph_DoorCeiling(int sector)
+{
+    return OpenCeiling(&sectors[sector]) / (double) FRACUNIT;
 }
 
 // Where the player is, for judging doors: in up to two sectors (-1 for
@@ -1571,6 +1673,27 @@ static boolean LiftComing(const sector_t *sector)
     const plat_t *plat = PlatOf(sector);
 
     return plat != NULL && (plat->type == perpetualRaise || plat->status == down);
+}
+
+// Tics until an active lift is back at its top: what is left of the way
+// down, the wait at the bottom, the way up.
+static double LiftReturn(const sector_t *sector)
+{
+    const plat_t *plat = PlatOf(sector);
+    double up = (double) (plat->high - sector->floorheight) / plat->speed;
+
+    switch (plat->status)
+    {
+        case down:
+            return (double) (sector->floorheight - plat->low) / plat->speed + plat->wait
+                 + (double) (plat->high - plat->low) / plat->speed;
+
+        case waiting:
+            return plat->count + up;
+
+        default:
+            return up;
+    }
 }
 
 // Whether the floor of a cell is on its way down now: a lift coming, or a
@@ -2088,7 +2211,10 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
     k_crossing_t crossing;
     stance_t stance;
 
-    // A jump goes one way, if the run lands now (k_jump.h).
+    // A jump goes one way, if the run lands now (k_jump.h). Off a lift that
+    // is down, or on its way, and comes back up to where the jump starts,
+    // it is a ride: wait on it (Doom II MAP06: the walk-over line onto the
+    // lift the jump starts from lowers it).
     if (portal->jump >= 0)
     {
         *wait = 0.0;
@@ -2100,6 +2226,17 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
 
         if (!K_Jump_Possible(portal->jump))
         {
+            const k_map_t *map = K_Map_Get();
+            sector_t *a = &sectors[map->subsectors[map->cells[from].subsector].sector];
+            const plat_t *plat = PlatOf(a);
+
+            if (plat != NULL && plat->status != in_stasis
+             && fabs(plat->high / (double) FRACUNIT - K_Jump_Get(portal->jump)->from_floor) < 0.5)
+            {
+                *wait = LiftReturn(a) + TurnWait((int) (a - sectors));
+                return K_CROSS_RIDE;
+            }
+
             return K_CROSS_GAP;
         }
 
@@ -2765,6 +2902,13 @@ k_mover_t K_Graph_SectorMover(int sector)
     }
 
     return K_MOVER_OTHER;
+}
+
+int K_Graph_FloorSinking(int sector)
+{
+    const floormove_t *floor = FloorMoverOf(&sectors[sector]);
+
+    return floor != NULL && floor->direction == -1;
 }
 
 int K_Graph_LiftTurnedBack(int sector)

@@ -34,6 +34,7 @@
 
 #include "karp.h"
 #include "k_brain.h"
+#include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
 #include "k_specials.h"
@@ -664,7 +665,9 @@ static double OpeningCost(int sector)
 // either side (a lift the player rides down to where the way on has
 // headroom, Doom II MAP05). One sector at a time: if the gap is still too
 // narrow once it moved, the next one is pushed (Doom II MAP19: three key
-// bars, two of which must be open). want gets the moves that would help.
+// bars, two of which must be open). For a jump that does not work now, a
+// line that raises its takeoff floor back, or lowers its landing. want gets
+// the moves that would help.
 static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *type,
                       int *param, int *want)
 {
@@ -738,6 +741,32 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
         wants[0] = OPENING_MOVES;
         sectors_[1] = from_sector;
         wants[1] = OPENING_MOVES;
+    }
+    else if (crossing == K_CROSS_GAP && p->jump >= 0)
+    {
+        // A jump that worked when it was found: its takeoff floor has gone
+        // down since, or its landing up (Doom II MAP08: walking over line
+        // 599 lowers the floor the jump back over the slime starts from,
+        // and switch 572 raises it again).
+        const k_jump_t *jump = K_Jump_Get(p->jump);
+        double floor, ceiling;
+
+        count = 0;
+        K_Map_SectorHeights(from_sector, &floor, &ceiling);
+
+        if (floor < jump->from_floor - 0.5)
+        {
+            sectors_[count] = from_sector;
+            wants[count++] = K_MOVE_FLOOR_UP;
+        }
+
+        K_Map_SectorHeights(jump->land_sector, &floor, &ceiling);
+
+        if (floor > jump->land_floor + 0.5)
+        {
+            sectors_[count] = jump->land_sector;
+            wants[count++] = K_MOVE_FLOOR_DOWN;
+        }
     }
     else
     {

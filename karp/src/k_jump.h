@@ -32,6 +32,8 @@ typedef struct
     k_vec2_t dir;           // unit vector, the way of the run
     double speed;           // at the edge, from a standing start (units a tic)
     double flight;          // from the edge to the touchdown
+    double from_floor;      // the floor it runs on, when it was found
+    double land_floor;      // the floor it lands on, then
     int land_sector;        // the sector landed in
 } k_jump_t;
 
@@ -40,6 +42,12 @@ typedef struct
 // whatever lies beyond. A jump is kept only if it works with a margin: with
 // 85% of the thrust, and from starts 6 units to either side.
 void K_Jump_Find(void);
+
+// The same, again, off the edges with an end in the box (min, max), once a
+// sector there has moved: a door that opened, a floor that rose can make
+// jumps that the heights at level load did not. Jumps already found stay as
+// they are; new ones go after them. Returns how many are new.
+int K_Jump_FindNear(k_vec2_t min, k_vec2_t max);
 
 int K_Jump_Count(void);
 const k_jump_t *K_Jump_Get(int jump);

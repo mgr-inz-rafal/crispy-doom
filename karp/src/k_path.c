@@ -22,7 +22,7 @@
 //	A jump (k_jump.h) is a portal of its own, out of the cell its run-up
 //	starts in: the route goes to the run-up's start, then straight to the
 //	touchdown. It costs that distance and a little more, so a walk not much
-//	longer wins; one that does not work now is not taken at all.
+//	longer wins; one that does not work now is a blocked crossing.
 //
 
 #include <math.h>
@@ -455,16 +455,22 @@ static boolean Search(k_path_t *path)
             crossing = K_Graph_CanCross(link->portal, cell);
 
             // A jump: to the run-up's start, then straight on to the
-            // touchdown; one that does not work now is no way at all.
+            // touchdown, after a ride if it starts from a lift that is down.
+            // One that does not work now is blocked like any crossing: the
+            // brain may know a line that moves its floors back.
             if (portal->jump >= 0)
             {
-                if (crossing != K_CROSS_JUMP)
-                {
-                    continue;
-                }
+                step = Distance(at, portal->a) + Distance(portal->a, portal->b);
 
-                step = Distance(at, portal->a) + Distance(portal->a, portal->b)
-                     + WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
+                if (!K_Graph_Passable(crossing))
+                {
+                    step += block_cost != NULL ? block_cost(link->portal, cell, crossing)
+                                               : BLOCKED_PENALTY;
+                }
+                else
+                {
+                    step += WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
+                }
 
                 if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->a, NULL))
                 {

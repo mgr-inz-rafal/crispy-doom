@@ -48,6 +48,7 @@
 #include "doomstat.h"
 #include "m_misc.h"
 
+#include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
 
@@ -248,6 +249,11 @@ typedef enum
 
 #define SETTLE_SPEED 2.0
 #define SETTLE_TICS 35
+
+// Touching down within LANDING_REACH of a jump's touchdown, on its floor,
+// is the landing; anywhere else the run goes on (a pillar's top on the
+// way, Doom II MAP06).
+#define LANDING_REACH 96.0
 
 static jumpphase_t jump_phase;
 static int settle_tics;
@@ -1101,12 +1107,53 @@ static void EndAction(void)
     status.action_text[0] = '\0';
 }
 
+// A jump off a lift that is down (K_CROSS_RIDE): stand at the run-up's
+// start, facing the way of the jump, and ride the lift until the jump
+// works again.
+static void StartJumpRide(int r)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = &K_Graph_Get()->portals[path.portals[r]];
+    const k_jump_t *jump = K_Jump_Get(portal->jump);
+
+    memset(&action, 0, sizeof(action));
+    action.kind = K_ACTION_RIDE;
+    action.route_cell = r;
+    action.line = -1;
+    action.a = action.b = portal->a;
+    action.spot = portal->a;
+    action.face = atan2(jump->dir.y, jump->dir.x);
+    action.start_tics = status.tics;
+    action.press_tic = -2;
+    action.sector = map->subsectors[map->cells[path.cells[r]].subsector].sector;
+    action.height = PlaneHeight();
+    action.mover = K_Graph_SectorMover(action.sector);
+
+    status.action = action.kind;
+    status.action_line = -1;
+    SetPhase(PHASE_APPROACH);
+    K_Log(K_LOG_NAV, K_LOG_INFO, "riding the lift (sector %d) back up for the jump",
+          action.sector);
+
+    // The run-up may have begun as the lift went down (stepping on it set it
+    // going): back to its start; the lift sinking under the player is no
+    // takeoff.
+    status.target = SDL_min(status.target, ExitPoint(r));
+    jump_phase = JUMP_NONE;
+}
+
 // The crossing out of route cell r needs a door or lift.
 static void StartAction(k_crossing_t crossing, int r)
 {
     const k_map_t *map = K_Map_Get();
     const k_portal_t *portal = &K_Graph_Get()->portals[path.portals[r]];
     int from = path.cells[r], to = path.cells[r + 1];
+
+    if (portal->jump >= 0)
+    {
+        StartJumpRide(r);
+        return;
+    }
     k_vec2_t middle = { (portal->a.x + portal->b.x) * 0.5,
                         (portal->a.y + portal->b.y) * 0.5 };
     k_vec2_t inside = map->cells[from].centroid;
@@ -1662,12 +1709,36 @@ static boolean Progress(k_vec2_t at, const k_pose_t *pose, boolean teleported)
     return true;
 }
 
+// Whether the floor the player stands on is sinking (Doom II MAP08's
+// pillars).
+static boolean Sinking(const k_pose_t *pose)
+{
+    const k_map_t *map = K_Map_Get();
+
+    return pose->cell >= 0
+        && K_Graph_FloorSinking(map->subsectors[map->cells[pose->cell].subsector].sector);
+}
+
+// Landed: stop first, unless the floor is sinking, when stopping would
+// leave the next jump too high to make.
+static void Settle(const k_pose_t *pose)
+{
+    jump_phase = Sinking(pose) ? JUMP_NONE : JUMP_SETTLE;
+    settle_tics = 0;
+}
+
 // A jump's run-up, takeoff, landing and stop, in the log. Touching down
 // ends the flight: the target moves on, and the player stops first. A step
 // across a gap narrower than the player never leaves the ground: it ends
 // when the target moves past the touchdown.
 static void TrackJump(const k_pose_t *pose, k_vec2_t at)
 {
+    // Waiting for a lift to bring the jump back is no part of it.
+    if (action.kind != K_ACTION_NONE)
+    {
+        return;
+    }
+
     switch (jump_phase)
     {
         case JUMP_NONE:
@@ -1682,8 +1753,7 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
         case JUMP_RUNUP:
             if (!OnJump(status.target))
             {
-                jump_phase = JUMP_SETTLE;
-                settle_tics = 0;
+                Settle(pose);
             }
             else if (!pose->onground)
             {
@@ -1694,18 +1764,25 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
             break;
 
         case JUMP_AIR:
+            if (pose->onground && OnJump(status.target)
+             && (fabs(pose->floor - CellFloor(path.cells[path.leg_cells[status.target - 1]])) > 1.0
+              || Distance(at, path.points[status.target]) > LANDING_REACH))
+            {
+                break;
+            }
+
             if (pose->onground)
             {
                 K_Log(K_LOG_NAV, K_LOG_INFO, "landed at (%.0f,%.0f), floor %.0f, at %.1f "
-                      "units a tic", at.x, at.y, pose->floor, status.speed);
+                      "units a tic%s", at.x, at.y, pose->floor, status.speed,
+                      Sinking(pose) ? " - the floor is sinking, running on" : "");
 
                 if (OnJump(status.target))
                 {
                     ++status.target;
                 }
 
-                jump_phase = JUMP_SETTLE;
-                settle_tics = 0;
+                Settle(pose);
             }
             break;
 

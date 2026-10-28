@@ -546,26 +546,48 @@ near-perfect conditions; found at level load, judged live.
   were built in the air, with no thrust), then full thrust against the momentum, and must stop
   (under 1 a tic, or against a wall) before the box leaves the landing floor. Doom II MAP24: a
   jump from a platform over the nukage onto a walkway 16 wide, which a player braking slides
-  along but does not leave.
+  along but does not leave. Touching down where it could not stop, it runs on, as the engine
+  carries it (the thrust goes on): Doom II MAP06's jump from a lift to the blue key, 304 units
+  flown over a pit and many sectors, hops off a pillar's top 16 square, level with the lift, 8
+  units out.
 - **Finding them**, at level load: off every portal the floor drops more than 24 across, from
   points every 48 units along it, rays straight out and 25 degrees to either side, each with as
-  long a run-up as the takeoff floor allows behind the edge (up to 128 units, at least 24). Kept
-  if the run lands in another cell, and still lands in the same sector with 85% of the thrust
-  and from starts 6 units to either side; one per pair of cells, the shortest. MAP02: 9 jumps in
-  1.1 ms; MAP24: 64 off 500 edges in 20 ms. (A rough count over the WAD before building it: about
-  40 candidates a map, at most 173 on MAP14, a few percent of the portals: no bloat.)
+  long a run-up as the takeoff floor allows behind the edge (up to 128 units; none at all may do:
+  Doom II MAP08's strip of slime 17 wide behind the yellow door leaves 22 units to take off from),
+  and again with a run-up of 8. Kept if the run lands in another cell, and still lands in the
+  same sector with 85% of the thrust and from starts 6 units to either side; one per pair of
+  cells, the shortest, so a gap that needs little speed is taken without first backing up (MAP08's
+  pillars sink once stepped on, and backing up along one cost the time it gives). MAP02: 9 jumps
+  in 1.1 ms; MAP24: 64 off 500 edges in 20 ms. (A rough count over the WAD before building it:
+  about 40 candidates a map, at most 173 on MAP14, a few percent of the portals: no bloat.)
+- **Doors on the run-up.** While the player is still on the takeoff floor, manual doors count as
+  open (at their open height): its box can overlap a door it came through, and standing there
+  holds it open. MAP08's hop onto the first sinking pillar starts from a strip 8 wide behind the
+  red door, itself 8 thick and closed at level load, so the box at every start overlapped the
+  closed door. Past the takeoff floor, doors are as they are. The run-up's centre never crosses a
+  door's side, though: it can start in a door, never behind one, since nav would not know to open
+  the door on the way.
+- **Again when a sector stops moving.** A door that opened or a floor that rose can make jumps the
+  heights at level load did not (MAP08: the jump back from the yellow key's ledge, behind a door
+  closed at load). Once a tic the graph notes the sectors with a mover; when one stops, the edges
+  within 512 units of it are searched again (`K_Jump_FindNear`). Jumps already found stay as they
+  are, new ones are added as portals after them, and the links are rebuilt ("sector 84 stopped
+  moving: 1 new jumps").
 - **In the graph** a jump is a portal of its own after the shared stretches of border
   (`k_portal_t.jump`), linked from its run-up's cell only: `a` is the run-up's start, `b` the
   touchdown. Judged live, once a tic, by running it again with full and 85% thrust (heights
-  move, a solid thing can stand in the way): `K_CROSS_JUMP` if it works, else `K_CROSS_GAP`, which
-  the search does not take at all. It costs its distance plus 2 s (70 tics), so a walk not much
+  move, a solid thing can stand in the way): `K_CROSS_JUMP` if it works, else `K_CROSS_GAP`, a
+  blocked crossing the brain can fix: raise the takeoff floor back to where the jump was found,
+  or lower the landing (MAP08: walk-over line 599 lowers the island the way back starts from into
+  the slime, and switch 572 raises it again). But off a lift that is down, or on its way, and comes back up
+  to the floor the jump was found on, it is a ride (`K_CROSS_RIDE`, the wait the lift's state
+  gives): Doom II MAP06's lift is lowered by the walk-over line the player crosses to get on it,
+  so the jump only works once it is back up (the user's description). It costs its distance plus 2 s (70 tics), so a walk not much
   longer wins (the user: jump where it saves a lot, or where nothing else gets there). The graph
   log and the Map tab count jumps; the overlay draws each dashed orange from the run-up's start
   to the touchdown, with a ring there, faint while it does not work.
-- Not yet: jumps that only appear once a floor has moved (MAP23's triangle, at 128 after switch
-  111; MAP22's raised lift), since the search runs on the heights at level load; the plan is a
-  local search again when a sector stops moving. With combat: clear the monsters near a jump
-  first (the user: they stand at any height and can knock the player off).
+- Not yet: with combat, clear the monsters near a jump first (the user: they stand at any height
+  and can knock the player off).
 
 ### 3.3 `k_path.c` - pathfinder
 
@@ -598,7 +620,8 @@ near-perfect conditions; found at level load, judged live.
   cell: it costs the way to the run-up's start, the run to the touchdown and its 2 s, never less
   than the straight line, so the heuristic stays as it is. The node stands at the touchdown, and
   enters its cell there, a point (for the pinch check, as a teleporter's destination); the way
-  out of the run-up's cell is its start. A jump that does not work now is skipped.
+  out of the run-up's cell is its start. A jump that does not work now is a blocked crossing, with
+  the penalty below.
 - **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
   search then gives the shortest open route if there is one, and otherwise the route with the
   cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
@@ -862,10 +885,19 @@ gone round). The speed profile does not brake for anything past it.
 - While the jump lasts, only getting on, on the ground, counts as progress: the run-up crosses
   cells off the route or earlier on it (Doom II MAP24: one turned the bot back from the edge), and
   flying over a later route cell cut the corner after the landing, straight over the nukage.
-- Touching down ends the flight: the target moves past the touchdown, and the bot brakes to
-  under 2 a tic (at most 1 s) before going on, as the jump was checked to stop there (MAP24's
-  walkway is 16 wide). A step across a gap narrower than the player never leaves the ground and
-  ends when the target moves past the touchdown.
+- Touching down at the landing (on its floor, within 96 units of the touchdown) ends the flight:
+  the target moves past the touchdown, and the bot brakes to under 2 a tic (at most 1 s) before
+  going on, as the jump was checked to stop there (MAP24's walkway is 16 wide). Touching down
+  anywhere else (MAP06's pillar top), it keeps running. A step across a gap narrower than the
+  player never leaves the ground and ends when the target moves past the touchdown.
+- On a floor that is sinking (a floor mover going down), it does not stop: Doom II MAP08's
+  corridor of pillars over slime, each lowered by a walk-over line on its edge at a unit a tic,
+  leaves about 24 tics on each before the next one is a step too high. The bot runs on from one
+  hop to the next (each with a run-up of 8, 3.2.2).
+- A jump off a lift that is down (a ride, 3.2.2): the bot stands at the run-up's start, facing
+  the jump, and rides the lift until the jump works again; if the run-up had begun as the lift
+  went down, the target goes back to its start (the lift sinking under the player is no takeoff,
+  and its passing below the landing floor no miss).
 - On the ground more than a step below the landing floor, it is down in the gap: "missed the
   jump", and the route is replanned. A jump that stops working on the way (heights moved) is
   replanned too, as any crossing that closes.
@@ -944,6 +976,9 @@ it cannot be reached):
     down to where the way on has headroom (Doom II MAP05: a passage whose ceiling is level with
     the floor in front of it until that floor, a lift, comes down); only lines that lower a floor
     or raise a ceiling;
+  - a **jump that does not work now** (3.2.2) -> USE TRIGGER for the takeoff sector, if some line
+    raises its floor (it is below where the jump was found), or for the landing sector, if some
+    line lowers it (Doom II MAP08's island, switch 572);
   - which way a line moves its sectors comes from its special (`K_Specials_MoverMoves`: floor
     up, floor down, ceiling up), and a USE TRIGGER goal remembers the moves that would help:
     only lines that make one of them are its candidates. A lift only lowers: it comes back up to
@@ -1297,10 +1332,12 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      - a walk-over line was "crossed" by going round its end: when the route does not cross the
        line, the bot walks up to it first.
    - MAP06: the blue key is reached by a **jump** (follow-up 7). Skipped for now, to come back to.
+     (Finished since, see the jumps below.)
    - MAP07: a **boss map**: the way to the exit opens only when monsters die (follow-up 10), so
      with `-nomonsters` it cannot be finished at all. Skipped until combat.
    - MAP08: the way to the exit is over ledges reached by **jumps** (they start lowered and rise
-     during play; follow-up 7). Skipped for now, to come back to.
+     during play; follow-up 7). Skipped for now, to come back to. (Finished since, see the jumps
+     below.)
    - MAP09: another **jump**, found by the user playing it: from a lift at about (700,1647)
      (sector 12) across to about (380,1444) (sector 6, floor -64). Without it the bot sees no
      way on and chases switches it cannot reach. Skipped for now, to come back to.
@@ -1644,6 +1681,44 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      user, not looked into yet: on MAP21 the bot lowered a lift in a nukage pit, did not step on,
      called it again, and only then rode it.
 
+   **The maps waiting for jumps, one by one** (watched by the user; findings noted, fixed after
+   the run-through):
+   - MAP04: stalled before the jumps, at a walk-over switch in a corner. The red key's lift
+     (sector 38, tag 15) is lowered by crossing lines 408/409, two sides of a box 16 square and 16
+     high in room 50's north-west corner, 8 units from each wall. Crossing them puts the player's
+     centre in an 8x8 spot on the box, exactly its width from both walls; with Karp's 17 units of
+     clearance that is no way at all ("a gap narrower than the player at (-632,1884)"). A human
+     runs into the corner and the walls slide it onto the box: the last step across a walk-over
+     line could aim a few units past it and drive straight in, without the clearance margin.
+     Also a loop: with no way, the brain waits while sectors move, and the only one moving was
+     the fast door it had just opened itself (sector 77, special 114, shut after 4 s), so it
+     pressed door switch 388 every 5 s. A door the bot opened and that will only close again
+     should not count as a reason to wait.
+   - MAP06: **finished in 79.3 s**, after two fixes. The blue key is reached by a long jump from a
+     lift (sector 122) south over a pit, 304 units, which was not found: a run straight south
+     touches down on a pillar's top 16 square level with the lift and could not stop there, so
+     the check threw it away, where the engine carries the player on (now it runs on, 3.2.2). And
+     the walk-over line onto the lift (183, WR) lowers it, so the jump works only once it is back
+     up (the user): now a ride, waited at the run-up's start. The red key takes a second jump.
+   - MAP08 ("Tricks and Traps"): **finished in 26.9 s**, after five runs and a hand-played trace
+     (the user). Four jumps were not found or not taken: the hop off the strip behind the yellow
+     door needs no run-up to speak of (22 units of floor: no minimum run-up now); walk-over line
+     599, crossed on the way to the red key, lowers the island the way back starts from (sector
+     80) into the slime, so that jump did not work, with no fix sought (now a blocked crossing,
+     fixed by switch 572, which raises it); the jump back from the yellow key's ledge only exists
+     once its door is open (a search again when a sector stops moving); and the corridor of
+     sinking pillars to the exit starts from a strip 8 wide behind the red door, closed at level
+     load (doors count open on the takeoff floor). Then the pillars: each sinks a unit a tic once
+     stepped on, and the bot backed up along each for its run-up and braked after each landing;
+     now it hops on with a run-up of 8 and does not stop on a sinking floor, turning north at the
+     end as the user described (3.2.2, 3.4).
+     Seen, not fixed: the bot pressed switch 572 while the island was still finishing its way
+     down from line 599. The engine ignores a switch on a busy sector and leaves it usable (S1
+     changes its texture only if it starts the mover), but the brain counted the old mover as the
+     press working, found the jump still not working, and walked back to press again (about 2.3 s
+     lost). A switch whose sector is still moving should be waited for before it is pressed, or a
+     press that did not take (the line kept its special) should not count as done.
+
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
    so the bot waits for as long as the sector moves; a door may not open high enough, and how
@@ -1755,9 +1830,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       back up (optional, the user's note; see the MAP17 playtest).
       **Done as one model** (3.2.2, 3.3, 3.4): gap links and running jumps are both straight runs
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
-      (MAP24 takes a jump too). Left: the maps not tried yet (MAP04, 06, 08, 09, 11, 13, 14, 15,
-      20, 22, 25, 29), and jumps that only appear once a floor has moved (MAP22, MAP23), which
-      need a search again when a sector stops moving.
+      (MAP24 takes a jump too). MAP06 and MAP08 finish too; jumps that only appear once a sector
+      has moved are searched for again when it stops (3.2.2). Left: the maps not tried yet
+      (MAP09, 11, 13, 14, 15, 20, 22, 25, 29), and MAP04 (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not

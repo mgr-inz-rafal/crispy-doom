@@ -197,6 +197,12 @@ void K_Ticker(void)
         K_Trace_Tick();
     }
 
+    // Jumps that moving sectors made possible (k_graph.h).
+    if ((autoplay_enabled || console_enabled) && gamestate == GS_LEVEL)
+    {
+        K_Graph_Tick();
+    }
+
     // An exit sets this during the tic; the intermission starts next tic.
     if ((autoplay_enabled || console_enabled || quit_on_exit)
      && gameaction == ga_completed && !level_completed)
