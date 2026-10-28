@@ -1834,6 +1834,26 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      no fix past a dead end, lifts last only without a missing key). Now: switch 416, the red
      key over the window, switches 533 and 1500, the blue key, doors 155 and 71, the exit.
      The jump search on MAP14 takes 160 ms (152 jumps, 21 more as if a sector had moved).
+   - **Regression after MAP06-MAP14** (22 maps in parallel: the 16 of the set and MAP06, 08, 09,
+     11, 13, 14), not looked into yet, for the next session. 19 finish: MAP01 8.2 s, MAP02 42.2,
+     MAP03 33.5, MAP05 31.1, MAP06 80.4, MAP08 27.0, MAP09 97.6, MAP10 45.9, MAP12 80.1, MAP13
+     93.3, MAP14 59.9, MAP16 42.0, MAP17 152.7, MAP18 32.9, MAP19 101.9, MAP21 56.1, MAP26 49.2,
+     MAP27 79.8, MAP31 41.4. Three do not (the user watched and quit them):
+     - MAP11 (it finished in 91.2 s before the MAP13 and MAP14 changes): after both keys, the
+       player died in the nukage, from jumps that failed. The log ends in a loop: "running up
+       for the jump to (504,2429)", "missed the jump: down at (589,2339), 112 below", every
+       couple of tics.
+     - MAP24 (62.1 s before): the same, after the red key: the jump to (-1060,1385), missed 128
+       below at (-1112,1385), again and again, until the player died in the nukage.
+     - MAP28: stuck near a lift that was lowered but that the bot did not get on (or similar),
+       at (-2,-857); GET RED KEY failed after three stucks, and GO TO EXIT failed with no
+       headroom at line 571 (-772,-2240).
+     Likely suspects from this session: the run-up from a step below and the starts moved to the
+     middle (new jumps, or old ones changed), the jump off a floor sinking away, and the brain's
+     new rules (goals dropped for an open way, no fix past a dead end). Note that "missed the
+     jump" replans at once, with the player down in the gap, into the same jump: a route that
+     starts with a jump the player is already below should not be taken (the run-up start is
+     out of reach).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
