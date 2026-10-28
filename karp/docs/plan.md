@@ -565,7 +565,13 @@ near-perfect conditions; found at level load, judged live.
   jump out of door 33 runs along its wall onto a ledge 48 degrees off to the side), each with as
   long a run-up as the takeoff floor allows behind the edge (up to 128 units; none at all may do:
   Doom II MAP08's strip of slime 17 wide behind the yellow door leaves 22 units to take off from),
-  and again with a run-up of 8. Kept if the run lands in another cell, and still lands in the
+  and again with a run-up of 8. The run-up may also come from floors below the takeoff, up to a
+  step below, that the player only climbs from on the way: going up a step costs no speed. Doom
+  II MAP14's way to the red key is a jump out of a window, off a sill 16 deep, over a courtyard,
+  a low fence and water, with the run-up in the corridor before the window. And where the start
+  6 units to one side fails and the other passes, the start is moved 6 units to the passing side
+  and tried once more: that window's opening is 64 wide, its edge two portals sampled 16 off its
+  middle, so every start put one side of the margin into the low sill beside it. Kept if the run lands in another cell, and still lands in the
   same sector with 85% of the thrust and from starts 6 units to either side; one per pair of
   cells, the shortest, so a gap that needs little speed is taken without first backing up (MAP08's
   pillars sink once stepped on, and backing up along one cost the time it gives). MAP02: 9 jumps
@@ -1039,7 +1045,12 @@ it cannot be reached):
     along the route is fixed some other way, that one is fixed first, since the lift comes back
     up: on Doom II MAP09 the bot lowered lift 123 on the way to the exit, then went to open door
     130 further on, which had closed again, and came back to a lift back up, working its two
-    switches a second time (now 10.6 s faster);
+    switches a second time (now 10.6 s faster). Only if that fix can be got to without a key the
+    player lacks: on MAP14 it was a switch behind the red door whose key the bot was fetching;
+  - **no fix past a dead end:** if the route has a crossing further on that nothing fixes now
+    (a door needing the key the player is out fetching, say), fixing those before it gets
+    nowhere, and the candidate has no fix (Doom II MAP14: the bot opened the self-closing doors
+    in front of such a crossing over and over);
   - USE TRIGGER only for a sector some line still moves (one-shot lines lose their special);
 - if nothing can be fixed, but sectors are still moving (`K_Graph_MovingSector`: a floor,
   ceiling, door or lift on its way; perpetual lifts and crushers do not count), the goal
@@ -1059,7 +1070,11 @@ nearest spot within 28 units on each axis where it can (searched in 4-unit steps
 red key lies on an impassable line, at the end of a shaft, and is picked up from the room beside.
 
 When a goal is done it comes off the stack and the goal below is planned again, from wherever the
-player is: the world has changed. Fixes are optimistic: the switch that targets a sector is used
+player is: the world has changed. And before the goal on top is planned, the goals below it are
+looked at, the oldest first: one with an open way now (a candidate it can work, with an open
+route there) drops every goal above it, pushed for a way round it no longer needs. Doom II MAP14:
+switch 416, pressed for another way round, opened the door on the way to the red key, and the bot
+went on with that other way, then looped. Fixes are optimistic: the switch that targets a sector is used
 without working out exactly where it moves the sector; after it moves, planning again shows
 whether the way is open, and if not, the next blocker is pushed.
 
@@ -1807,6 +1822,18 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      Seen, not fixed: after the jump towards the blue door (line 1077), the bot stood at the door
      for a second, stuck, before a replan opened it; perhaps a waypoint in front of the door that
      the box cannot quite reach after the landing.
+   - MAP14 ("The Inmost Dens"): **finished in 59.9 s**, after a hand-played trace (the user; 2:02
+     with some wandering). The bot looped among self-closing doors (WR blazing doors opened by
+     the walk-over lines in front of them) and switches. Three things: the red key is reached by
+     a jump out of a window (sill 118, 16 deep, 64 wide) over a courtyard, a fence and water,
+     with the run-up in the corridor a step below, and the margin's side starts always hit the
+     low sills beside the opening (3.2.2: run-ups from a step below, starts moved to the middle);
+     once switch 416 had opened the door on the way, the goal on top was still a switch for
+     another way round (3.5: goals below with an open way drop those above); and a sub-goal
+     whose switch was behind the red door being fetched kept opening the doors in front (3.5:
+     no fix past a dead end, lifts last only without a missing key). Now: switch 416, the red
+     key over the window, switches 533 and 1500, the blue key, doors 155 and 71, the exit.
+     The jump search on MAP14 takes 160 ms (152 jumps, 21 more as if a sector had moved).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1919,9 +1946,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       back up (optional, the user's note; see the MAP17 playtest).
       **Done as one model** (3.2.2, 3.3, 3.4): gap links and running jumps are both straight runs
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
-      (MAP24 takes a jump too). MAP06, MAP08, MAP09, MAP11 and MAP13 finish too; jumps that only
-      appear once a sector has moved are searched for again when it stops, and at level load as
-      if it had moved (3.2.2). Left: the maps not tried yet (MAP14, 15, 20, 22, 25, 29), and MAP04
+      (MAP24 takes a jump too). MAP06, MAP08, MAP09, MAP11, MAP13 and MAP14 finish too; jumps that
+      only appear once a sector has moved are searched for again when it stops, and at level load
+      as if it had moved (3.2.2). Left: the maps not tried yet (MAP15, 20, 22, 25, 29), and MAP04
       (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav

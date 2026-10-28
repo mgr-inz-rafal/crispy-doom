@@ -162,6 +162,7 @@ static k_vec2_t keys_at[K_NUM_KEYS][MAX_CANDIDATES];
 static k_vec2_t planned_from;
 static unsigned char *line_uses;    // per line, as a trigger goal's choice
 static k_path_t scratch;
+static k_path_t probe;              // routes looked at while scratch is in use
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
 static char status[K_LOG_LINE_LEN * 2];
@@ -865,6 +866,69 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     return false;
 }
 
+// Whether a route crosses a door that needs a key the player lacks.
+static boolean LockedOnRoute(const k_path_t *path)
+{
+    int i;
+
+    for (i = 0; i < path->num_cells - 1; ++i)
+    {
+        if (K_Graph_CanCross(path->portals[i], path->cells[i]) == K_CROSS_LOCKED)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether the player can get to work a trigger fix without a key it lacks:
+// some line it can work, with a route there, open or blocked, through no
+// door that needs a key it lacks (Doom II MAP14: the fix further on was a
+// switch behind the red door the bot was fetching the key for).
+static boolean FixWithoutKey(goal_type_t type, int param, int want)
+{
+    static candidate_t candidates[MAX_CANDIDATES];
+    goal_t goal;
+    k_pose_t player;
+    k_vec2_t start;
+    int count, i, door;
+
+    if (type != GOAL_TRIGGER || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    memset(&goal, 0, sizeof(goal));
+    goal.type = type;
+    goal.param = param;
+    goal.want = want;
+    count = Candidates(&goal, candidates, MAX_CANDIDATES);
+    start.x = player.x;
+    start.y = player.y;
+
+    for (i = 0; i < count; ++i)
+    {
+        int key = K_Specials_LockKey(K_Specials_LineSpecial(candidates[i].line));
+
+        if ((key >= 0 && !K_Specials_HasKey(key))
+         || (candidates[i].kind == K_GOAL_USE_LINE && DoorKeyInTheWay(&candidates[i], &door) >= 0))
+        {
+            continue;
+        }
+
+        K_Path_Find(&probe, start, player.cell, candidates[i].at);
+
+        if (probe.result == K_PATH_FOUND
+         || (probe.result == K_PATH_BLOCKED && !LockedOnRoute(&probe)))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // The fix for a blocked route: for its first blocked crossing, or none.
 // But a lift comes back up: if that fix works a lift, and a crossing
 // further on is fixed some other way, that one first, so the lift is not
@@ -904,6 +968,22 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int
         return false;
     }
 
+    // A crossing further on that nothing fixes now gets the fixes before it
+    // nowhere (Doom II MAP14: the switch for a sector narrowing the way was
+    // behind the red door, whose key the bot was out fetching; it opened
+    // the doors in front, closing again, over and over).
+    for (i = 0; i < path->num_cells - 1; ++i)
+    {
+        k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
+
+        if (!K_Graph_Passable(crossing)
+         && !FixFor(path->portals[i], path->cells[i], crossing, &later_type, &later_param,
+                    &later_want))
+        {
+            return false;
+        }
+    }
+
     for (i = 0; i < path->num_cells - 1 && *type == GOAL_TRIGGER && K_Graph_IsLift(*param);
          ++i)
     {
@@ -912,7 +992,8 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int
         if (path->portals[i] != path->blocked_portal && !K_Graph_Passable(crossing)
          && FixFor(path->portals[i], path->cells[i], crossing, &later_type, &later_param,
                    &later_want)
-         && !(later_type == GOAL_TRIGGER && K_Graph_IsLift(later_param)))
+         && !(later_type == GOAL_TRIGGER && K_Graph_IsLift(later_param))
+         && FixWithoutKey(later_type, later_param, later_want))
         {
             *type = later_type;
             *param = later_param;
@@ -1043,6 +1124,81 @@ static void LogReasons(const char *name)
     {
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: %s", name, reasons[i]);
     }
+}
+
+// Whether some candidate of a goal is open to the player now: one it can
+// work (no key it lacks, none needed for a door in front of a switch), with
+// an open route there.
+static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
+{
+    static candidate_t candidates[MAX_CANDIDATES];
+    k_vec2_t start = { player->x, player->y };
+    int count = Candidates(goal, candidates, MAX_CANDIDATES);
+    int i, door;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (WasTried(goal, candidates[i].at))
+        {
+            continue;
+        }
+
+        if (candidates[i].line >= 0)
+        {
+            int key = K_Specials_LockKey(K_Specials_LineSpecial(candidates[i].line));
+
+            if ((key >= 0 && !K_Specials_HasKey(key))
+             || (candidates[i].kind == K_GOAL_USE_LINE && DoorKeyInTheWay(&candidates[i], &door) >= 0))
+            {
+                continue;
+            }
+        }
+
+        K_Path_Find(&scratch, start, player->cell, candidates[i].at);
+
+        if (scratch.result == K_PATH_FOUND)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Before the goal on top is planned: if a goal further down has an open way
+// now, the goals above it were pushed for a way that is no longer needed,
+// and are dropped (Doom II MAP14: switch 416 opened the door on the way to
+// the red key, while the goal on top was still a switch for another way
+// round, and from there the bot looped). The lowest such goal wins. Returns
+// true if goals were dropped.
+static boolean DropNeedless(void)
+{
+    k_pose_t player;
+    char name[64];
+    int i;
+
+    if (depth < 2 || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    for (i = 0; i < depth - 1; ++i)
+    {
+        if (goals[i].type == GOAL_GOTO || !HasOpenWay(&goals[i], &player))
+        {
+            continue;
+        }
+
+        GoalName(&goals[i], name, sizeof(name));
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: there is an open way now - dropping the %d "
+              "goals above it", name, depth - 1 - i);
+        depth = i + 1;
+        goals[i].planned = false;
+        K_Nav_Clear();
+        return true;
+    }
+
+    return false;
 }
 
 static void PlanGoal(goal_t *goal)
@@ -1460,7 +1616,7 @@ void K_Brain_Tick(void)
 
     if (!goal->planned)
     {
-        if (leveltime >= goal->retry_tic)
+        if (leveltime >= goal->retry_tic && !DropNeedless())
         {
             PlanGoal(goal);
         }
