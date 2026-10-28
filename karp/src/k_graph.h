@@ -134,6 +134,10 @@ void K_Graph_Tick(void);
 // Whether a sector is a manual door (opened by using its own line).
 int K_Graph_IsDoor(int sector);
 
+// Whether a sector is a lift (some line with its tag lowers it, and it comes
+// back up).
+int K_Graph_IsLift(int sector);
+
 // Where a door in the sector opens to: 4 under the lowest neighbouring
 // ceiling.
 double K_Graph_DoorTop(int sector);

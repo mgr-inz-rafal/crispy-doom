@@ -1021,6 +1021,11 @@ it cannot be reached):
     GET KEY is pushed instead of the fix for the first crossing. A key stays, while what a switch
     does may not last until the player gets there: on Doom II MAP12 the bot ran 11,000 units to
     lower a lift, fetched the yellow key while it went back up, and had to lower it again;
+  - **lifts last:** likewise, if the first crossing's fix works a lift and a crossing further
+    along the route is fixed some other way, that one is fixed first, since the lift comes back
+    up: on Doom II MAP09 the bot lowered lift 123 on the way to the exit, then went to open door
+    130 further on, which had closed again, and came back to a lift back up, working its two
+    switches a second time (now 10.6 s faster);
   - USE TRIGGER only for a sector some line still moves (one-shot lines lose their special);
 - if nothing can be fixed, but sectors are still moving (`K_Graph_MovingSector`: a floor,
   ceiling, door or lift on its way; perpetual lifts and crushers do not count), the goal
@@ -1759,8 +1764,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      Seen, not fixed: the jump out of door 33 left the edge at 3.8 units a tic, where the check
      has 13.5, 38 units off its line along the door's north wall, and fell short; the bot walked
      round (6 s) and made it the second time at 4.4, landing on the corner of the ledge. And on
-     the way to the exit it worked switches 442, 403 and 428 twice each: lifts that went back up
-     while it worked the next one (as MAP12's "keys first").
+     the way to the exit it worked switches 442, 403 and 428 twice each (the user): lift 123,
+     lowered first, was back up by the time door 130 further on was open again. Fixed by "lifts
+     last" (3.5): **94.6 s**, every switch once.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

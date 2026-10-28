@@ -830,18 +830,26 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
 }
 
 // The fix for a blocked route: for its first blocked crossing, or none.
-// But a key comes first, wherever its door is on the route: keys stay,
-// while what a switch does may not last until the player gets there (a
-// lift goes back up while it fetches the key, Doom II MAP12). Sets
-// key_door to that door's portal, else -1.
+// But a lift comes back up: if that fix works a lift, and a crossing
+// further on is fixed some other way, that one first, so the lift is not
+// back up by the time the player returns to it (Doom II MAP09: lift 123
+// lowered, then door 130 opened again further on, and the lift worked a
+// second time). And a key comes first, wherever its door is on the route:
+// keys stay, while what a switch does may not last until the player gets
+// there (a lift goes back up while it fetches the key, Doom II MAP12). Sets
+// portal and from to the crossing fixed, later if it is not the first one,
+// and key_door to that door's portal, else -1.
 static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int *want,
-                        int *key_door)
+                        int *portal, int *from, boolean *later, int *key_door)
 {
-    goal_type_t key_type;
-    int key_param, key_want;
+    goal_type_t key_type, later_type;
+    int key_param, key_want, later_param, later_want;
     int i;
 
     *key_door = -1;
+    *portal = path->blocked_portal;
+    *from = path->blocked_from;
+    *later = false;
 
     // A gap inside a cell is no crossing's: nothing found fixes it.
     if (path->blocked_pinch
@@ -849,6 +857,25 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int
                 want))
     {
         return false;
+    }
+
+    for (i = 0; i < path->num_cells - 1 && *type == GOAL_TRIGGER && K_Graph_IsLift(*param);
+         ++i)
+    {
+        k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
+
+        if (path->portals[i] != path->blocked_portal && !K_Graph_Passable(crossing)
+         && FixFor(path->portals[i], path->cells[i], crossing, &later_type, &later_param,
+                   &later_want)
+         && !(later_type == GOAL_TRIGGER && K_Graph_IsLift(later_param)))
+        {
+            *type = later_type;
+            *param = later_param;
+            *want = later_want;
+            *portal = path->portals[i];
+            *from = path->cells[i];
+            *later = true;
+        }
     }
 
     for (i = 0; i < path->num_cells - 1 && *type != GOAL_KEY; ++i)
@@ -1001,7 +1028,8 @@ static void PlanGoal(goal_t *goal)
     {
         char text[K_LOG_LINE_LEN];
         goal_type_t type;
-        int param, want, key_door;
+        int param, want, portal, from, key_door;
+        boolean later;
 
         if (WasTried(goal, candidates[i].at))
         {
@@ -1086,7 +1114,7 @@ static void PlanGoal(goal_t *goal)
             }
         }
         else if (scratch.result == K_PATH_BLOCKED
-              && RouteFix(&scratch, &type, &param, &want, &key_door))
+              && RouteFix(&scratch, &type, &param, &want, &portal, &from, &later, &key_door))
         {
             double score = scratch.blocked_count * FIXABLE_COST + scratch.length;
 
@@ -1097,8 +1125,8 @@ static void PlanGoal(goal_t *goal)
                 fix_type = type;
                 fix_param = param;
                 fix_want = want;
-                fix_portal = scratch.blocked_portal;
-                fix_from = scratch.blocked_from;
+                fix_portal = portal;
+                fix_from = from;
 
                 if (key_door >= 0)
                 {
@@ -1106,6 +1134,12 @@ static void PlanGoal(goal_t *goal)
                                "further on by a door that needs the %s key - the key "
                                "first", candidates[i].what, text,
                                K_Graph_LockName(key_door));
+                }
+                else if (later)
+                {
+                    M_snprintf(blocker, sizeof(blocker), "the %s is blocked by a lift (%s) - "
+                               "first the crossing further on (%s)", candidates[i].what, text,
+                               K_Graph_CrossingName(K_Graph_CanCross(portal, from)));
                 }
                 else
                 {

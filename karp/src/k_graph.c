@@ -1524,6 +1524,11 @@ int K_Graph_IsDoor(int sector)
     return door_sectors != NULL && door_sectors[sector];
 }
 
+int K_Graph_IsLift(int sector)
+{
+    return lift_sectors != NULL && lift_sectors[sector];
+}
+
 double K_Graph_DoorTop(int sector)
 {
     return DoorTop(&sectors[sector]) / (double) FRACUNIT;
