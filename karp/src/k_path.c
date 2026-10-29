@@ -478,7 +478,8 @@ static boolean Search(k_path_t *path)
             const k_link_t *link = &graph->links[i];
             const k_portal_t *portal = &graph->portals[link->portal];
             k_crossing_t crossing;
-            double step, walk, wait = 0.0;
+            double step, walk, wait = 0.0, beyond = 0.0;
+            int next;
 
             // Never straight back out the way it came in.
             if (node != start_node && link->portal == node / 2)
@@ -504,7 +505,7 @@ static boolean Search(k_path_t *path)
                 }
                 else
                 {
-                    wait = K_Graph_CrossingWait(link->portal, cell);
+                    wait = K_Graph_CrossingWait(link->portal, cell, NULL);
                     step += WAIT_COST * wait;
                 }
 
@@ -527,7 +528,7 @@ static boolean Search(k_path_t *path)
             }
             else if (crossing != K_CROSS_OPEN)
             {
-                wait = K_Graph_CrossingWait(link->portal, cell);
+                wait = K_Graph_CrossingWait(link->portal, cell, &beyond);
                 step += WAIT_COST * wait;
             }
 
@@ -537,8 +538,11 @@ static boolean Search(k_path_t *path)
                 step += PinchCost(cell, pinch);
             }
 
-            Relax(2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1),
-                  node, step, Damage(cell, walk, wait));
+            // Waiting here, then past the crossing (aboard a lift, frozen
+            // at a teleporter's destination).
+            next = 2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1);
+            Relax(next, node, step, Damage(cell, walk, wait - beyond)
+                                    + Damage(NodeCell(next), 0.0, beyond));
         }
     }
 

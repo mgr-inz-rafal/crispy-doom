@@ -2028,8 +2028,9 @@ static boolean Narrow(const stance_t *stance)
 
 // Mirrors P_TryMove/PIT_CheckLine with live heights, then asks whether a
 // door or lift on the way can be worked from this side. wait gets the
-// tics the action is expected to take.
-static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
+// tics the action is expected to take, and beyond the part of them the
+// player spends past the crossing (K_Graph_CrossingWait).
+static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, double *beyond)
 {
     const k_map_t *map = K_Map_Get();
     const k_portal_t *portal = &graph.portals[portal_index];
@@ -2041,6 +2042,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
     fixed_t floor_a, ceiling_a, floor_b, ceiling_b;
 
     *wait = 0.0;
+    *beyond = 0.0;
 
     if (from_sector < 0 || to_sector < 0)
     {
@@ -2125,7 +2127,9 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
         }
 
         // A raised lift whose switch is this line: lower it, step on, ride
-        // it up.
+        // it up. Its wait at the bottom and the ride up are spent aboard
+        // (Doom II MAP29: lift 172 out of a courtyard whose floor hurts, its
+        // whole round trip once put down as about 100 health).
         if (line != NULL && IsLiftSwitch(line->special) && line->tag != 0
          && line->tag == b->tag && line->frontsector == a
          && LiftBottom(b) - floor_a <= MAX_STEP_UP
@@ -2133,8 +2137,8 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
         {
             fixed_t speed = IsBlazingLift(line->special) ? BLAZING_SPEED : LIFT_SPEED;
 
-            *wait = ACTION_OVERHEAD + LIFT_WAIT
-                  + 2.0 * (floor_b - LiftBottom(b)) / speed + TurnWait(to_sector);
+            *beyond = LIFT_WAIT + (double) (floor_b - LiftBottom(b)) / speed + TurnWait(to_sector);
+            *wait = ACTION_OVERHEAD + (double) (floor_b - LiftBottom(b)) / speed + *beyond;
             return K_CROSS_LIFT;
         }
 
@@ -2272,11 +2276,13 @@ static boolean SinksAway(const sector_t *sector, const k_jump_t *jump)
     return then < jump->from_floor - MAX_STEP_UP / (double) FRACUNIT;
 }
 
-static k_crossing_t Judge(int portal_index, int from, double *wait)
+static k_crossing_t Judge(int portal_index, int from, double *wait, double *beyond)
 {
     const k_portal_t *portal = &graph.portals[portal_index];
     k_crossing_t crossing;
     stance_t stance;
+
+    *beyond = 0.0;
 
     // A jump goes one way, if the run lands now (k_jump.h). Off a lift that
     // is down, or on its way, and comes back up to where the jump starts,
@@ -2335,7 +2341,7 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
         return K_CROSS_THING;
     }
 
-    crossing = JudgeHeights(portal_index, from, wait);
+    crossing = JudgeHeights(portal_index, from, wait, beyond);
 
     if (!K_Graph_Passable(crossing) || from < 0 || crossing == K_CROSS_RIDE
      || (crossing == K_CROSS_LIFT && ComingDown(portal->cell[0] == from ? portal->cell[1]
@@ -2348,13 +2354,14 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
 
     if (Narrow(&stance))
     {
-        *wait = 0.0;
+        *wait = *beyond = 0.0;
         return K_CROSS_NARROW;
     }
 
+    // Frozen at the destination.
     if (crossing == K_CROSS_OPEN && K_Graph_Teleport(portal_index, from) >= 0)
     {
-        *wait = TELEPORT_FREEZE;
+        *wait = *beyond = TELEPORT_FREEZE;
         return K_CROSS_TELEPORT;
     }
 
@@ -2363,9 +2370,9 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
 
 k_crossing_t K_Graph_CanCross(int portal, int from)
 {
-    double wait;
+    double wait, beyond;
 
-    return Judge(portal, from, &wait);
+    return Judge(portal, from, &wait, &beyond);
 }
 
 k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
@@ -2718,11 +2725,17 @@ int K_Graph_Teleport(int portal, int from)
     return graph.teleports[teleport].cell >= 0 ? teleport : -1;
 }
 
-double K_Graph_CrossingWait(int portal, int from)
+double K_Graph_CrossingWait(int portal, int from, double *beyond)
 {
-    double wait;
+    double wait, past;
 
-    Judge(portal, from, &wait);
+    Judge(portal, from, &wait, &past);
+
+    if (beyond != NULL)
+    {
+        *beyond = past;
+    }
+
     return wait;
 }
 

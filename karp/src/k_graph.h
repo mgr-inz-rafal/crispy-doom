@@ -174,8 +174,11 @@ int K_Graph_PinchNarrow(int cell, k_vec2_t at);
 
 // How long the action a crossing needs is expected to take, in tics: 0
 // for an open one. For a teleporter, the time the player stands frozen
-// on arrival.
-double K_Graph_CrossingWait(int portal, int from_cell);
+// on arrival. beyond, if not NULL, gets the part of it the player spends
+// past the crossing: frozen at a teleporter's destination, or aboard a
+// lift lowered by its switch (its wait at the bottom, the ride up); the
+// rest is spent in the cell it crosses from.
+double K_Graph_CrossingWait(int portal, int from_cell, double *beyond);
 
 // The teleporter (index into teleports) that crossing the portal out of
 // the given cell sends the player to, or -1. Live: a one-shot teleport

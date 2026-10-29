@@ -722,7 +722,12 @@ near-perfect conditions; found at level load, judged live.
   not do: at 100000 a point from the start, MAP11's bot raised a floor by two switches and two
   lift rides (24 s) to stay out of a little nukage, and MAP26 lost 11 s. The route's damage is in
   the log ("about 6 health off floors that hurt"). A stand-in, by the user's wish, until the bot
-  knows its health, armour and suits; armour is not counted.
+  knows its health, armour and suits; armour is not counted. A crossing's wait is charged where
+  it is spent (`K_Graph_CrossingWait` gives the part past the crossing): a lift lowered by its
+  switch is waited for in the cell it is called from, but its wait at the bottom and the ride
+  up are spent aboard, and a teleporter's freeze at its destination. Doom II MAP29: lift 172 out
+  of a courtyard whose floor hurts (special 16) had its whole round trip, about 190 tics, put
+  down as courtyard, and the route to the exit read about 117 health; now about 43.
 - **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
   search then gives the shortest open route if there is one, and otherwise the route with the
   cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
@@ -874,6 +879,18 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
    across the way on is cancelled first and only what is left speeds the player up along it
    (slowing down along it is not held back): after that corner the bot had spent most of its
    thrust running up the next ledge and drifted 23 units over the side.
+
+   **Long falls.** A fall carries on at the speed the player left the edge at, with no friction
+   in the air, for about sqrt(2h) tics for h units. Off a careful step down where the fall could
+   carry the player off the floor the route lands on, the waypoint is taken no faster than
+   drifts 64 units in the fall, and that speed is held past it until the player is off the
+   ledge (its box clears the edge 16 units on; before, it sped up again there). Could carry it
+   off: a line from the waypoint toward the next one, as far as 6 units/tic drifts, passes over
+   a cell that is neither further along the route nor of the sector the route lands in, before
+   a wall stops it. Doom II MAP29: off a ledge into a rising blood channel 100 across and 476
+   below, left at 8 units/tic, the bot flew 240 units on, into the blood pit beside it; now it
+   leaves at 2. Slowing every drop over 48 cost the regression maps 25 s, and slowing only where
+   a further edge lies below the landing missed MAP29's (the pit was level with the channel).
 4. **Heading:** turn toward the desired velocity, at most 11.25 degrees per tic (2048 angleturn
    units, tunable). Cosmetic for now; later stages need it for aiming and using. When recording a
    demo without `-longtics`, the turn is rounded to a multiple of 256; no remainder needs carrying,
@@ -1958,7 +1975,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      down (the user waited on the walkway); the wait is only possible from the blood side, so
      where to wait is for nav to choose. And the route to line 380 on MAP09 reads "about 63 health
      off floors that hurt" (no dry way, so taken anyway): to be checked whether that is real or
-     an overestimate of a lift wait.
+     an overestimate of a lift wait. (It was the lift: see the MAP29 fixes below.)
    - Regression with MAP15 and MAP20 (24 maps; the long run-ups and floors that hurt): all finish.
      Unchanged within 0.1 s: MAP01-05, 06, 08, 10, 11 (64.9), 12, 13, 14, 16, 17, 18, 19, 27, 31.
      Slower: MAP09 101.9 s (97.6; the missed hop out of door 33 in 3.4), MAP21 56.9 (56.1), MAP24
@@ -1999,14 +2016,29 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      508, then lift 116 (13 s) and switches 686, 696, 688, 758, 583, 655 and 666 among lifts;
      then the three pillar switches 975, 825 and 837, with six jumps between them, and the
      running jump from the ledge at 528 onto the island at 480 (2:27.8), its teleporter and the
-     staircase to the exit hall. Seen: (1) dropping 476 off the ledge at 600 onto lift 116 (low,
-     moving), the bot flew on off the lift's far side, 32 lower, and the only way back was the
-     long way round by both teleporters and the jump again: about 11 s; a long fall carries the
-     speed of the run-in (the careful points only slow down near an edge). (2) The route to the
-     exit was planned with about 117 health off floors that hurt, more than the player has; the
-     steep search found no drier way. The bot lived (no monsters, the guess counts waits it did
-     not make), but with monsters, or less health, it would not (follow-up 15). Added to the
-     script's default list (cap 200 s).
+     staircase to the exit hall. Seen: (1) dropping 476 off the ledge at 600 into sector 116, a
+     blood channel about 100 across that switch 508 raises a unit a tic, the bot flew on out of
+     it into the blood pit beside it (sector 0, level with the channel then), and the only way
+     back was the long way round by both teleporters and the jump again: about 11 s; a long fall
+     carries the speed of the run-in. (2) The route to the exit was planned with about 117
+     health off floors that hurt, more than the player has; the steep search found no drier
+     way. The bot lived (no monsters, the guess counts waits it did not make), but with
+     monsters, or less health, it would not (follow-up 15). Added to the script's default list
+     (cap 200 s).
+   - MAP29's two issues, fixed. (1) Drops that the fall could carry off the floor the route
+     lands on are left slowly (3.4): the bot lands in the channel and rides it up 24 s (no time
+     saved, since the channel rises no faster; the detour had fitted into the wait). Slowing
+     every drop over 48 was tried first and cost the regression maps 25 s; slowing only those
+     with a further edge below the landing missed MAP29's, since the pit was level with the
+     channel when judged (the user saw the bot fly into the pit again). (2) A lift lowered by
+     its switch had its whole round trip put down as waiting in the cell it is called from;
+     its wait at the bottom and the ride up are spent aboard (3.3): the route to the exit reads
+     about 43 health. That was also MAP09's "about 63 health" to line 380, now 23 by a way 89
+     units shorter. The ride up the blood channel itself (24 s, some 130 health) was planned
+     as about 15; the route is right (the user: the other way, by the lifts in the south-west,
+     is far longer), so it was let be. Regression, 27 maps: all finish, as before but MAP09
+     96.7 s, MAP17 152.4 s, MAP26 51.1 s (its 216 drop beside a teleporter is now slowed),
+     MAP29 162.6 s.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

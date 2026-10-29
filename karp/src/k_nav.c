@@ -100,6 +100,22 @@
 #define CAREFUL_TURN 20.0
 #define CAREFUL_ADVANCE 8.0
 
+// A fall carries on at the speed the player left the edge at, with no
+// friction in the air, for as long as it falls: about sqrt(2h) tics for h
+// units. Off a careful step down, where the fall could carry the player
+// off the floor the route lands on (at CAREFUL_SPEED, toward the next
+// waypoint, over a cell neither further along the route nor of the sector
+// it lands in, before a wall stops it), it goes no faster than drifts
+// DROP_DRIFT in that time, from the waypoint until it is off the ledge (its
+// box clears the edge 16 units past the waypoint). Doom II MAP29: off a
+// ledge into a rising blood channel 100 deep and 476 below, left at 8 units
+// a tic, the player flew 240 units, out of the channel into the blood pit
+// beside it, level with it then, and had to go the long way round. In the
+// open, where it lands anyway, drops are not slowed (slowing every drop
+// over 48 cost the regression maps 25 s).
+#define DROP_DRIFT 64.0
+#define DRIFT_STEP 8.0
+
 // Slowing down for a careful waypoint, only this fraction of the usual
 // braking is counted on: the controller lags a tic or more behind, and on
 // an 8-unit ledge (Doom II MAP24) the full figure got the player to a right
@@ -478,6 +494,69 @@ static int TargetLimit(void)
 // Controller
 //
 
+static double CellFloor(int cell);
+
+// Whether a fall of `tics` off route point k, left at CAREFUL_SPEED toward
+// the next point, could carry the player off the floor the route lands on
+// (DROP_DRIFT).
+static boolean DriftsOff(int k, double tics)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t from = path.points[k], to = path.points[k + 1];
+    double length = Distance(from, to);
+    double reach = CAREFUL_SPEED * tics + 16.0;     // off the ledge 16 on
+    int first = path.leg_cells[k];
+    int sector = map->subsectors[map->cells[path.cells[first]].subsector].sector;
+    double t;
+    int i;
+
+    for (t = 16.0; length > 1e-6 && t <= reach; t += DRIFT_STEP)
+    {
+        int cell = K_Map_CellAt(from.x + (to.x - from.x) / length * t,
+                                from.y + (to.y - from.y) / length * t);
+
+        // A wall stops it.
+        if (cell < 0)
+        {
+            return false;
+        }
+
+        if (map->subsectors[map->cells[cell].subsector].sector == sector)
+        {
+            continue;
+        }
+
+        for (i = first; i < path.num_cells && path.cells[i] != cell; ++i)
+        {
+        }
+
+        if (i == path.num_cells)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The top speed at a careful waypoint: CAREFUL_SPEED, or less where the
+// route drops there and the fall could carry the player off the floor the
+// route lands on, so that it drifts no more than DROP_DRIFT.
+static double CarefulSpeed(int k)
+{
+    double fall = CellFloor(path.cells[path.leg_cells[k - 1]])
+                - CellFloor(path.cells[path.leg_cells[k]]);
+    double tics = sqrt(2.0 * SDL_max(fall, 0.0)) + 1.0;
+
+    if (fall <= MAX_CLIMB || DROP_DRIFT / tics >= CAREFUL_SPEED || k + 1 >= path.num_points
+     || !DriftsOff(k, tics))
+    {
+        return CAREFUL_SPEED;
+    }
+
+    return DROP_DRIFT / tics;
+}
+
 // The speed to take a waypoint at, from how sharply the route turns there,
 // out of the top speed there (careful near an edge). 0 in front of a door
 // or lift; full speed into a teleporter, which stops the player anyway,
@@ -487,7 +566,7 @@ static double CornerSpeed(int k)
 {
     k_vec2_t a = path.points[k - 1], b = path.points[k], c = path.points[k + 1];
     double in = Distance(a, b), out = Distance(b, c);
-    double top = careful[k] ? SDL_min(CAREFUL_SPEED, tuning.max_speed) : tuning.max_speed;
+    double top = careful[k] ? SDL_min(CarefulSpeed(k), tuning.max_speed) : tuning.max_speed;
     double turn_cos = 1.0;
     int r = path.leg_cells[k - 1];
     k_crossing_t crossing;
@@ -845,6 +924,15 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     if (target == last)
     {
         speed = SDL_min(speed, distance);
+    }
+
+    // Past a careful drop that must be left slowly, still up on the ledge:
+    // no faster than that.
+    if (target > 0 && careful[target - 1] && body->onground
+     && body->floor > CellFloor(path.cells[path.leg_cells[target - 1]]) + MAX_CLIMB
+     && CarefulSpeed(target - 1) < CAREFUL_SPEED)
+    {
+        speed = SDL_min(speed, CarefulSpeed(target - 1));
     }
 
     // Into and out of a careful corner: off a ledge's turn, the momentum
