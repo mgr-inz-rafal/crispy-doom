@@ -2869,16 +2869,26 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
                 length = Length(Sub(at, closest));
                 distance = BoxDistance(at, a, ab);
 
-                if (distance >= reach || length < 1e-6
-                 || !Obstacle(line, floor, ceiling, &standing))
+                if (distance >= reach || !Obstacle(line, floor, ceiling, &standing))
                 {
                     continue;
                 }
 
                 // Away from the nearest point: straight off a wall, round a
-                // corner.
-                found[count].away.x = (at.x - closest.x) / length;
-                found[count].away.y = (at.y - closest.y) / length;
+                // corner. A point on the line (a spot looked at for a goal,
+                // K_Graph_Clearance) is off its front side.
+                if (length < 1e-6)
+                {
+                    double ab_length = SDL_max(Length(ab), 1e-12);
+
+                    found[count].away.x = ab.y / ab_length;
+                    found[count].away.y = -ab.x / ab_length;
+                }
+                else
+                {
+                    found[count].away.x = (at.x - closest.x) / length;
+                    found[count].away.y = (at.y - closest.y) / length;
+                }
                 found[count].distance = distance;
                 ++count;
             }

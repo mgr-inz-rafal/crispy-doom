@@ -929,16 +929,90 @@ static boolean FixWithoutKey(goal_type_t type, int param, int want)
     return false;
 }
 
+// Whether what a trigger fix does lasts only a while: a lift comes back up,
+// and a door that only lines closing it again open shuts (Doom II MAP04:
+// door 32, open 4 s).
+static boolean FixPasses(goal_type_t type, int sector, int want)
+{
+    boolean any = false;
+    int i;
+
+    if (type != GOAL_TRIGGER)
+    {
+        return false;
+    }
+
+    if (K_Graph_IsLift(sector))
+    {
+        return true;
+    }
+
+    for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
+    {
+        int line = K_Specials_TriggerLine(sector, i);
+
+        if (!LineHelps(line, want))
+        {
+            continue;
+        }
+
+        if (!K_Specials_DoorCloses(K_Specials_LineSpecial(line)))
+        {
+            return false;
+        }
+
+        any = true;
+    }
+
+    return any;
+}
+
+// The key a trigger fix needs, if every line that would do it needs one the
+// player lacks and can get (Doom II MAP04: door 302, opened by switches for
+// the blue key), else -1.
+static int FixKey(goal_type_t type, int sector, int want)
+{
+    int key = -1;
+    int i;
+
+    if (type != GOAL_TRIGGER)
+    {
+        return -1;
+    }
+
+    for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
+    {
+        int line = K_Specials_TriggerLine(sector, i);
+        int needs = K_Specials_LockKey(K_Specials_LineSpecial(line));
+
+        if (!LineHelps(line, want))
+        {
+            continue;
+        }
+
+        if (needs < 0 || K_Specials_HasKey(needs) || (key >= 0 && needs != key))
+        {
+            return -1;
+        }
+
+        key = needs;
+    }
+
+    return key >= 0 && keys_lying[key] > 0 && Allowed(GOAL_KEY, key) ? key : -1;
+}
+
 // The fix for a blocked route: for its first blocked crossing, or none.
-// But a lift comes back up: if that fix works a lift, and a crossing
-// further on is fixed some other way, that one first, so the lift is not
-// back up by the time the player returns to it (Doom II MAP09: lift 123
-// lowered, then door 130 opened again further on, and the lift worked a
-// second time). And a key comes first, wherever its door is on the route:
-// keys stay, while what a switch does may not last until the player gets
-// there (a lift goes back up while it fetches the key, Doom II MAP12). Sets
-// portal and from to the crossing fixed, later if it is not the first one,
-// and key_door to that door's portal, else -1.
+// But a lift comes back up, and some doors close again: if that fix works
+// one, and a crossing further on is fixed some other way, that one first,
+// so the lift is not back up by the time the player returns to it (Doom II
+// MAP09: lift 123 lowered, then door 130 opened again further on, and the
+// lift worked a second time), nor the door shut (MAP04: door 32 opened, then
+// floor 84 lowered back the way the bot came). And a key comes first,
+// wherever its door is on the route, or a door opened only by switches
+// that need it: keys stay, while what a switch does may not last until the
+// player gets there (a lift goes back up while it fetches the key, Doom II
+// MAP12). Sets portal and from to the crossing fixed, later if it is not the
+// first one, and key_door to that door's portal, else -1.
 static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int *want,
                         int *portal, int *from, boolean *later, int *key_door)
 {
@@ -984,15 +1058,14 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int
         }
     }
 
-    for (i = 0; i < path->num_cells - 1 && *type == GOAL_TRIGGER && K_Graph_IsLift(*param);
-         ++i)
+    for (i = 0; i < path->num_cells - 1 && FixPasses(*type, *param, *want); ++i)
     {
         k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
 
         if (path->portals[i] != path->blocked_portal && !K_Graph_Passable(crossing)
          && FixFor(path->portals[i], path->cells[i], crossing, &later_type, &later_param,
                    &later_want)
-         && !(later_type == GOAL_TRIGGER && K_Graph_IsLift(later_param))
+         && !FixPasses(later_type, later_param, later_want)
          && FixWithoutKey(later_type, later_param, later_want))
         {
             *type = later_type;
@@ -1006,13 +1079,25 @@ static boolean RouteFix(const k_path_t *path, goal_type_t *type, int *param, int
 
     for (i = 0; i < path->num_cells - 1 && *type != GOAL_KEY; ++i)
     {
-        if (K_Graph_CanCross(path->portals[i], path->cells[i]) == K_CROSS_LOCKED
+        k_crossing_t crossing = K_Graph_CanCross(path->portals[i], path->cells[i]);
+
+        if (crossing == K_CROSS_LOCKED
          && FixFor(path->portals[i], path->cells[i], K_CROSS_LOCKED, &key_type, &key_param,
                    &key_want))
         {
             *type = key_type;
             *param = key_param;
             *want = key_want;
+            *key_door = path->portals[i];
+        }
+        else if (!K_Graph_Passable(crossing)
+              && FixFor(path->portals[i], path->cells[i], crossing, &later_type, &later_param,
+                        &later_want)
+              && (key_param = FixKey(later_type, later_param, later_want)) >= 0)
+        {
+            *type = GOAL_KEY;
+            *param = key_param;
+            *want = 0;
             *key_door = path->portals[i];
         }
     }
@@ -1345,12 +1430,13 @@ static void PlanGoal(goal_t *goal)
                     M_snprintf(blocker, sizeof(blocker), "the %s is blocked by %s, and "
                                "further on by a door that needs the %s key - the key "
                                "first", candidates[i].what, text,
-                               K_Graph_LockName(key_door));
+                               K_Specials_KeyName(param));
                 }
                 else if (later)
                 {
-                    M_snprintf(blocker, sizeof(blocker), "the %s is blocked by a lift (%s) - "
-                               "first the crossing further on (%s)", candidates[i].what, text,
+                    M_snprintf(blocker, sizeof(blocker), "the %s is blocked by a lift or a "
+                               "door that shuts again (%s) - first the crossing further on "
+                               "(%s)", candidates[i].what, text,
                                K_Graph_CrossingName(K_Graph_CanCross(portal, from)));
                 }
                 else

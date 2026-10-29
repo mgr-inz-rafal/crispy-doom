@@ -907,7 +907,15 @@ player's box a unit clear of every solid thing. A walk-over line can be crossed 
 it, so for one the spots along it are tried too, from the middle out (Doom II MAP27: a skull
 rock inside a diamond of walk-over lines, 11 units from each, leaves room to cross only near
 their ends; every spot past a middle lay under the rock, and the goal had no way there). If no
-spot is clear of things, the first one on floor is used, as before. On arriving at
+spot is clear of things, the first one on floor is used, as before. Past a walk-over line,
+though, only the player's centre has to get across, so first a spot the player can stand on is
+looked for (17 units from anything that stops it, as for pickup spots), 8 and 4 units past the
+line too, and arriving there means having crossed the line, however near the player stops.
+Doom II MAP04: lines 408 and 409 are two sides of a box 16 square in a corner, 8 units from both
+walls, so the player crosses them only in a square 8 across on top of it; 24 units past their
+middles lay on the walls, the route to them through the gap between the box and a wall, too
+narrow (`K_Graph_Clearance` also read a spot on a wall as clear: a line through the point now
+counts, at no distance). On arriving at
 a switch's spot the player presses use as for a door (below), facing the line; a press after
 which nothing happens within 15 tics is repeated, 3 times at most. What the switch does is up to
 the caller (an exit ends the level). A walk-over line works only if the player crosses it, but
@@ -1127,15 +1135,22 @@ it cannot be reached):
     gave the switch up as doing nothing, and never went for the blue key). A one-shot door
     loses its special once opened, so then the press gets through;
   - **keys first:** if a door further along the same route needs a key that lies in the level,
-    GET KEY is pushed instead of the fix for the first crossing. A key stays, while what a switch
-    does may not last until the player gets there: on Doom II MAP12 the bot ran 11,000 units to
-    lower a lift, fetched the yellow key while it went back up, and had to lower it again;
-  - **lifts last:** likewise, if the first crossing's fix works a lift and a crossing further
-    along the route is fixed some other way, that one is fixed first, since the lift comes back
-    up: on Doom II MAP09 the bot lowered lift 123 on the way to the exit, then went to open door
-    130 further on, which had closed again, and came back to a lift back up, working its two
-    switches a second time (now 10.6 s faster). Only if that fix can be got to without a key the
-    player lacks: on MAP14 it was a switch behind the red door whose key the bot was fetching;
+    GET KEY is pushed instead of the fix for the first crossing; so is it for a door further on
+    that only switches needing a key open (Doom II MAP04: door 302, special 99, blue). A key
+    stays, while what a switch does may not last until the player gets there: on Doom II MAP12
+    the bot ran 11,000 units to lower a lift, fetched the yellow key while it went back up, and
+    had to lower it again;
+  - **lifts last:** likewise, if the first crossing's fix works a lift, or a door that closes
+    again by itself (opened only by lines that open, wait and close it:
+    `K_Specials_DoorCloses`), and a crossing further along the route is fixed some other way,
+    that one is fixed first, since the lift comes back up and the door shuts: on Doom II MAP09
+    the bot lowered lift 123 on the way to the exit, then went to open door 130 further on,
+    which had closed again, and came back to a lift back up, working its two switches a second
+    time (now 10.6 s faster); on MAP04 it opened fast door 32 (special 114, shut after 4 s),
+    went back past the start for switch 244, which lowers floor 84 for good, and found the door
+    shut again on its way to the blue key (now 2.2 s faster to it). Only if that fix can be got
+    to without a key the player lacks: on MAP14 it was a switch behind the red door whose key
+    the bot was fetching;
   - **no fix past a dead end:** if the route has a crossing further on that nothing fixes now
     (a door needing the key the player is out fetching, say), fixing those before it gets
     nowhere, and the candidate has no fix (Doom II MAP14: the bot opened the self-closing doors
@@ -1846,7 +1861,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      Also a loop: with no way, the brain waits while sectors move, and the only one moving was
      the fast door it had just opened itself (sector 77, special 114, shut after 4 s), so it
      pressed door switch 388 every 5 s. A door the bot opened and that will only close again
-     should not count as a reason to wait.
+     should not count as a reason to wait. (The spot was enough, the goal on it was not: see
+     "MAP04 finishes" below.)
    - MAP06: **finished in 79.3 s**, after two fixes. The blue key is reached by a long jump from a
      lift (sector 122) south over a pit, 304 units, which was not found: a run straight south
      touches down on a pillar's top 16 square level with the lift and could not stop there, so
@@ -2039,6 +2055,21 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      is far longer), so it was let be. Regression, 27 maps: all finish, as before but MAP09
      96.7 s, MAP17 152.4 s, MAP26 51.1 s (its 216 drop beside a teleporter is now slowed),
      MAP29 162.6 s.
+   - MAP04 finishes (35.4 s): of the maps that did not, only those needing monsters or barrels
+     shot are left (MAP07, 23, 30, 32). The box in the corner
+     (lines 408 and 409) could be crossed all along; the goal for crossing was 24 units past a
+     line's middle, which was on a wall, and the way to it went through the 8-unit gap between
+     the box and the wall. Now a spot past a walk-over line is one the player can stand on, as
+     near as 4 units past it, and arriving there means having crossed (3.4, line goals). The
+     stepping stones to the red key needed nothing new: the jump finder hops them (9 units off
+     each edge), after the bot rides lift 38 back up. Then the user saw the bot open door 32 (a
+     fast door, shut after 4 s), go back past the start for switch 244, and press 32 again on
+     its way to the blue key: a door that closes again is now fixed last, like a lift, and a
+     door further on opened only by switches needing a key counts as a locked door, its key
+     first (3.5); the bot goes door 64, switch 244, door 32, blue key (10.4 s, was 12.6), and
+     takes the yellow key before the exit's lift. Regression, 28 maps (MAP04 added): all
+     finish; as before but MAP02 41.9 s (the red key a step earlier), MAP17 152.9 s (walk-over
+     line 1200 instead of 1201, for the new spots), MAP19 101.7 s (the same route).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -2155,7 +2186,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       only appear once a sector has moved are searched for again when it stops, and at level load
       as if it had moved (3.2.2). MAP15, MAP20, MAP22 and MAP25 finish too (MAP20 with long
       run-ups down steps, MAP25 walking over a cell too thin to stand in, 3.2), and so does
-      MAP29 (its running jump onto the island). Left: MAP04 (see the playtests).
+      MAP29 (its running jump onto the island), and MAP04 (its stepping stones, once the bot
+      could get onto the box that lowers their lift; see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not

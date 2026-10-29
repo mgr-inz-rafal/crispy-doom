@@ -14,8 +14,8 @@
     did not finish.
 
     The default maps are the Doom II regression set, all of which finish: MAP01, MAP02, MAP03,
-    MAP05, MAP06, MAP08, MAP09, MAP10, MAP11, MAP12, MAP13, MAP14, MAP15, MAP16, MAP17, MAP18,
-    MAP19, MAP20, MAP21, MAP22, MAP24, MAP25, MAP26, MAP27, MAP28, MAP29 and MAP31.
+    MAP04, MAP05, MAP06, MAP08, MAP09, MAP10, MAP11, MAP12, MAP13, MAP14, MAP15, MAP16, MAP17,
+    MAP18, MAP19, MAP20, MAP21, MAP22, MAP24, MAP25, MAP26, MAP27, MAP28, MAP29 and MAP31.
 
 .PARAMETER Iwad
     The Doom II IWAD. Defaults to the DOOM2_IWAD environment variable.
@@ -45,9 +45,9 @@
 #>
 param(
     [string]$Iwad = $env:DOOM2_IWAD,
-    [string[]]$Maps = @('01', '02', '03', '05', '06', '08', '09', '10', '11', '12', '13', '14', '15',
-                        '16', '17', '18', '19', '20', '21', '22', '24', '25', '26', '27', '28', '29',
-                        '31'),
+    [string[]]$Maps = @('01', '02', '03', '04', '05', '06', '08', '09', '10', '11', '12', '13', '14',
+                        '15', '16', '17', '18', '19', '20', '21', '22', '24', '25', '26', '27', '28',
+                        '29', '31'),
     [int]$Seconds = 120,
     [hashtable]$Limits = @{ '09' = 150; '13' = 150; '17' = 200; '19' = 150; '29' = 200 },
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),

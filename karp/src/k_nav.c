@@ -169,7 +169,7 @@
 #define MAX_AVOID 16
 
 // A goal spot is clear of solid things when the player's box (radius 16)
-// is a unit off every one.
+// is a unit off every one; past a walk-over line, also of walls.
 #define STAND_CLEARANCE 17.0
 
 // Running a jump, the player is eased back onto its line at JUMP_LINE_GAIN
@@ -1426,6 +1426,7 @@ static boolean UpdateUseAction(void)
 }
 
 static boolean Replan(k_vec2_t at, const char *why);
+static boolean ShortOfLine(k_vec2_t at);
 
 // Works the door or lift at the next crossing that is not open, if the
 // player has got to it. Returns false if the route was replaced or failed.
@@ -1969,7 +1970,7 @@ k_navstate_t K_Nav_Tick(void)
     TrackJump(&pose, at);
 
     if (status.target == path.num_points - 1 && Distance(at, goal) < ARRIVE_RADIUS
-     && status.speed < ARRIVE_SPEED && action.kind == K_ACTION_NONE)
+     && status.speed < ARRIVE_SPEED && action.kind == K_ACTION_NONE && !ShortOfLine(at))
     {
         if (status.goal_kind == K_GOAL_USE_LINE || status.goal_kind == K_GOAL_SHOOT_LINE)
         {
@@ -2036,6 +2037,27 @@ k_navstate_t K_Nav_Tick(void)
 //
 // Goals
 //
+
+// Whether the player, at a point, has yet to cross the walk-over line it is
+// walking across: its goal can be nearer the line than the player stops from
+// it (K_Nav_LineGoalPoint).
+static boolean ShortOfLine(k_vec2_t at)
+{
+    const k_line_t *line;
+    double dx, dy;
+
+    if (status.goal_kind != K_GOAL_CROSS_LINE || cross_first || status.goal_line < 0)
+    {
+        return false;
+    }
+
+    line = &K_Map_Get()->lines[status.goal_line];
+    dx = line->v2.x - line->v1.x;
+    dy = line->v2.y - line->v1.y;
+
+    return (dx * (at.y - line->v1.y) - dy * (at.x - line->v1.x))
+         * (dx * (goal.y - line->v1.y) - dy * (goal.x - line->v1.x)) <= 0.0;
+}
 
 void K_Nav_Reset(void)
 {
@@ -2176,7 +2198,13 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
     // places along it are tried too, from the middle out (Doom II MAP27: a
     // skull rock inside a diamond of walk-over lines, 11 units from each).
     // If nothing is clear of solid things, the first spot on floor.
+    // A walk-over line is crossed once the player's centre is past it, so
+    // first a spot the player can stand on is looked for, nearer the line
+    // too (Doom II MAP04: a box in a corner, 8 units from both walls, whose
+    // sides are crossed only in a square 8 across on top of it; 24 past them
+    // is a wall).
     static const double distances[] = { 24.0, 32.0, 16.0, 40.0 };
+    static const double cross_distances[] = { 24.0, 32.0, 16.0, 40.0, 8.0, 4.0 };
     static const double alongs[] = { 0.5, 0.3, 0.7, 0.15, 0.85, 0.05, 0.95 };
     const k_line_t *line = &K_Map_Get()->lines[line_index];
     k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
@@ -2203,6 +2231,25 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
     {
         nx = -nx;
         ny = -ny;
+    }
+
+    for (a = 0; a < num_alongs && kind == K_GOAL_CROSS_LINE; ++a)
+    {
+        k_vec2_t at = { line->v1.x + (line->v2.x - line->v1.x) * alongs[a],
+                        line->v1.y + (line->v2.y - line->v1.y) * alongs[a] };
+
+        for (i = 0; i < arrlen(cross_distances); ++i)
+        {
+            k_vec2_t spot = { at.x + nx * cross_distances[i], at.y + ny * cross_distances[i] };
+
+            if (K_Map_CellAt(spot.x, spot.y) >= 0
+             && K_Graph_Clearance(spot, STAND_CLEARANCE) >= STAND_CLEARANCE)
+            {
+                *x = spot.x;
+                *y = spot.y;
+                return 1;
+            }
+        }
     }
 
     for (a = 0; a < num_alongs; ++a)

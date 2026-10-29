@@ -305,6 +305,20 @@ int K_Specials_ManualDoor(int special)
     }
 }
 
+int K_Specials_DoorCloses(int special)
+{
+    switch (special)
+    {
+        case 1: case 26: case 27: case 28: case 117:        // manual
+        case 4: case 29: case 63: case 90:                  // W1, S1, SR, WR
+        case 105: case 108: case 111: case 114:             // blazing
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 int K_Specials_LineSpecial(int line)
 {
     return lines[line].special;

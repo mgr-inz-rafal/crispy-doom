@@ -66,6 +66,10 @@ k_trigger_t K_Specials_MoverTrigger(int special);
 // the door is the line's back sector.
 int K_Specials_ManualDoor(int special);
 
+// Doors that close again by themselves once open (open, wait, close),
+// manual or opened from elsewhere.
+int K_Specials_DoorCloses(int special);
+
 // How a mover line moves the sectors it targets, as k_move_t flags (a lift
 // goes down, and back up only to where it was; a perpetual one also up to
 // the highest neighbouring floor); 0 for any other special.
