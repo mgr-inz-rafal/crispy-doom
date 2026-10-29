@@ -1552,12 +1552,7 @@ static boolean OpenTo(int cell, int to)
 
 static double CellFloor(int cell)
 {
-    const k_map_t *map = K_Map_Get();
-    double floor, ceiling;
-
-    K_Map_SectorHeights(map->subsectors[map->cells[cell].subsector].sector,
-                        &floor, &ceiling);
-    return floor;
+    return K_Map_CellFloor(cell);
 }
 
 // Which route points to take carefully: near an edge, where the route

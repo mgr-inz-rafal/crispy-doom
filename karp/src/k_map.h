@@ -153,12 +153,24 @@ int K_Map_CellAt(double x, double y);
 // point is inside it); -1 otherwise. Scans every cell.
 int K_Map_NearestCell(double x, double y, double max_distance);
 
+// The floor a player with its centre in the cell stands on: its sector's,
+// unless the cell is so thin beside a floor more than a step higher that
+// the box is over that one wherever the centre is in the cell. The engine
+// stands the player on the highest floor under its box, so the player is
+// never down on the cell's own floor there; it walks over the cell on the
+// higher one, and falls past it (Doom II MAP25: a niche 16 wide at the end
+// of a channel, its floor 344 below, and beyond it the teleporter pad on
+// the same floor as the niche). Only floors that never move count, the
+// cell's and the higher one: lifts are judged as ever.
+double K_Map_CellFloor(int cell);
+
 // The cell a player at (x, y) standing on the given floor stands on. The
 // engine stands the player on the highest floor under its box, so with its
 // centre just over the edge of a ledge it still stands on the ledge: if
-// that is more than a step above the floor under the centre, this is the
-// ledge's cell under its box nearest the centre, not the cell below.
-// Otherwise the cell containing the point (K_Map_CellAt).
+// that is more than a step above the floor under the centre (by
+// K_Map_CellFloor), this is the ledge's cell under its box nearest the
+// centre, not the cell below. Otherwise the cell containing the point
+// (K_Map_CellAt).
 int K_Map_StandingCell(double x, double y, double floor);
 
 // The same, with each cell's floor from cell_floor instead of the live

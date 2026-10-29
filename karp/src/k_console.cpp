@@ -733,6 +733,7 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
     std::string neighbours;
     char cell_of[32] = "";
     char under[64] = "";
+    char stood[48] = "";
     double floor, ceiling;
 
     if (graph->generation == map->generation)
@@ -761,10 +762,17 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
                       SDL_max(1.0f, ui_scale));
 
     K_Map_SectorHeights(ss->sector, &floor, &ceiling);
-    ImGui::SetTooltip("Subsector %d%s%s\nSector %d\nFloor %.0f, ceiling %.0f\n"
+
+    if (K_Map_CellFloor(index) > floor + 0.5)
+    {
+        snprintf(stood, sizeof(stood), " (too thin: stood on at %.0f)",
+                 K_Map_CellFloor(index));
+    }
+
+    ImGui::SetTooltip("Subsector %d%s%s\nSector %d\nFloor %.0f%s, ceiling %.0f\n"
                       "%d vertices, area %.0f%s\n%s", cell->subsector, cell_of,
                       ss->foreign_floor ? " (other-sector floor)" : "", ss->sector,
-                      floor, ceiling, cell->num_points, cell->area, under,
+                      floor, stood, ceiling, cell->num_points, cell->area, under,
                       neighbours.c_str());
 }
 

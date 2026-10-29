@@ -103,6 +103,11 @@ static int blocks_judged;           // leveltime + 1 when last judged, 0 never
 static int *cell_block_first;       // into cell_block_list; one extra at the end
 static int *cell_block_list;
 
+// Per cell, the two-sided lines the player's box reaches over wherever its
+// centre is in the cell (mostly none).
+static int *cell_over_first;        // into cell_over_list; one extra at the end
+static int *cell_over_list;
+
 // Grid of blocks, by their squares.
 static k_vec2_t block_origin;
 static int block_width, block_height;
@@ -655,6 +660,130 @@ static void FindCellBlocks(void)
     }
 }
 
+// Whether the square of half-width r around p touches the segment a-b: the
+// boxes overlap, and the square's corners are not all on one side of its
+// line.
+static boolean SquareTouchesSegment(k_vec2_t p, double r, k_vec2_t a, k_vec2_t b)
+{
+    k_vec2_t dir = { b.x - a.x, b.y - a.y };
+    double length = sqrt(dir.x * dir.x + dir.y * dir.y);
+
+    if (SDL_max(a.x, b.x) < p.x - r || SDL_min(a.x, b.x) > p.x + r
+     || SDL_max(a.y, b.y) < p.y - r || SDL_min(a.y, b.y) > p.y + r)
+    {
+        return false;
+    }
+
+    return length < 1e-6
+        || fabs(LineSide(a, dir, p)) <= r * (fabs(dir.x) + fabs(dir.y)) / length;
+}
+
+// The two-sided lines each cell's floor lies wholly within the player's
+// reach of, so the box is over them wherever the centre is in the cell: the
+// engine stands the player on the highest floor under the box. The reach
+// is convex, so the cell's corners are enough. Only cells at most as wide
+// as that reach across a line (32 by 32 turned 45 degrees) are looked at,
+// and only floors that never move, on both sides: every line that moves a
+// floor finds it by its tag. Thin floors beside lifts, and lifts' thin
+// edges, are left to the rides, judged by their sectors' floors (Doom II
+// MAP12: perpetual lifts 64 below the switch alcoves beside them; MAP05: a
+// strip 16 deep in front of a raised lift, whose face is its switch).
+static void FindCellOvers(void)
+{
+    double width_limit = 2.0 * (PLAYER_RADIUS + INSIDE_TOLERANCE) * sqrt(2.0);
+    int c, l, i, k, pass;
+
+    free(cell_over_first);
+    free(cell_over_list);
+    cell_over_first = calloc(map.num_cells + 1, sizeof(*cell_over_first));
+    cell_over_list = NULL;
+
+    for (pass = 0; pass < 2; ++pass)
+    {
+        for (c = 0; c < map.num_cells; ++c)
+        {
+            const k_cell_t *cell = &map.cells[c];
+            const k_vec2_t *poly = &map.points[cell->first_point];
+            int sector = map.subsectors[cell->subsector].sector;
+            double width = 1e30;
+            int count = 0;
+
+            // The narrowest a convex polygon gets is across one of its edges.
+            for (i = 0; i < cell->num_points && sector >= 0 && sectors[sector].tag == 0; ++i)
+            {
+                k_vec2_t a = poly[i];
+                k_vec2_t dir = { poly[(i + 1) % cell->num_points].x - a.x,
+                                 poly[(i + 1) % cell->num_points].y - a.y };
+                double across = 0.0;
+
+                if (dir.x * dir.x + dir.y * dir.y < 1e-12)
+                {
+                    continue;
+                }
+
+                for (k = 0; k < cell->num_points; ++k)
+                {
+                    across = SDL_max(across, fabs(LineSide(a, dir, poly[k])));
+                }
+
+                width = SDL_min(width, across);
+            }
+
+            for (l = 0; l < map.num_lines && width <= width_limit; ++l)
+            {
+                const k_line_t *line = &map.lines[l];
+
+                if (line->back_sector < 0 || line->back_sector == line->front_sector
+                 || sectors[line->front_sector].tag != 0 || sectors[line->back_sector].tag != 0
+                 || SDL_max(line->v1.x, line->v2.x) < cell->min.x - PLAYER_RADIUS
+                 || SDL_min(line->v1.x, line->v2.x) > cell->max.x + PLAYER_RADIUS
+                 || SDL_max(line->v1.y, line->v2.y) < cell->min.y - PLAYER_RADIUS
+                 || SDL_min(line->v1.y, line->v2.y) > cell->max.y + PLAYER_RADIUS)
+                {
+                    continue;
+                }
+
+                for (k = 0; k < cell->num_points; ++k)
+                {
+                    if (!SquareTouchesSegment(poly[k], PLAYER_RADIUS + INSIDE_TOLERANCE,
+                                              line->v1, line->v2))
+                    {
+                        break;
+                    }
+                }
+
+                if (k < cell->num_points)
+                {
+                    continue;
+                }
+
+                if (pass == 1)
+                {
+                    cell_over_list[cell_over_first[c] + count] = l;
+                }
+
+                ++count;
+            }
+
+            if (pass == 0)
+            {
+                cell_over_first[c + 1] = count;
+            }
+        }
+
+        if (pass == 0)
+        {
+            for (c = 0; c < map.num_cells; ++c)
+            {
+                cell_over_first[c + 1] += cell_over_first[c];
+            }
+
+            cell_over_list = malloc(SDL_max(cell_over_first[map.num_cells], 1)
+                                    * sizeof(*cell_over_list));
+        }
+    }
+}
+
 // Whether a block's thing is still in the blockmap, solid, near where it
 // stood. Looked up by place, not by pointer: the memory of a thing that is
 // gone is used again.
@@ -1175,6 +1304,7 @@ void K_Map_Build(void)
     CollectBlocks();
     BuildCells();
     FindCellBlocks();
+    FindCellOvers();
     CheckCells();
 
     map.loaded = 1;
@@ -1325,11 +1455,34 @@ int K_Map_NearestCell(double x, double y, double max_distance)
     return best;
 }
 
+double K_Map_CellFloor(int cell)
+{
+    int sector = map.subsectors[map.cells[cell].subsector].sector;
+    fixed_t floor, over;
+    int i;
+
+    if (sector < 0)
+    {
+        return -1e30;
+    }
+
+    floor = sectors[sector].floorheight;
+    over = floor;
+
+    for (i = cell_over_first[cell]; i < cell_over_first[cell + 1]; ++i)
+    {
+        const line_t *line = &lines[cell_over_list[i]];
+
+        over = SDL_max(over, SDL_max(line->frontsector->floorheight,
+                                     line->backsector->floorheight));
+    }
+
+    return FixedToMap(over - floor > MapToFixed(MAX_STEP_UP) ? over : floor);
+}
+
 static double CellFloor(int index)
 {
-    int sector = map.subsectors[map.cells[index].subsector].sector;
-
-    return sector >= 0 ? FixedToMap(sectors[sector].floorheight) : -1e30;
+    return K_Map_CellFloor(index);
 }
 
 // Whether a cell overlaps the square of half-width r around (x, y): no

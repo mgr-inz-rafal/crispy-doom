@@ -1802,15 +1802,22 @@ static boolean ClearOf(k_vec2_t at, const int *lines_found, int count, const int
     return true;
 }
 
-// The floor and ceiling of the sector a cell is in. Standing in a door
-// means it is open.
+// The floor a player in the cell stands on: its sector's, unless the cell
+// is too thin to stand in beside a far higher floor (K_Map_CellFloor).
+static fixed_t CellFloor(int cell)
+{
+    return (fixed_t) (K_Map_CellFloor(cell) * FRACUNIT);
+}
+
+// The floor a player in the cell stands on, and the ceiling of its sector.
+// Standing in a door means it is open.
 static void StandingHeights(int cell, fixed_t *floor, fixed_t *ceiling)
 {
     const k_map_t *map = K_Map_Get();
     int index = map->subsectors[map->cells[cell].subsector].sector;
     sector_t *sector = &sectors[index];
 
-    *floor = sector->floorheight;
+    *floor = CellFloor(cell);
     *ceiling = OpenCeiling(sector);
 }
 
@@ -2073,6 +2080,14 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait)
         floor_b = floor_a;
         ceiling_b = ceiling_a;
     }
+
+    // In a cell too thin to stand in beside a far higher floor, the player
+    // is up on that one (Doom II MAP22: the strips round a crate in a pit,
+    // level with the floors beyond, onto the crate once it is lowered).
+    // Such a cell's own floor never moves, so the lifts and moving floors
+    // below are judged as ever.
+    floor_a = CellFloor(from);
+    floor_b = CellFloor(to);
 
     // A lift too high now to step onto, or to fit over, that comes down by
     // itself (one that runs for good, or is on its way down): wait for it,

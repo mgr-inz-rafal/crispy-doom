@@ -340,6 +340,26 @@ too small to plan from (Doom II MAP05: an 8-unit ledge in front of a door, with 
 it too narrow). Route progress and the start of every plan use this cell, and the Bot tab shows
 it.
 
+**Cells too thin to stand in** (`K_Map_CellFloor`). The same rule makes some cells' own floors
+unreachable: where every corner of a cell is within the box's reach of a two-sided line with a
+floor more than a step above the cell's (the reach is convex, so the corners are enough), the box
+is over that floor wherever the centre is in the cell, and the player stands on it there. Such a
+cell takes that floor wherever a cell's floor is asked for: the player's cell, the crossings
+(heights and width), the path's walls and nav's careful points. Walking onto it from the higher
+floor is level, walking off its far side is a drop, and from its own floor there is no way in.
+Doom II MAP25: the only ways off the start platform are a blood channel (272) ending in a niche 16
+wide (sector 41, floor -72), and past the niche a teleporter pad on the niche's floor, entered
+from behind (so it does not teleport), with a pit round it. Karp put the player down in the niche,
+where the channel's edge was a wall 16 from line 523 into the pad, so every way out was too
+narrow. Now the player walks off the channel's end, stays up on 272 over the niche and drops at
+line 523, as in the engine (the user: a plain step off the ledge, nothing to jump). Only floors
+that never move count, the cell's and the higher one (no tag: every line that moves a floor finds
+it by its tag), so lifts are judged by their sectors' floors as ever: MAP12's perpetual lifts have
+thin edges 64 below the switch alcoves beside them, and MAP05 a strip 16 deep in front of a raised
+lift whose face is its switch; both broke when their cells stood on the higher floor. Only cells
+at most 48 wide (32 by 32 turned 45 degrees, the widest the reach gets across a line) are looked
+at. The console's hover info shows such a cell's floor ("too thin: stood on at ...").
+
 #### 3.2.1 `k_graph.c` - navigation graph
 
 **Portals.** Two cells are neighbours where their edges lie on the same line, run in opposite
@@ -588,6 +608,12 @@ near-perfect conditions; found at level load, judged live.
   took it at a run, coming down the walkway from a teleporter). Only edges with no jump get one,
   so the jumps found before stay as they were. MAP20: 112 jumps, 41 more as if moved, 150 ms
   (113 before).
+- **A fall is no jump.** A run that falls is not kept: walking off the ledge gets there too.
+  MAP25's way off the start platform was first taken as drops past a cell with no room to stand
+  in, kept as jumps; the user found them awkward (planned diagonally into a wall, landing only by
+  sliding down it, where a plain step off the ledge does), and they doubled the jumps (MAP14 152
+  to 303, the search up to 0.5 s on MAP24). Replaced by cells too thin to stand in (3.2), with
+  which walking gets there.
 - **Doors on the run-up.** While the player is still on the takeoff floor, manual doors count as
   open (at their open height): its box can overlap a door it came through, and standing there
   holds it open. MAP08's hop onto the first sinking pillar starts from a strip 8 wide behind the
@@ -1568,7 +1594,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      it); Karp has no link there, so the ledge looked out of reach. The brain kept opening door 23
      and lowering the lift, found no way from the lift to the switch, and gave up once switch 276
      had been used three times. **Needs gap links** (follow-up 7). Skipped for now, to come back
-     to.
+     to. (Finished since, see the jumps below.)
    - MAP23: the starting area is full of barrels, and the bot sticks among them within 2 seconds,
      on its way to the first switch (line 9, tag 2). **Needs solid things**: going round barrels,
      or blowing them up (follow-up 3). Skipped for now, to come back to.
@@ -1598,7 +1624,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      the pad, never standing in the niche; Karp judges walkway-niche-pad as two crossings, and
      standing in the niche the walkway's face is 16 away: too narrow. GO TO EXIT failed at 0 s.
      **Needs gap links** (follow-up 7): a link from the walkway's end straight to the pad.
-     Skipped for now, to come back to.
+     Skipped for now, to come back to. (Finished since, see the jumps below: a drop past the
+     niche.)
    - MAP26: all three keys by 42 s, then stuck 300 units from the exit, against a yellow-key
      pillar (sector 113): a free-standing door 16 square with door lines (34) all round, in the
      middle of a corridor 64 wide, leaving 24 units on either side. With the key, the pillar
@@ -1937,6 +1964,49 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      Slower: MAP09 101.9 s (97.6; the missed hop out of door 33 in 3.4), MAP21 56.9 (56.1), MAP24
      60.2 (59.4), MAP26 50.7 (49.2), MAP28 73.9 (72.7). MAP15 48.4 s, MAP20 67.2 s. Both added
      to the script's default list.
+   - MAP22: **finished in 42.7 s** with no changes: switch 535, switch 14 (twice), the blue key
+     past a lift ride and two teleporters, switches 188, 269 and 289, then lift 25 ridden back up
+     and the 16-unit hop onto the red key's ledge that stopped the first pass (a jump across a gap
+     narrower than the player, 3.2.2), and the exit switch past two more teleporters and a lift.
+     Seen: the routes to the blue key and to the exit were planned with about 38 and 26 health
+     off floors that hurt, each under half the health then, so taken; together about 70 with no
+     monsters about. Radiation suits (follow-up 15) and keeping count of health would help.
+   - MAP25: GO TO EXIT failed at once, as in the first pass (the niche at line 523). Drops past a
+     cell with no room to stand in (3.2.2) fixed it: **finished in 59.9 s**. The drop off the
+     channel's end into the pit, switch 410 and lift 111, a teleporter, the blue key; the long way
+     to walk-over line 622 goes back up by the pad's teleporter and down the drop again, then
+     lift 111, door 528, lift 105, line 622, switch 645 and its lift to the exit.
+   - Regression, 26 maps (MAP22 and MAP25 added to the script's default list): all finish, every
+     time as in the run before drop links.
+   - MAP25 again, the user: the drop looks awkward, planned through a solid wall and down only by
+     sliding along it, where the geometry is a plain step off the ledge (the niche's floor runs on
+     into the pad's). Drop links removed; cells too thin to stand in (3.2) instead: the bot walks
+     off the channel's end and drops 344 at line 523, **finished in 54.3 s** (5.6 s faster), 28
+     jumps again. On the way, two fixes from the regression maps: lifts left out (MAP12's
+     perpetual lifts, MAP05's strip in front of a raised lift), and the crossings judged by the
+     same floor (MAP22: on a strip round a crate that had sunk 8 below it, the bot was told of an
+     80 step). MAP03, 05, 06, 11, 12 and 22 as before. MAP09 96.2 s (101.9): after the same jump
+     that does not work, the new plan finds another jump and gets the blue key 6 s sooner. MAP14
+     68.9 s (59.9): the way to switch 393 now walks along a raised strip and works the first time;
+     before, a jump on it failed, and on the replan the bot crossed walk-over lines 1366 and 1383,
+     whose doors happened to open a shorter way to the blue key. With a way already there, the
+     brain does not look for shortcuts behind triggers (follow-up 16).
+   - Regression, 26 maps, with cells too thin to stand in: all finish. As before but MAP09 96.2
+     s, MAP14 68.9 s, MAP19 101.1 s, MAP22 42.8 s, MAP25 54.3 s, MAP27 79.4 s.
+   - MAP29: **finished in 162.7 s** at the first try with jumps, through the normal exit (it
+     failed in the first pass for want of the running jump onto the island). Line 10, a long
+     walk with two teleporters to line 350, switch 395, a jump onto a ledge at 600 and switch
+     508, then lift 116 (13 s) and switches 686, 696, 688, 758, 583, 655 and 666 among lifts;
+     then the three pillar switches 975, 825 and 837, with six jumps between them, and the
+     running jump from the ledge at 528 onto the island at 480 (2:27.8), its teleporter and the
+     staircase to the exit hall. Seen: (1) dropping 476 off the ledge at 600 onto lift 116 (low,
+     moving), the bot flew on off the lift's far side, 32 lower, and the only way back was the
+     long way round by both teleporters and the jump again: about 11 s; a long fall carries the
+     speed of the run-in (the careful points only slow down near an edge). (2) The route to the
+     exit was planned with about 117 health off floors that hurt, more than the player has; the
+     steep search found no drier way. The bot lived (no monsters, the guess counts waits it did
+     not make), but with monsters, or less health, it would not (follow-up 15). Added to the
+     script's default list (cap 200 s).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -2051,8 +2121,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
       (MAP24 takes a jump too). MAP06, MAP08, MAP09, MAP11, MAP13 and MAP14 finish too; jumps that
       only appear once a sector has moved are searched for again when it stops, and at level load
-      as if it had moved (3.2.2). MAP15 and MAP20 finish too (MAP20 with long run-ups down steps).
-      Left: the maps not tried yet (MAP22, 25, 29), and MAP04 (see the playtests).
+      as if it had moved (3.2.2). MAP15, MAP20, MAP22 and MAP25 finish too (MAP20 with long
+      run-ups down steps, MAP25 walking over a cell too thin to stand in, 3.2), and so does
+      MAP29 (its running jump onto the island). Left: MAP04 (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -2135,6 +2206,26 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        exit to MAP31, the normal one looking out of reach). Either is fine for now (the user).
        Later, perhaps a command line switch: prefer the secret exit, prefer the normal one, or
        let the bot choose (as now).
+   15. **Floors that hurt, next steps** (the user's list, after the stand-in cost of 3.3; the
+       user had not meant to do the nukage logic yet, but keeps it):
+       1. A jump over a floor that hurts can still hurt (an engine quirk): marginal, since jumps
+          are short, but when one hit from that floor (5, 10 or 20) could kill the player, such
+          a jump should cost so much that it is taken only as a last resort.
+       2. A radiation suit can leak (another engine quirk, far rarer): no code for it.
+       3. Setting off right after a press (3.5) sends the bot to the lift or floor it moved, to
+          wait there; where that is on a floor that hurts, it is better to wait by the switch, or
+          anywhere dry, until the wait is nearly over. Seen in MAP11's starting pit, and at the
+          slowly sinking floor by the blood lake on MAP20 (10 s in the blood for sector 26). The
+          bot should not idle on a floor that hurts.
+       4. Radiation suits as something to fetch when the way crosses a floor that hurts: MAP24's
+          bot drops into the big nukage pit and runs across it to the teleporter, past a suit
+          nearby that would save health. Suits often lie on the floor that hurts themselves, so
+          not all damage can be avoided.
+   16. **Shortcuts behind triggers.** The brain looks for a trigger only when a goal has no way;
+       with a long way already open, it never asks whether a nearby walk-over line or switch
+       would open a shorter one. Doom II MAP14: after switch 393 the blue key is 2077 units off,
+       by two lifts; crossing lines 1366 and 1383 opens doors to a way of 1452 (found only by
+       luck, on a replan after a failed jump: 9 s).
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -2145,8 +2236,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  02, 03, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 26, 27, 28, 31 (all
-  finish, in about 155 s) in parallel, with
+  02, 03, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28,
+  31 (all finish, in about 155 s) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the

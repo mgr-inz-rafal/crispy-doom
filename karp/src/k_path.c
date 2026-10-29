@@ -735,6 +735,7 @@ static void CellHeights(int cell, double *floor, double *ceiling)
 {
     K_Map_SectorHeights(map->subsectors[map->cells[cell].subsector].sector,
                         floor, ceiling);
+    *floor = K_Map_CellFloor(cell);
 }
 
 // A gap on the way through route cell i: from the start, a teleporter's
