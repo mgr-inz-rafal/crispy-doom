@@ -2272,11 +2272,16 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
     // platform, which the jump onto it starts from, and the bot planned to
     // wait for the ring to come down, step on and jump). Not so a sinking
     // pillar the player is about to land on (MAP08, hopped off one after
-    // another).
+    // another). Nor is it a jump while the cell it starts from is more than
+    // a step below the takeoff: the run lands, but the player does not get
+    // up to where it starts (Doom II MAP24: the jump found as if line 332 had
+    // raised the nukage pool, whose start stands on the strip beside it; the
+    // bot waded into the pool to take it).
     if (portal->jump >= 0)
     {
         const k_map_t *map = K_Map_Get();
         sector_t *a = &sectors[map->subsectors[map->cells[from].subsector].sector];
+        const k_jump_t *jump = K_Jump_Get(portal->jump);
 
         *wait = 0.0;
 
@@ -2285,17 +2290,18 @@ static k_crossing_t Judge(int portal_index, int from, double *wait)
             return K_CROSS_WALL;
         }
 
-        if (SinksAway(a, K_Jump_Get(portal->jump)))
+        if (SinksAway(a, jump))
         {
             return K_CROSS_GAP;
         }
 
-        if (!K_Jump_Possible(portal->jump))
+        if (a->floorheight / (double) FRACUNIT < jump->from_floor - MAX_STEP_UP / (double) FRACUNIT - 0.01
+         || !K_Jump_Possible(portal->jump))
         {
             const plat_t *plat = PlatOf(a);
 
             if (plat != NULL && plat->status != in_stasis
-             && fabs(plat->high / (double) FRACUNIT - K_Jump_Get(portal->jump)->from_floor) < 0.5)
+             && fabs(plat->high / (double) FRACUNIT - jump->from_floor) < 0.5)
             {
                 *wait = LiftReturn(a) + TurnWait((int) (a - sectors));
                 return K_CROSS_RIDE;

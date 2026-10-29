@@ -601,10 +601,15 @@ near-perfect conditions; found at level load, judged live.
   floor, by 24, 32 or 512, a step of stairs along the chain; not lifts, which come back, nor
   donuts or raising to a texture), with every door open (manual ones and those a line opens).
   Kept only if the run goes over that sector, and only between cells no jump joins yet: one that
-  works as things are is better. Such a jump records the sector, its heights then, and the first
-  door it went through that is closed. It does not work as things are, so it is a blocked
-  crossing (`K_CROSS_GAP`) whose fix moves the sector there, then opens that door (3.5). MAP09: 53
-  jumps, and 35 more once one of 25 sectors has moved, in 100 ms.
+  works as things are is better. Its start and landing cells are those the player stands on by the
+  floors of the search (`K_Map_StandingCellOn`, the rule of `K_Map_StandingCell` with the heights
+  as if moved), not the cells under its centre: Doom II MAP11's strip 20, between a closet and the
+  nukage, is lowered by switch 615, and the jump off it to the walkway started at the strip's
+  edge with its centre over the nukage, so it was a jump from the nukage's cell; the bot waded in
+  to take it and missed it again and again. Such a jump records the sector, its heights then, and
+  the first door it went through that is closed. It does not work as things are, so it is a
+  blocked crossing (`K_CROSS_GAP`) whose fix moves the sector there, then opens that door (3.5).
+  MAP09: 53 jumps, and 35 more once one of 25 sectors has moved, in 100 ms.
 - **In the graph** a jump is a portal of its own after the shared stretches of border
   (`k_portal_t.jump`), linked from its run-up's cell only: `a` is the run-up's start, `b` the
   touchdown. Judged live, once a tic, by running it again with full and 85% thrust (heights
@@ -620,7 +625,14 @@ near-perfect conditions; found at level load, judged live.
   line 902 lowers the ring round the red key's platform, and the bot planned to teleport into the
   pit, wait for the ring to come down within a step, get on and jump from it onto the platform,
   which only works while the ring is high. MAP08's sinking pillars, under 100 units ahead, still
-  count. It costs its distance plus 2 s (70 tics), so a walk not much
+  count. Nor is it a jump while the cell it starts from is more than a step below the floor it
+  was found on (a ride off a lift coming back up, else a gap): the run from its start can land,
+  its box standing on a higher floor next to that cell, but the player does not get up there.
+  Doom II MAP24: the jump found as if line 332 had raised the western nukage pool starts on the
+  strip beside it, and the bot waded through the pool to take it instead of keeping to the ledge
+  (the user saw it); MAP28: the jump found as if line 402 had raised lift 82, a step onto its
+  edge from the floor round it, and the bot pushed against the lift instead of calling it. It
+  costs its distance plus 2 s (70 tics), so a walk not much
   longer wins (the user: jump where it saves a lot, or where nothing else gets there). The graph
   log and the Map tab count jumps; the overlay draws each dashed orange from the run-up's start
   to the touchdown, with a ring there, faint while it does not work.
@@ -1835,25 +1847,34 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      key over the window, switches 533 and 1500, the blue key, doors 155 and 71, the exit.
      The jump search on MAP14 takes 160 ms (152 jumps, 21 more as if a sector had moved).
    - **Regression after MAP06-MAP14** (22 maps in parallel: the 16 of the set and MAP06, 08, 09,
-     11, 13, 14), not looked into yet, for the next session. 19 finish: MAP01 8.2 s, MAP02 42.2,
-     MAP03 33.5, MAP05 31.1, MAP06 80.4, MAP08 27.0, MAP09 97.6, MAP10 45.9, MAP12 80.1, MAP13
-     93.3, MAP14 59.9, MAP16 42.0, MAP17 152.7, MAP18 32.9, MAP19 101.9, MAP21 56.1, MAP26 49.2,
-     MAP27 79.8, MAP31 41.4. Three do not (the user watched and quit them):
-     - MAP11 (it finished in 91.2 s before the MAP13 and MAP14 changes): after both keys, the
-       player died in the nukage, from jumps that failed. The log ends in a loop: "running up
-       for the jump to (504,2429)", "missed the jump: down at (589,2339), 112 below", every
-       couple of tics.
-     - MAP24 (62.1 s before): the same, after the red key: the jump to (-1060,1385), missed 128
-       below at (-1112,1385), again and again, until the player died in the nukage.
-     - MAP28: stuck near a lift that was lowered but that the bot did not get on (or similar),
-       at (-2,-857); GET RED KEY failed after three stucks, and GO TO EXIT failed with no
-       headroom at line 571 (-772,-2240).
-     Likely suspects from this session: the run-up from a step below and the starts moved to the
-     middle (new jumps, or old ones changed), the jump off a floor sinking away, and the brain's
-     new rules (goals dropped for an open way, no fix past a dead end). Note that "missed the
-     jump" replans at once, with the player down in the gap, into the same jump: a route that
-     starts with a jump the player is already below should not be taken (the run-up start is
-     out of reach).
+     11, 13, 14). 19 finished: MAP01 8.2 s, MAP02 42.2, MAP03 33.5, MAP05 31.1, MAP06 80.4, MAP08
+     27.0, MAP09 97.6, MAP10 45.9, MAP12 80.1, MAP13 93.3, MAP14 59.9, MAP16 42.0, MAP17 152.7,
+     MAP18 32.9, MAP19 101.9, MAP21 56.1, MAP26 49.2, MAP27 79.8, MAP31 41.4. Three did not (the
+     user watched and quit them), all from jumps found as if a sector had moved, starting from a
+     cell far below where they take off (3.2.2), which the routes had not met before:
+     - MAP11 (91.2 s before): after both keys, a loop of "running up for the jump to (504,2429)",
+       "missed the jump: down at (589,2339), 112 below", until the player died in the nukage.
+       The jump off strip 20 (lowered by switch 615) started from the nukage's cell, its centre
+       over the nukage; dropping needless goals now has the bot at switch 615 30 s earlier, from
+       where the way on went through the nukage to that cell.
+     - MAP24 (62.1 s before): the same after the red key, the jump to (-1060,1385) missed 128
+       below. The user saw the bot leave the last teleporter and wade through the nukage pool
+       instead of keeping to the ledge: the jump found as if line 332 had raised the pool starts
+       from the pool's cell, its box standing on the strip beside it, so it worked as things
+       were.
+     - MAP28: stuck at (-2,-857) by lift 82, which line 402 had raised; GET RED KEY failed after
+       three stucks, then GO TO EXIT. The jump found as if line 402 had raised the lift, a step
+       onto its edge, started from the floor round it, 64 below, and the bot pushed against the
+       lift instead of calling it.
+     Fixed both ways (3.2.2): the jump's cells are those the player stands on by the floors of the
+     search, and a jump from a cell more than a step below its takeoff is no jump yet (a ride off
+     a lift coming back up, else a gap). Either alone fixes MAP28. Again all 22: all finish, MAP11
+     in 64.9 s, MAP12 74.2 s (was 80.1), MAP24 59.4 s, MAP28 72.7 s, the rest within 0.1 s. That
+     also covers the "missed the jump" loop: a route no longer starts with a jump whose start the
+     player is below. Jotted: a run that never leaves the ground still counts as a jump when its
+     centre passes over a floor more than a step below while its box stands on the takeoff
+     (MAP28: from the lift's edge onto the lift, cell 432 to 429, both at floor 0). Harmless with
+     the right cells (a walk does it too), but it is no jump.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,

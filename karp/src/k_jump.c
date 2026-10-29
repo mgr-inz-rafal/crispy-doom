@@ -214,12 +214,14 @@ static double Ceiling(const sector_t *sector)
     return open;
 }
 
-// The cell a run starts or lands in. Searching as if a sector had moved,
-// the floors the map knows are not those of the search, but the centre is
-// over the floor it stands on then.
+// The cell a run starts or lands in (K_Map_StandingCell), by the floors of
+// the search: as if a sector had moved, the box can stand on that sector
+// with its centre over a floor far below (Doom II MAP11: strip 20 between a
+// closet and the nukage, lowered by switch 615; the jump off it to the
+// walkway started from the nukage's cell, and the bot waded in to take it).
 static int StandingCell(k_vec2_t at, double floor)
 {
-    return as_if >= 0 ? K_Map_CellAt(at.x, at.y) : K_Map_StandingCell(at.x, at.y, floor);
+    return K_Map_StandingCellOn(at.x, at.y, floor, CellFloor);
 }
 
 // Whether the box from (x0, y0) to (x1, y1) straddles the line through the

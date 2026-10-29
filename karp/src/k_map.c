@@ -1372,6 +1372,11 @@ static boolean CellOverlapsBox(const k_cell_t *cell, double x, double y, double 
 
 int K_Map_StandingCell(double x, double y, double floor)
 {
+    return K_Map_StandingCellOn(x, y, floor, CellFloor);
+}
+
+int K_Map_StandingCellOn(double x, double y, double floor, k_cellfloor_t cell_floor)
+{
     k_vec2_t point = { x, y };
     int cell = K_Map_CellAt(x, y);
     double best_distance = 1e30;
@@ -1382,7 +1387,7 @@ int K_Map_StandingCell(double x, double y, double floor)
     // under the box, say), the centre's cell is as good to plan from: the
     // player can step up again from there. A tiny cell under the box would
     // be worse, e.g. a ledge in front of a door, too shallow for the player.
-    if (cell >= 0 && floor - CellFloor(cell) <= MAX_STEP_UP)
+    if (cell >= 0 && floor - cell_floor(cell) <= MAX_STEP_UP)
     {
         return cell;
     }
@@ -1391,7 +1396,7 @@ int K_Map_StandingCell(double x, double y, double floor)
     {
         double distance;
 
-        if (fabs(CellFloor(i) - floor) >= 0.5
+        if (fabs(cell_floor(i) - floor) >= 0.5
          || !CellOverlapsBox(&map.cells[i], x, y, PLAYER_RADIUS)
          || K_Map_CellBlock(i) >= 0)
         {

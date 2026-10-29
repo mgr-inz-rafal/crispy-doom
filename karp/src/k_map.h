@@ -161,6 +161,11 @@ int K_Map_NearestCell(double x, double y, double max_distance);
 // Otherwise the cell containing the point (K_Map_CellAt).
 int K_Map_StandingCell(double x, double y, double floor);
 
+// The same, with each cell's floor from cell_floor instead of the live
+// heights (searching as if a sector had moved, k_jump.c).
+typedef double (*k_cellfloor_t)(int cell);
+int K_Map_StandingCellOn(double x, double y, double floor, k_cellfloor_t cell_floor);
+
 // The subsector containing the point, or -1 when it is on no floor.
 int K_Map_SubsectorAt(double x, double y);
 
