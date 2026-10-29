@@ -10,8 +10,8 @@
     the cfgs. A map still running after its time limit is killed.
 
     Afterwards each run's karp.log is in <Out>\logs\MAPnn.log, and one line per map is printed:
-    the time it finished in, the keys picked up and when, and the first failed goal of a map that
-    did not finish.
+    the time it finished in and the health left, the keys picked up and when, and the first failed
+    goal of a map that did not finish.
 
     The default maps are the Doom II regression set, all of which finish: MAP01, MAP02, MAP03,
     MAP04, MAP05, MAP06, MAP08, MAP09, MAP10, MAP11, MAP12, MAP13, MAP14, MAP15, MAP16, MAP17,
@@ -119,13 +119,18 @@ foreach ($map in $Maps) {
     }
 
     Copy-Item $source $log
-    $finish = Select-String -Path $log -Pattern 'level finished in ([0-9.]+) s' | Select-Object -First 1
+    $finish = Select-String -Path $log -Pattern 'level finished in ([0-9.]+) s.*?(?:, (\d+) health left)?$' |
+        Select-Object -First 1
     $keys = Select-String -Path $log -Pattern '^(\S+) BRAIN\s+GET (\w+) KEY done' | ForEach-Object {
         '{0} at {1}' -f $_.Matches[0].Groups[2].Value.ToLower(), $_.Matches[0].Groups[1].Value
     }
     $failure = Select-String -Path $log -Pattern 'failed - ' | Select-Object -First 1
 
     $text = if ($finish) { 'finished in {0} s' -f $finish.Matches[0].Groups[1].Value } else { 'not finished' }
+
+    if ($finish -and $finish.Matches[0].Groups[2].Success) {
+        $text += ', {0} health' -f $finish.Matches[0].Groups[2].Value
+    }
 
     if ($keys) {
         $text += '; keys: ' + ($keys -join ', ')

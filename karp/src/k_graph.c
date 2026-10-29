@@ -2739,6 +2739,27 @@ double K_Graph_CrossingWait(int portal, int from, double *beyond)
     return wait;
 }
 
+int K_Graph_OpensByItself(int portal_index, int from)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = &graph.portals[portal_index];
+    int to = portal->cell[0] == from ? portal->cell[1] : portal->cell[0];
+    const vldoor_t *door;
+
+    switch (K_Graph_CanCross(portal_index, from))
+    {
+        case K_CROSS_LIFT:
+            return ComingDown(to);
+
+        case K_CROSS_DOOR:
+            door = DoorOf(&sectors[map->subsectors[map->cells[to].subsector].sector]);
+            return door != NULL && door->direction == 1;
+
+        default:
+            return false;
+    }
+}
+
 const char *K_Graph_CrossingName(k_crossing_t crossing)
 {
     return crossing_names[crossing];

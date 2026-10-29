@@ -728,6 +728,15 @@ near-perfect conditions; found at level load, judged live.
   up are spent aboard, and a teleporter's freeze at its destination. Doom II MAP29: lift 172 out
   of a courtyard whose floor hurts (special 16) had its whole round trip, about 190 tics, put
   down as courtyard, and the route to the exit read about 117 health; now about 43.
+  Still counted in full, though: a wait nav spends on a dry floor (waiting dry, 3.4), and every
+  wait from now, however long the player takes to get there, so MAP20's floor 26 is counted
+  twice, once waited for in front and once ridden the last step down, and its route reads about
+  245 health where the bot loses some 25. Counting less was tried and left out: a ride down
+  counted from now (right, and MAP20 read 23) shifted MAP12 by a tic into a jump that worked,
+  5.9 s worse after; counting what comes down by itself as waited for dry led the brain to the
+  south leg in MAP29's north-east (by a tricky jump, a speedrunner's way, which failed; the
+  middle leg is right, the user), 15 s and 40 health lost. To come with planning that knows when
+  the player gets where.
 - **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
   search then gives the shortest open route if there is one, and otherwise the route with the
   cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
@@ -985,6 +994,26 @@ crossings that need an action in blue. The player presses use only through the t
 
 `K_Nav_Clear` drops the goal so the player stands still, e.g. while a sector the brain just moved
 settles.
+
+**Waiting dry.** A crossing that opens by itself (`K_Graph_OpensByItself`: a lift or floor beyond
+already on its way down, or a lift that runs for good; a door already opening) needs nothing done
+at it, so the player can get there any time before the wait is over. Where the spot in front of
+it is on a floor that hurts, the player waits back where the route steps onto that floor, 24 units
+short of it, and goes on once the wait is down to the way there and a second more (the way timed
+at 10 units a tic from a standstill, each fall's time on top, so it gets there early rather than
+late); it waits so only to save at least 32 tics on that floor, about a hit. Only on the way
+ahead: the last route cell before the crossing on a floor that does not hurt, the player's or one
+further on, with only floors that hurt from there, walked (no jump or teleporter between). It is
+judged again every tic, so where the player has to run for it at once, through the floor that
+hurts, to get there in time (the only way out of a pit, say, to a lift its switch lowers), it never
+waits. The target stops at that waypoint as at a closed crossing, and stuck detection pauses. Doom
+II MAP20: after line 557 the bot dropped off the walkway into the blood in front of floor 26, which
+the line lowers a unit a tic, and stood there 10 s while it came down; now it waits on the walkway
+8 s ("waiting at (960,-3104), off the floor that hurts ahead, for the lift at line 537: open in
+10.6 s, 1.4 s away"; "going on after waiting dry 8.2 s"), about 2 s in the blood, and finishes
+with 95 health instead of 50. A player already on such a floor, with no dry floor ahead, still
+waits where it is (going back to a dry spot behind is not done), and so does the brain when it
+waits for sectors to move (3.5).
 
 **Teleporters on the route.** A teleporter needs no action: the target stops at the point past
 its line, as at a door, but the speed profile does not slow down for it, since the teleport stops
@@ -2070,6 +2099,15 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      takes the yellow key before the exit's lift. Regression, 28 maps (MAP04 added): all
      finish; as before but MAP02 41.9 s (the red key a step earlier), MAP17 152.9 s (walk-over
      line 1200 instead of 1201, for the new spots), MAP19 101.7 s (the same route).
+   - Waiting dry (follow-up 15.3, 3.4): the bot no longer idles on a floor that hurts in front of
+     a crossing that opens by itself when a dry floor lies on the way before it. MAP20 waits 8.2 s
+     on the walkway instead of 10.4 s in the blood for floor 26. The level's end now logs the
+     health left, and the regression prints it. Regression, 28 maps, against the same build with
+     the change off: the same in all but MAP20 (67.4 s, 95 health; was 67.2 s, 50) and MAP21
+     (88 health, was 93: the same route, a tic earlier from the first seconds, from the build
+     alone, as without the change; a hit of nukage falls differently). Tried and left out (3.3):
+     counting such waits as less in the route's damage and time (MAP12, MAP27 and MAP29 went
+     other ways; MAP29's south leg, whose tricky jump failed, the user).
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -2280,7 +2318,12 @@ Each milestone builds and runs; the user reviews and commits between milestones.
           wait there; where that is on a floor that hurts, it is better to wait by the switch, or
           anywhere dry, until the wait is nearly over. Seen in MAP11's starting pit, and at the
           slowly sinking floor by the blood lake on MAP20 (10 s in the blood for sector 26). The
-          bot should not idle on a floor that hurts.
+          bot should not idle on a floor that hurts. Done for the way ahead (3.4, waiting dry):
+          the user's point, that sometimes the only way out is a run through the nukage at once
+          to catch a lift, is kept by judging it every tic. MAP11's pit no longer waits (its lift
+          is fast, down in 0.3 s; the whole pit is nukage anyway). Still to do: going back to a
+          dry spot from a floor that hurts, the brain's waits for moving sectors, and the route's
+          damage counting waits nav spends dry (3.3).
        4. Radiation suits as something to fetch when the way crosses a floor that hurts: MAP24's
           bot drops into the big nukage pit and runs across it to the teleporter, past a suit
           nearby that would save health. Suits often lie on the floor that hurts themselves, so
@@ -2300,14 +2343,16 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  02, 03, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28,
-  31 (all finish, in about 155 s) in parallel, with
-  `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
+  02, 03, 04, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27,
+  28, 29, 31 (all finish, in about 165 s) in parallel, with
+  `-quitonexit -nosound` added, and prints per map the finish time and health left, keys and
+  first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the
   exe's folder, which instances sharing it would overwrite. Seven maps take 77 s instead of over
   five minutes, with the same results to the tenth of a second as one at a time. `-Maps '24'
-  -Seconds 150` runs other maps.
+  -Seconds 150` runs other maps. A build that only computes differently (the same decisions)
+  can still shift a map by a tic, a tenth of a second or a hit of nukage (MAP14, MAP21).
 - Regression (no Karp params): no console window, mouse grabbed as usual, closing the window
   behaves as before.
 - `-autoplay` alone: no console window; log lines in stdout and `karp.log`.

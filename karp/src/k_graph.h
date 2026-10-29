@@ -180,6 +180,13 @@ int K_Graph_PinchNarrow(int cell, k_vec2_t at);
 // rest is spent in the cell it crosses from.
 double K_Graph_CrossingWait(int portal, int from_cell, double *beyond);
 
+// Whether a crossing passable after a wait opens with nothing to do at it:
+// a lift or floor beyond already on its way down (or a lift that runs for
+// good), a door already opening. The player may get there any time before
+// the wait is over, and spend it elsewhere (k_nav.c: off a floor that
+// hurts).
+int K_Graph_OpensByItself(int portal, int from_cell);
+
 // The teleporter (index into teleports) that crossing the portal out of
 // the given cell sends the player to, or -1. Live: a one-shot teleport
 // line loses its special once used. Whatever the heights say: a crossing

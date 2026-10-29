@@ -1769,8 +1769,9 @@ void K_Brain_LevelCompleted(int secret)
 {
     char how[96];
 
-    M_snprintf(how, sizeof(how), "level finished in %.1f s through the %s exit",
-               (double) leveltime / TICRATE, secret ? "secret" : "normal");
+    M_snprintf(how, sizeof(how), "level finished in %.1f s through the %s exit, %.0f health "
+               "left", (double) leveltime / TICRATE, secret ? "secret" : "normal",
+               K_Map_PlayerHealth());
 
     if (depth > 0 && goals[0].type == GOAL_EXIT)
     {

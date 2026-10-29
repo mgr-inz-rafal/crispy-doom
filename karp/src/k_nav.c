@@ -160,6 +160,18 @@
 // The highest step the player climbs (P_TryMove).
 #define MAX_CLIMB 24.0
 
+// Waiting dry: a crossing that opens by itself, in front of which the
+// player would stand on a floor that hurts, is waited for where the route
+// steps onto that floor, DRY_BACK short of it. The player goes on once the
+// wait is down to the way there and DRY_MARGIN tics more, the way timed at
+// DRY_SPEED (slower than running, from a standstill) with each fall's time
+// on top, so that it gets there early rather than late. It waits dry only
+// to save DRY_SAVING tics or more on that floor (a hit comes every 32).
+#define DRY_BACK 24.0
+#define DRY_MARGIN 35.0
+#define DRY_SPEED 10.0
+#define DRY_SAVING 32.0
+
 // Sliding along walls: within AVOID_DISTANCE of anything that stops the
 // player (its radius is 16), the part of the velocity toward it is
 // dropped; touching it, the player eases away at AVOID_PUSH.
@@ -241,6 +253,13 @@ static boolean cross_first;
 static k_vec2_t cross_to;
 static k_navtuning_t tuning = { 16.7, 1.5, 24.0, 11.25 };
 static action_t action;
+
+// Waiting dry (DRY_BACK): the waypoint where the route steps onto the floor
+// that hurts, which the target stops at, -1 when not; how far short of it
+// the player stands, and since when (status.tics).
+static int dry_point = -1;
+static double dry_back;
+static int dry_since;
 
 static sent_t sent[SENT_SIZE];
 
@@ -482,12 +501,30 @@ static int NextClosedCrossing(void)
 }
 
 // The furthest waypoint the target may move to: not past a crossing that
-// is not open yet.
+// is not open yet, nor where the player waits dry.
 static int TargetLimit(void)
 {
     int r = NextClosedCrossing();
+    int limit = r >= 0 ? ExitPoint(r) : path.num_points - 1;
 
-    return r >= 0 ? ExitPoint(r) : path.num_points - 1;
+    return dry_point >= 0 ? SDL_min(limit, dry_point) : limit;
+}
+
+// Where the player waits dry: dry_back short of dry_point, back along the
+// leg into it.
+static k_vec2_t DrySpot(void)
+{
+    k_vec2_t from = path.points[dry_point - 1], to = path.points[dry_point];
+    double length = Distance(from, to);
+    k_vec2_t spot = to;
+
+    if (length > 1e-6)
+    {
+        spot.x -= (to.x - from.x) / length * dry_back;
+        spot.y -= (to.y - from.y) / length * dry_back;
+    }
+
+    return spot;
 }
 
 //
@@ -618,10 +655,12 @@ static double SpeedLimit(const body_t *body, int target)
 
     for (k = target; k <= last && along < LOOKAHEAD; ++k)
     {
-        double corner = k == last ? 0.0 : CornerSpeed(k);
+        // Waiting dry, the stop is short of the waypoint.
+        double corner = k == last || k == dry_point ? 0.0 : CornerSpeed(k);
+        double ahead = k == dry_point ? SDL_max(along - dry_back, 0.0) : along;
         double braking = careful[k] ? tuning.braking * CAREFUL_BRAKING : tuning.braking;
 
-        limit = SDL_min(limit, sqrt(corner * corner + 2.0 * braking * along));
+        limit = SDL_min(limit, sqrt(corner * corner + 2.0 * braking * ahead));
 
         // Past a stop, a teleporter or a jump's run-up start, nothing ahead
         // needs slowing for now.
@@ -914,6 +953,12 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     if (OnJump(target))
     {
         SteerJump(body, target, command);
+        return;
+    }
+
+    if (target == dry_point)
+    {
+        SteerToStop(body, DrySpot(), NULL, command);
         return;
     }
 
@@ -1682,6 +1727,7 @@ static void MarkCareful(void)
 static void StartRoute(void)
 {
     MarkCareful();
+    dry_point = -1;
     status.target = 1;
     status.route_cell = 0;
     status.remaining = path.length;
@@ -1920,6 +1966,102 @@ static double Remaining(k_vec2_t at)
     return remaining;
 }
 
+static boolean CellHurts(int cell)
+{
+    const k_map_t *map = K_Map_Get();
+
+    return K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0;
+}
+
+// How long the way from route point `from` to `to` takes at the most, as
+// waiting dry times it (DRY_SPEED).
+static double TravelTics(int from, int to)
+{
+    double tics = 0.0;
+    int k;
+
+    for (k = from; k < to; ++k)
+    {
+        double fall = CellFloor(path.cells[path.leg_cells[k - 1]])
+                    - CellFloor(path.cells[path.leg_cells[k]]);
+
+        tics += Distance(path.points[k], path.points[k + 1]) / DRY_SPEED;
+
+        if (fall > MAX_CLIMB)
+        {
+            tics += sqrt(2.0 * fall) + 1.0;
+        }
+    }
+
+    return tics;
+}
+
+// Whether the player waits dry, and where (dry_point): the first crossing
+// ahead that is not open opens by itself (K_Graph_OpensByItself), the cell
+// in front of it hurts, and so do the route cells back to the last dry one,
+// the player's or one ahead, walked from there; and the wait outlasts the
+// way there by DRY_MARGIN (to start, by DRY_SAVING more). Doom II MAP20:
+// after line 557 the bot dropped off the walkway into the blood in front of
+// floor 26, and stood there 10 s while it came down. Judged again every
+// tic: where the player has to run for it at once, through the floor that
+// hurts, to get there in time, it never waits.
+static void UpdateDry(void)
+{
+    const k_graph_t *graph = K_Graph_Get();
+    int was = dry_point;
+    int r = NextClosedCrossing();
+    int start = SDL_max(status.route_cell, 0);
+    double wait = 0.0, travel = 0.0;
+    int d, k, point, exit_point;
+
+    dry_point = -1;
+
+    if (r >= 0 && action.kind == K_ACTION_NONE && jump_phase == JUMP_NONE
+     && !TeleportOut(r) && CellHurts(path.cells[r])
+     && K_Graph_OpensByItself(path.portals[r], path.cells[r]))
+    {
+        for (d = r - 1; d >= start && CellHurts(path.cells[d]); --d)
+        {
+        }
+
+        point = d >= start ? ExitPoint(d) : 0;
+        exit_point = ExitPoint(r);
+
+        for (k = point - 1; k >= 0 && k < exit_point && path.legs[k] == K_LEG_WALK; ++k)
+        {
+        }
+
+        if (point >= 1 && k == exit_point)
+        {
+            dry_back = SDL_min(DRY_BACK,
+                               0.5 * Distance(path.points[point - 1], path.points[point]));
+            wait = K_Graph_CrossingWait(path.portals[r], path.cells[r], NULL);
+            travel = TravelTics(point, exit_point) + dry_back / DRY_SPEED;
+
+            if (wait > travel + DRY_MARGIN + (was == point ? 0.0 : DRY_SAVING))
+            {
+                dry_point = point;
+            }
+        }
+    }
+
+    if (dry_point >= 0 && was != dry_point)
+    {
+        k_vec2_t spot = DrySpot();
+
+        dry_since = status.tics;
+        K_Log(K_LOG_NAV, K_LOG_INFO, "waiting at (%.0f,%.0f), off the floor that hurts "
+              "ahead, for the %s at line %d: open in %.1f s, %.1f s away", spot.x, spot.y,
+              CrossingOut(r) == K_CROSS_DOOR ? "door" : "lift",
+              graph->portals[path.portals[r]].line, wait / TICRATE, travel / TICRATE);
+    }
+    else if (dry_point < 0 && was >= 0)
+    {
+        K_Log(K_LOG_NAV, K_LOG_INFO, "going on after waiting dry %.1f s",
+              (double) (status.tics - dry_since) / TICRATE);
+    }
+}
+
 k_navstate_t K_Nav_Tick(void)
 {
     k_pose_t pose;
@@ -1961,6 +2103,7 @@ k_navstate_t K_Nav_Tick(void)
 
     last_at = at;
     last_floor = pose.floor;
+    UpdateDry();
 
     if (!Progress(at, &pose, teleported) || !UpdateAction(at, status.speed))
     {
@@ -2002,9 +2145,9 @@ k_navstate_t K_Nav_Tick(void)
         status.stuck = 0;
     }
 
-    // Standing still is the point while working a door or lift; the action
-    // has its own time limits.
-    if (action.kind != K_ACTION_NONE && action.phase != PHASE_APPROACH)
+    // Standing still is the point while working a door or lift, or waiting
+    // dry; the action has its own time limits, and the wait its end.
+    if ((action.kind != K_ACTION_NONE && action.phase != PHASE_APPROACH) || dry_point >= 0)
     {
         history_count = 0;
         history_next = 0;
@@ -2065,6 +2208,7 @@ void K_Nav_Reset(void)
 
     have_goal = false;
     cross_first = false;
+    dry_point = -1;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     jump_phase = JUMP_NONE;
@@ -2307,6 +2451,7 @@ void K_Nav_Clear(void)
 {
     have_goal = false;
     cross_first = false;
+    dry_point = -1;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     status.goal_line = -1;
