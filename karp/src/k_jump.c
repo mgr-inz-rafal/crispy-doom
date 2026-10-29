@@ -9,7 +9,8 @@
 //
 //	Takeoff edges are the portals the floor drops more than 24 across.
 //	From points along each, rays go out straight and to either side; each
-//	gets as long a run-up as the takeoff floor allows behind the edge, and
+//	gets as long a run-up as the takeoff floor allows behind the edge (or,
+//	where that makes no jump, a longer one down steps), and
 //	the run decides: landed on a floor more than 24 above the lowest one
 //	passed over (one the player could not climb to from there), fell in,
 //	or ran into something. Whatever lies in between - one pit, a sidewalk,
@@ -58,10 +59,15 @@
 // up to RUNUP_MAX, checked every RUNUP_STEP; none at all may do. A gap
 // narrower than the player needs no speed (Doom II MAP08: a strip of slime
 // 17 wide behind the yellow door, which leaves 22 units to take off from).
-// A short run-up of RUNUP_SHORT is tried too.
+// A short run-up of RUNUP_SHORT is tried too. Where neither gives a jump, a
+// long one of up to RUNUP_LONG, over floors a step up or down from one
+// another (Doom II MAP20: off the foot of a walkway that steps down 8 at a
+// time, over 240 units of blood, which 128 units of run-up are too short
+// for).
 #define RUNUP_MAX 128.0
 #define RUNUP_STEP 8.0
 #define RUNUP_SHORT 8.0
+#define RUNUP_LONG 320.0
 
 // Takeoff points along an edge, one per SAMPLE_SPACING; rays straight out
 // and at these angles to either side, in degrees. The steep ones reach a
@@ -73,8 +79,10 @@ static const double ray_angles[] = { 0.0, 25.0, -25.0, 45.0, -45.0 };
 
 // The margin (the user: no jump that needs near-perfect conditions): it
 // must still land with MARGIN_THRUST of the thrust, and from starts
-// MARGIN_SIDE to either side.
+// MARGIN_SIDE to either side. After a long run-up, with MARGIN_LONG of it
+// (the user's choice): MAP20's jump at full speed has about 11% to spare.
 #define MARGIN_THRUST 0.85
+#define MARGIN_LONG 0.90
 #define MARGIN_SIDE 6.0
 
 // A run gives up after this many tics (about 1100 units at full speed).
@@ -623,8 +631,9 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
         // On the ground, its centre over the floor it stands on: landed if
         // that is too high to climb to from the lowest floor passed over,
         // and it stops there; if it cannot stop, it runs on (a pillar's top
-        // on the way). Fell if it is down among them. Over an edge, the box
-        // still stands on the floor it is leaving.
+        // on the way). Fell if it is down among them. Down a step with
+        // nothing lower passed over, the run-up goes on from there. Over an
+        // edge, the box still stands on the floor it is leaving.
         if (body.z <= body.floorz && fabs(Floor(under) - body.floorz) < 0.01)
         {
             if (body.floorz > lowest + MAX_STEP)
@@ -646,6 +655,11 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
                 run->result = RUN_FELL;
                 return;
             }
+            else if (body.floorz < takeoff - 0.01 && lowest > body.floorz - 0.01)
+            {
+                takeoff = body.floorz;
+                left_ground = false;
+            }
         }
     }
 
@@ -659,13 +673,14 @@ static boolean Lands(const run_t *run, int sector)
 }
 
 // The jump from a run-up's start along dir: kept if it lands with the
-// margin, and is the shortest so far between its cells (one already in the
-// graph stays as it is). If the margin fails to one side only, the start is
-// moved MARGIN_SIDE the other way and tried once more: an opening a little
-// wider than the player is only taken near its middle, which samples along
-// an edge can miss (Doom II MAP14: the window to the red key, 64 wide,
-// whose edge is two portals sampled 16 off its middle).
-static void TryStart(k_vec2_t start, k_vec2_t dir, boolean recentred)
+// margin (that share of the thrust), and is the shortest so far between its
+// cells (one already in the graph stays as it is). If the margin fails to
+// one side only, the start is moved MARGIN_SIDE the other way and tried
+// once more: an opening a little wider than the player is only taken near
+// its middle, which samples along an edge can miss (Doom II MAP14: the
+// window to the red key, 64 wide, whose edge is two portals sampled 16 off
+// its middle). Returns whether there is a jump from there, kept or not.
+static boolean TryStart(k_vec2_t start, k_vec2_t dir, double margin, boolean recentred)
 {
     k_vec2_t side = { -dir.y, dir.x };
     double from_floor, ceilingz;
@@ -678,7 +693,7 @@ static void TryStart(k_vec2_t start, k_vec2_t dir, boolean recentred)
     // Searching as if a sector had moved, only the jumps that go over it.
     if (run.result != RUN_LANDED || (as_if >= 0 && !run.as_if_used))
     {
-        return;
+        return false;
     }
 
     // The floor the run-up starts on: the takeoff floor's, or a step below
@@ -691,14 +706,14 @@ static void TryStart(k_vec2_t start, k_vec2_t dir, boolean recentred)
 
     if (from_cell < 0 || to_cell < 0 || from_cell == to_cell)
     {
-        return;
+        return false;
     }
 
-    Run(start, dir, THRUST * MARGIN_THRUST, &check);
+    Run(start, dir, THRUST * margin, &check);
 
     if (!Lands(&check, run.land_sector))
     {
-        return;
+        return false;
     }
 
     for (k = -1; k <= 1; k += 2)
@@ -722,10 +737,10 @@ static void TryStart(k_vec2_t start, k_vec2_t dir, boolean recentred)
             k_vec2_t moved = { start.x - side.x * failed_side * MARGIN_SIDE,
                                start.y - side.y * failed_side * MARGIN_SIDE };
 
-            TryStart(moved, dir, true);
+            return TryStart(moved, dir, margin, true);
         }
 
-        return;
+        return false;
     }
 
     for (i = 0; i < num_jumps; ++i)
@@ -742,7 +757,7 @@ static void TryStart(k_vec2_t start, k_vec2_t dir, boolean recentred)
          || hypot(run.land.x - start.x, run.land.y - start.y)
             >= hypot(jumps[i].land.x - jumps[i].start.x, jumps[i].land.y - jumps[i].start.y))
         {
-            return;
+            return true;
         }
     }
     else
@@ -772,6 +787,8 @@ static void TryStart(k_vec2_t start, k_vec2_t dir, boolean recentred)
     jump->as_if_floor = as_if_floor;
     jump->as_if_ceiling = as_if_ceiling;
     jump->door = run.door;
+    jump->margin = margin;
+    return true;
 }
 
 // The point `back` behind `at`, against dir.
@@ -782,24 +799,23 @@ static k_vec2_t Back(k_vec2_t at, k_vec2_t dir, double back)
     return point;
 }
 
-// The jumps off the edge at `at`, along dir, from the floor and sector it
-// drops from: with the longest run-up there is room for, and with a short
-// one, which a gap that needs little speed takes without first backing up
-// (Doom II MAP08: pillars that sink once stepped on).
-static void TryJump(k_vec2_t at, k_vec2_t dir, double from_floor, int from_sector)
+// How far behind the edge at `at` a run-up along dir can start, up to max.
+// A plain one stays on the takeoff floor (doors open, as in a run), or on
+// floors below it that the player only climbs from, up to a step below:
+// going up a step costs no speed (Doom II MAP14: the jump over a channel to
+// the red key starts from a step 16 deep, run up to from the corridor
+// before it). With steps, it also goes over floors that step down on the
+// way to the edge, each within a step of the last. Its centre never crosses
+// a door's side: nav would not know to open the door on the way.
+static double RunUp(k_vec2_t at, k_vec2_t dir, double from_floor, int from_sector, double max,
+                    boolean steps)
 {
     double back = 0.0, last = from_floor;
     double floorz, ceilingz;
 
-    // The run-up, behind the edge on the takeoff floor (doors open, as in a
-    // run), or on floors below it that the player only climbs from, up to a
-    // step below: going up a step costs no speed (Doom II MAP14: the jump
-    // over a channel to the red key starts from a step 16 deep, run up to
-    // from the corridor before it). Its centre never crosses a door's side:
-    // nav would not know to open the door on the way.
     doors_open = true;
 
-    while (back + RUNUP_STEP <= RUNUP_MAX)
+    while (back + RUNUP_STEP <= max)
     {
         double x = at.x - dir.x * (back + RUNUP_STEP);
         double y = at.y - dir.y * (back + RUNUP_STEP);
@@ -807,9 +823,11 @@ static void TryJump(k_vec2_t at, k_vec2_t dir, double from_floor, int from_secto
         int index = (int) (sector - sectors);
 
         if (!CheckPosition(x, y, &floorz, &ceilingz)
-         || floorz > last + 0.01 || floorz < from_floor - MAX_STEP - 0.01
+         || floorz > last + (steps ? MAX_STEP : 0.0) + 0.01
+         || floorz < from_floor - MAX_STEP - 0.01
+         || (steps && floorz < last - MAX_STEP - 0.01)
          || ceilingz - floorz < PLAYER_HEIGHT
-         || Floor(sector) < from_floor - MAX_STEP - 0.01
+         || Floor(sector) < (steps ? floorz : from_floor) - MAX_STEP - 0.01
          || (index != from_sector && (K_Graph_IsDoor(index) || K_Graph_IsDoor(from_sector))))
         {
             break;
@@ -820,12 +838,35 @@ static void TryJump(k_vec2_t at, k_vec2_t dir, double from_floor, int from_secto
     }
 
     doors_open = false;
+    return back;
+}
 
-    TryStart(Back(at, dir, back), dir, false);
+// The jumps off the edge at `at`, along dir, from the floor and sector it
+// drops from: with the longest run-up there is room for, and with a short
+// one, which a gap that needs little speed takes without first backing up
+// (Doom II MAP08: pillars that sink once stepped on). If neither makes it,
+// with a long run-up over steps, if that is longer.
+static void TryJump(k_vec2_t at, k_vec2_t dir, double from_floor, int from_sector)
+{
+    double back = RunUp(at, dir, from_floor, from_sector, RUNUP_MAX, false);
+    double far;
+    boolean found = TryStart(Back(at, dir, back), dir, MARGIN_THRUST, false);
 
     if (back > RUNUP_SHORT)
     {
-        TryStart(Back(at, dir, RUNUP_SHORT), dir, false);
+        found = TryStart(Back(at, dir, RUNUP_SHORT), dir, MARGIN_THRUST, false) || found;
+    }
+
+    if (found)
+    {
+        return;
+    }
+
+    far = RunUp(at, dir, from_floor, from_sector, RUNUP_LONG, true);
+
+    if (far > back)
+    {
+        TryStart(Back(at, dir, far), dir, MARGIN_LONG, false);
     }
 }
 
@@ -921,9 +962,9 @@ static void LogJump(int index)
     }
 
     K_Log(K_LOG_MAP, K_LOG_INFO, "jump from (%.0f,%.0f) cell %d to (%.0f,%.0f) cell %d: "
-          "%.0f units off the edge at %.1f units a tic%s", jump->start.x, jump->start.y,
+          "%.0f units off the edge at %.1f units a tic%s%s", jump->start.x, jump->start.y,
           jump->from_cell, jump->land.x, jump->land.y, jump->to_cell, jump->flight,
-          jump->speed, as_if_text);
+          jump->speed, jump->margin > MARGIN_THRUST ? " after a long run-up" : "", as_if_text);
 }
 
 // The box round a sector's lines, grown by AS_IF_REACH; false if it has none.
@@ -1126,7 +1167,7 @@ int K_Jump_Possible(int jump)
 
     if (possible[jump])
     {
-        Run(j->start, j->dir, THRUST * MARGIN_THRUST, &run);
+        Run(j->start, j->dir, THRUST * j->margin, &run);
         possible[jump] = Lands(&run, j->land_sector);
     }
 

@@ -14,8 +14,8 @@
     did not finish.
 
     The default maps are the Doom II regression set, all of which finish: MAP01, MAP02, MAP03,
-    MAP05, MAP10, MAP12, MAP16, MAP17, MAP18, MAP19, MAP21, MAP24, MAP26, MAP27, MAP28 and
-    MAP31.
+    MAP05, MAP06, MAP08, MAP09, MAP10, MAP11, MAP12, MAP13, MAP14, MAP15, MAP16, MAP17, MAP18,
+    MAP19, MAP20, MAP21, MAP24, MAP26, MAP27, MAP28 and MAP31.
 
 .PARAMETER Iwad
     The Doom II IWAD. Defaults to the DOOM2_IWAD environment variable.
@@ -27,8 +27,9 @@
     Time limit per map, unless Limits names it.
 
 .PARAMETER Limits
-    Per-map time limits in seconds, e.g. @{ '19' = 150 }. MAP19 takes about 102 s and MAP17
-    about 152 s, so they get 150 and 200 by default.
+    Per-map time limits in seconds, e.g. @{ '19' = 150 }. MAP13 takes about 93 s, MAP09 102 s,
+    MAP19 102 s and MAP17 153 s, so they get 150, 150, 150 and 200 by default; the rest take
+    under 81 s.
 
 .PARAMETER Build
     The folder with crispy-doom.exe and its DLLs. Defaults to build\src\Release in this repo.
@@ -44,10 +45,10 @@
 #>
 param(
     [string]$Iwad = $env:DOOM2_IWAD,
-    [string[]]$Maps = @('01', '02', '03', '05', '10', '12', '16', '17', '18', '19', '21', '24', '26',
-                        '27', '28', '31'),
+    [string[]]$Maps = @('01', '02', '03', '05', '06', '08', '09', '10', '11', '12', '13', '14', '15',
+                        '16', '17', '18', '19', '20', '21', '24', '26', '27', '28', '31'),
     [int]$Seconds = 120,
-    [hashtable]$Limits = @{ '17' = 200; '19' = 150 },
+    [hashtable]$Limits = @{ '09' = 150; '13' = 150; '17' = 200; '19' = 150 },
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),
     [string]$Out = (Join-Path $PSScriptRoot '..\..\build\karp-regress')
 )

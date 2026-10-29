@@ -1434,6 +1434,46 @@ void K_Map_SectorHeights(int sector, double *floor, double *ceiling)
     *ceiling = FixedToMap(sectors[sector].ceilingheight);
 }
 
+double K_Map_FloorDamage(int sector)
+{
+    boolean suit;
+
+    if (sector < 0 || sector >= numsectors)
+    {
+        return 0.0;
+    }
+
+    // P_PlayerInSpecialSector: once every 32 tics on the floor. A radiation
+    // suit keeps out all of 5 and 7, and of 4 and 16 all but 5 in 256.
+    suit = players[consoleplayer].powers[pw_ironfeet] > 0;
+
+    switch (sectors[sector].special)
+    {
+        case 5:
+            return suit ? 0.0 : 10.0 / 32.0;
+
+        case 7:
+            return suit ? 0.0 : 5.0 / 32.0;
+
+        case 4:
+        case 16:
+            return suit ? 0.0 : 20.0 / 32.0;
+
+        case 11:
+            return 20.0 / 32.0;
+
+        default:
+            return 0.0;
+    }
+}
+
+double K_Map_PlayerHealth(void)
+{
+    const mobj_t *mo = players[consoleplayer].mo;
+
+    return mo != NULL ? (double) mo->health : 100.0;
+}
+
 int K_Map_BlockStands(int block)
 {
     int b;

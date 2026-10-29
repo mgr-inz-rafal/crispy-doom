@@ -577,6 +577,17 @@ near-perfect conditions; found at level load, judged live.
   pillars sink once stepped on, and backing up along one cost the time it gives). MAP02: 9 jumps
   in 1.1 ms; MAP24: 64 off 500 edges in 20 ms. (A rough count over the WAD before building it:
   about 40 candidates a map, at most 173 on MAP14, a few percent of the portals: no bloat.)
+- **Long run-ups.** Where neither run-up gives a jump off a point, a long one is tried: up to 320
+  units, over floors within a step of one another, up or down, kept with 90% of the thrust
+  instead of 85% (the user's choice), the margin each jump keeps (`k_jump_t.margin`) and is judged
+  with live. The run counts a step down with nothing lower passed over as more run-up, and so
+  does nav (3.4). Doom II MAP20: the way to line 271 is a jump off the foot of a walkway that steps
+  down from 208 to 160, 8 or 16 at a time, over 240 units of blood onto a ledge in a wall opening
+  (floor 72, ceiling 200); it needs about 14 units a tic, which 128 units of level floor do not
+  give. At full speed it has about 11% to spare, short of the 15% the usual margin asks (the user
+  took it at a run, coming down the walkway from a teleporter). Only edges with no jump get one,
+  so the jumps found before stay as they were. MAP20: 112 jumps, 41 more as if moved, 150 ms
+  (113 before).
 - **Doors on the run-up.** While the player is still on the takeoff floor, manual doors count as
   open (at their open height): its box can overlap a door it came through, and standing there
   holds it open. MAP08's hop onto the first sinking pillar starts from a strip 8 wide behind the
@@ -672,6 +683,20 @@ near-perfect conditions; found at level load, judged live.
   enters its cell there, a point (for the pinch check, as a teleporter's destination); the way
   out of the run-up's cell is its start. A jump that does not work now is a blocked crossing, with
   the penalty below.
+- **Floors that hurt** (nukage, blood: specials 5, 7, 4, 16, 11; `K_Map_FloorDamage`, none under a
+  radiation suit as far as it keeps the damage out). Walking across such a cell, and waiting in
+  it for a door or lift, costs the health it takes at running speed, a point as much as 100 units
+  of running: a short wade beats a long way round. If the route found would take more than half
+  the player's health, the search runs again at 100000 a point, a tenth of a fixable blocked
+  crossing (3.5): then any dry way wins, and so does fixing one first. A jump's flight costs
+  nothing, the player is off the floor. Doom II MAP20: with no such cost, the bot went for line
+  271 by the jump above, but walked to it for half a minute over the big blood floor and died
+  (the user saw it: their own way, with more health and armour); the dry way needed a door
+  opened by switch 73 first, and an open route always beats a blocked one. One cost alone did
+  not do: at 100000 a point from the start, MAP11's bot raised a floor by two switches and two
+  lift rides (24 s) to stay out of a little nukage, and MAP26 lost 11 s. The route's damage is in
+  the log ("about 6 health off floors that hurt"). A stand-in, by the user's wish, until the bot
+  knows its health, armour and suits; armour is not counted.
 - **Blocked crossings are not skipped but cost a large penalty**, more than any open route. One
   search then gives the shortest open route if there is one, and otherwise the route with the
   cheapest blocked crossings, whose first blocked crossing tells why the goal cannot be reached
@@ -953,7 +978,16 @@ gone round). The speed profile does not brake for anything past it.
   jump", and the route is replanned. A jump that stops working on the way (heights moved) is
   replanned too, as any crossing that closes.
 - The log shows "running up for the jump to (x,y)", "off the edge at (x,y) at v units a tic" and
-  "landed at (x,y)", and no "dropped" while flying over the gap.
+  "landed at (x,y)", and no "dropped" while flying over the gap. Off the edge means off the
+  ground over a floor more than a step below the one the run-up was last on: a step down on the
+  way is still run-up (MAP20's long run-up down a walkway, 3.2.2).
+- Not yet: a run-up's start is approached like any corner, at up to a fifth of top speed through
+  a sharp turn and turning within 32 units of it. A short run-up has no room to undo that: MAP09's
+  jump out of door 33 (26 units of run-up, 7.4 a tic at the edge from a standing start) was left
+  at 2.7 and missed once (5 s). Stopping at the start and driving right up to it fixed that jump,
+  but then the hop just before it (37 units, across a narrow gap, never off the ground) was not
+  seen to be over and the bot ran on along its line into a lift's pit; tried and taken back, to
+  look into.
 
 **Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
 before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
@@ -1448,6 +1482,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      and with no way left while the stairs rose it waited and planned again (3.5). From the top
      of the stairs, though, the way on is a **jump** from the central tower to the southwest
      region with the yellow door, per the user (follow-up 7). Skipped for now, to come back to.
+     (Finished since, see the jumps below.)
      The failure log now gives every candidate's reason, which showed both exits blocked further
      on, past the stairs.
    - **Setting off right after a press** (3.5): the bot no longer stands at a switch until what
@@ -1507,7 +1542,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      walk-over line 557, tag 15, which lowers the way to the exit; the room with line 271, which
      opens the door to a teleport pad) climbs out of the big floor at -72 by a step of 144 or
      264. The way up takes a **jump** over a gap, per the user (follow-up 7). Skipped for now, to
-     come back to. Seen on the way: the pad (lines 874-877, tag 16) sits inside walk-over lines
+     come back to. (Finished since, see the jumps below: the way up is a teleporter onto a block
+     that sinks to the walkway; the jump is on the way to it.) Seen on the way: the pad (lines 874-877, tag 16) sits inside walk-over lines
      300-303 that lower the block it teleports onto, from 400 (above the walkway's ceiling) to
      176, so stepping onto the pad does both, in the right order.
    - MAP21: after the first teleporter the route ran past a yellow-key block (sector 58, doors on
@@ -1875,6 +1911,32 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      centre passes over a floor more than a step below while its box stands on the takeoff
      (MAP28: from the lift's edge onto the lift, cell 432 to 429, both at floor 0). Harmless with
      the right cells (a walk does it too), but it is no jump.
+   - MAP15: **finished in 48.6 s** with no changes, through the secret exit (lines 1666-1669, a
+     W1 box to MAP31): the yellow key, switch 634 (the stairs), switch 1135 reached by a jump,
+     walk-over line 1199, and a second jump on the way to the exit. At the end 4 of 8 exit lines
+     were reachable, presumably the secret box's four, so the normal exit (lines 1686-1689) looked
+     out of reach; not looked into, either exit is fine for now (follow-up 14).
+   - MAP20: GO TO EXIT failed at once (line 557, which lowers the way to the exit, behind a step of
+     264). The user played it through (the trace, 3.10, 82.9 s): line 271 opens door 187 to a
+     teleporter pad inside walk-over lines 300-303, which lower block 30 from 399 to the walkway
+     (176) as the pad teleports the player onto it; the block rides the player down, and line 557
+     is a few steps away. On the way to line 271, the jump the user remembered: off the foot of a
+     walkway stepping down to 160, over 240 units of blood, onto a ledge at 72. It needed long
+     run-ups down steps with a smaller margin (3.2.2, the user's choice over strafe-running or
+     skipping the map). Then the bot walked to it over the blood floor and died: floors that hurt
+     now cost what they take (3.3). **Finished in 67.2 s**, by the user's way: switch 73 for door
+     120, the teleporter, the jump (off at 16.7 a tic), line 271, the pad onto block 30, line
+     557, lines 513 and 512, the teleporter to the exit. Seen, not fixed: after line 557 the bot
+     dropped into the blood strip in front of sector 26 and waited there 10.4 s for it to come
+     down (the user waited on the walkway); the wait is only possible from the blood side, so
+     where to wait is for nav to choose. And the route to line 380 on MAP09 reads "about 63 health
+     off floors that hurt" (no dry way, so taken anyway): to be checked whether that is real or
+     an overestimate of a lift wait.
+   - Regression with MAP15 and MAP20 (24 maps; the long run-ups and floors that hurt): all finish.
+     Unchanged within 0.1 s: MAP01-05, 06, 08, 10, 11 (64.9), 12, 13, 14, 16, 17, 18, 19, 27, 31.
+     Slower: MAP09 101.9 s (97.6; the missed hop out of door 33 in 3.4), MAP21 56.9 (56.1), MAP24
+     60.2 (59.4), MAP26 50.7 (49.2), MAP28 73.9 (72.7). MAP15 48.4 s, MAP20 67.2 s. Both added
+     to the script's default list.
 
    **Doors and lifts** (manual ones) came first, ahead of the follow-ups below (sections 3.2.1,
    3.4). The edge cases noted for them: doors move at different speeds and lifts can take long,
@@ -1989,8 +2051,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       checked by the engine's rules, found at level load and judged live. MAP02 and MAP21 finish
       (MAP24 takes a jump too). MAP06, MAP08, MAP09, MAP11, MAP13 and MAP14 finish too; jumps that
       only appear once a sector has moved are searched for again when it stops, and at level load
-      as if it had moved (3.2.2). Left: the maps not tried yet (MAP15, 20, 22, 25, 29), and MAP04
-      (see the playtests).
+      as if it had moved (3.2.2). MAP15 and MAP20 finish too (MAP20 with long run-ups down steps).
+      Left: the maps not tried yet (MAP22, 25, 29), and MAP04 (see the playtests).
    8. **Teleporters.** Done (3.2.1, 3.3, 3.4): crossing a teleport line from its front side leads
       to the destination, judged live; the pathfinder's heuristic allows for the shortcut, and nav
       runs across the line and carries on from the destination, knowing the 18-tic freeze. Not
@@ -2068,6 +2130,11 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        the switch (Doom II MAP02's fast door, its only blue key given up before). A one-way
        door like MAP27's has no switch to push from behind, so that case still falls to
        follow-up 11.
+   14. **Which exit.** GO TO EXIT takes every exit line or switch as a candidate, normal or
+       secret, and goes for the cheapest it can reach (Doom II MAP15 finished through the secret
+       exit to MAP31, the normal one looking out of reach). Either is fine for now (the user).
+       Later, perhaps a command line switch: prefer the secret exit, prefer the normal one, or
+       let the bot choose (as now).
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -2078,7 +2145,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  02, 03, 05, 10, 12, 16, 17, 18, 19, 21, 24, 26, 27, 28, 31 (all finish) in parallel, with
+  02, 03, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 26, 27, 28, 31 (all
+  finish, in about 155 s) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time, keys and first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
   of the exe, its DLLs and cfgs: crispy keeps `karp.log`, `karp.cfg` and `crispy-doom.cfg` in the

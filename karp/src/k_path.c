@@ -24,6 +24,8 @@
 //	touchdown. It costs that distance and a little more, so a walk not much
 //	longer wins; one that does not work now is a blocked crossing.
 //
+//	A floor that hurts costs the health it takes on the way (HEALTH_COST).
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -44,6 +46,21 @@
 // A door or lift costs the distance the player could run (16.7 units a
 // tic) while waiting for it.
 #define WAIT_COST 16.0
+
+// Walking or waiting on a floor that hurts (nukage, blood) costs the health
+// it takes at running speed, each point as much as HEALTH_COST units of
+// running: a short wade beats a long way round. A route that would take
+// more than HEALTH_SHARE of the player's health is planned again at
+// HEALTH_COST_DEADLY a point, a tenth of what the brain charges for a
+// blocked crossing it can fix: then any dry way round wins, and so does
+// opening a door first (Doom II MAP20: the bot walked across the blood for
+// half a minute and died, where the user's way is dry once switch 73 opens
+// a door). The flight of a jump over such a floor costs nothing: the player
+// is off it. Until the bot knows its armour and radiation suits.
+#define HEALTH_COST 100.0
+#define HEALTH_COST_DEADLY 1.0e5
+#define HEALTH_SHARE 0.5
+#define RUN_SPEED 16.7
 
 // A player standing on a hole in the mesh starts from the nearest cell
 // within this distance.
@@ -72,6 +89,7 @@ typedef struct
 static int num_nodes;
 static int nodes_capacity;
 static double *cost;
+static double *hurt;            // the health the floors take on the way
 static int *came_from;
 static unsigned int *seen;      // == search: cost and came_from are valid
 static unsigned int *done;      // == search: expanded
@@ -83,6 +101,7 @@ static int heap_capacity;
 
 static k_blockcost_t block_cost;
 static k_pinchcost_t pinch_cost;
+static double health_cost;      // HEALTH_COST or HEALTH_COST_DEADLY
 
 // The search in progress.
 static const k_map_t *map;
@@ -343,6 +362,15 @@ static double PinchCost(int cell, k_vec2_t at)
     return pinch_cost != NULL ? pinch_cost(cell, at) : BLOCKED_PENALTY;
 }
 
+// The health walking `distance` across a cell and waiting `wait` tics in it
+// takes.
+static double Damage(int cell, double distance, double wait)
+{
+    double per_tic = K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector);
+
+    return per_tic > 0.0 ? (distance / RUN_SPEED + wait) * per_tic : 0.0;
+}
+
 static void PrepareNodes(void)
 {
     num_nodes = 2 * graph->num_portals + 2;
@@ -353,10 +381,12 @@ static void PrepareNodes(void)
     {
         nodes_capacity = num_nodes;
         free(cost);
+        free(hurt);
         free(came_from);
         free(seen);
         free(done);
         cost = malloc(nodes_capacity * sizeof(*cost));
+        hurt = malloc(nodes_capacity * sizeof(*hurt));
         came_from = malloc(nodes_capacity * sizeof(*came_from));
         seen = calloc(nodes_capacity, sizeof(*seen));
         done = calloc(nodes_capacity, sizeof(*done));
@@ -375,9 +405,10 @@ static void PrepareNodes(void)
     heap_size = 0;
 }
 
-static void Relax(int node, int from, double step)
+// A step of the route, and the health its floor takes on the way.
+static void Relax(int node, int from, double step, double damage)
 {
-    double g = cost[from] + step;
+    double g = cost[from] + step + damage * health_cost;
 
     // The heuristic is consistent, so an expanded node is final.
     if (done[node] == search)
@@ -389,6 +420,7 @@ static void Relax(int node, int from, double step)
     {
         seen[node] = search;
         cost[node] = g;
+        hurt[node] = hurt[from] + damage;
         came_from[node] = from;
         Push(g + Heuristic(NodePosition(node)), node);
     }
@@ -399,6 +431,7 @@ static boolean Search(k_path_t *path)
     PrepareTeleports();
     seen[start_node] = search;
     cost[start_node] = 0.0;
+    hurt[start_node] = 0.0;
     came_from[start_node] = -1;
     Push(Heuristic(start_point), start_node);
 
@@ -428,13 +461,14 @@ static boolean Search(k_path_t *path)
         if (cell == goal_cell)
         {
             double step = Distance(at, goal_point);
+            double damage = Damage(cell, step, 0.0);
 
             if (K_Graph_Pinched(cell, entry_a, entry_b, goal_point, goal_point, &pinch))
             {
                 step += PinchCost(cell, pinch);
             }
 
-            Relax(goal_node, node, step);
+            Relax(goal_node, node, step, damage);
         }
 
         end = graph->first_link[cell] + graph->link_count[cell];
@@ -444,7 +478,7 @@ static boolean Search(k_path_t *path)
             const k_link_t *link = &graph->links[i];
             const k_portal_t *portal = &graph->portals[link->portal];
             k_crossing_t crossing;
-            double step;
+            double step, walk, wait = 0.0;
 
             // Never straight back out the way it came in.
             if (node != start_node && link->portal == node / 2)
@@ -460,7 +494,8 @@ static boolean Search(k_path_t *path)
             // brain may know a line that moves its floors back.
             if (portal->jump >= 0)
             {
-                step = Distance(at, portal->a) + Distance(portal->a, portal->b);
+                walk = Distance(at, portal->a);
+                step = walk + Distance(portal->a, portal->b);
 
                 if (!K_Graph_Passable(crossing))
                 {
@@ -469,7 +504,8 @@ static boolean Search(k_path_t *path)
                 }
                 else
                 {
-                    step += WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
+                    wait = K_Graph_CrossingWait(link->portal, cell);
+                    step += WAIT_COST * wait;
                 }
 
                 if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->a, &pinch))
@@ -477,11 +513,12 @@ static boolean Search(k_path_t *path)
                     step += PinchCost(cell, pinch);
                 }
 
-                Relax(2 * link->portal + 1, node, step);
+                Relax(2 * link->portal + 1, node, step, Damage(cell, walk, wait));
                 continue;
             }
 
-            step = Distance(at, PortalMiddle(graph, link->portal));
+            walk = Distance(at, PortalMiddle(graph, link->portal));
+            step = walk;
 
             if (!K_Graph_Passable(crossing))
             {
@@ -490,7 +527,8 @@ static boolean Search(k_path_t *path)
             }
             else if (crossing != K_CROSS_OPEN)
             {
-                step += WAIT_COST * K_Graph_CrossingWait(link->portal, cell);
+                wait = K_Graph_CrossingWait(link->portal, cell);
+                step += WAIT_COST * wait;
             }
 
             // The way through the cell, from where the node came in.
@@ -500,7 +538,7 @@ static boolean Search(k_path_t *path)
             }
 
             Relax(2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1),
-                  node, step);
+                  node, step, Damage(cell, walk, wait));
         }
     }
 
@@ -812,6 +850,7 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
     path->num_cells = 0;
     path->num_points = 0;
     path->length = 0.0;
+    path->damage = 0.0;
     path->blocked_portal = -1;
     path->blocked_from = -1;
     path->blocked_by = K_CROSS_OPEN;
@@ -846,11 +885,24 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
     }
     else
     {
-        PrepareNodes();
+        boolean found;
 
-        if (Search(path))
+        PrepareNodes();
+        health_cost = HEALTH_COST;
+        found = Search(path);
+
+        // One that hurts too much: again, keeping off such floors.
+        if (found && hurt[goal_node] > K_Map_PlayerHealth() * HEALTH_SHARE)
+        {
+            PrepareNodes();
+            health_cost = HEALTH_COST_DEADLY;
+            found = Search(path);
+        }
+
+        if (found)
         {
             path->result = K_PATH_FOUND;
+            path->damage = hurt[goal_node];
             Reconstruct(path);
             BuildPoints(path);
             FindBlocked(path);
@@ -900,8 +952,16 @@ void K_Path_Describe(const k_path_t *path, char *buf, int buf_len)
     switch (path->result)
     {
         case K_PATH_FOUND:
-            M_snprintf(buf, buf_len, "%d cells, %.0f units", path->num_cells,
-                       path->length);
+            if (path->damage >= 0.5)
+            {
+                M_snprintf(buf, buf_len, "%d cells, %.0f units, about %.0f health off floors "
+                           "that hurt", path->num_cells, path->length, path->damage);
+            }
+            else
+            {
+                M_snprintf(buf, buf_len, "%d cells, %.0f units", path->num_cells,
+                           path->length);
+            }
             return;
 
         case K_PATH_NO_START:

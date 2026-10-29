@@ -172,6 +172,14 @@ int K_Map_SubsectorAt(double x, double y);
 // Live floor and ceiling heights of a sector.
 void K_Map_SectorHeights(int sector, double *floor, double *ceiling);
 
+// The health a player standing on the sector's floor loses a tic, on
+// average (nukage, blood); none under a radiation suit, as far as it keeps
+// the damage out. Armour is not counted.
+double K_Map_FloorDamage(int sector);
+
+// The player's health now (100 when there is no player).
+double K_Map_PlayerHealth(void);
+
 // Whether a block's thing still stands where it stood: a barrel that blew
 // up is gone, and so is one pushed off its square (it is then an obstacle
 // that moves, like a monster). Live, judged once a tic.

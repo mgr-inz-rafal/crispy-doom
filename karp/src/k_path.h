@@ -66,6 +66,7 @@ typedef struct
     int *leg_cells;
     unsigned char *legs;    // k_leg_t
     double length;          // walked or run, without the teleports
+    double damage;          // the health its floors take on the way, about
 
     // K_PATH_BLOCKED: the first crossing on the route that is blocked (the
     // portal, and the cell it is crossed from), why, and by how much (the

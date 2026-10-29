@@ -257,6 +257,7 @@ typedef enum
 
 static jumpphase_t jump_phase;
 static int settle_tics;
+static double runup_floor;  // the floor the run-up was last on the ground on
 
 static double Distance(k_vec2_t a, k_vec2_t b)
 {
@@ -1727,10 +1728,12 @@ static void Settle(const k_pose_t *pose)
     settle_tics = 0;
 }
 
-// A jump's run-up, takeoff, landing and stop, in the log. Touching down
-// ends the flight: the target moves on, and the player stops first. A step
-// across a gap narrower than the player never leaves the ground: it ends
-// when the target moves past the touchdown.
+// A jump's run-up, takeoff, landing and stop, in the log. Off the ground
+// over a floor more than a step below the run-up's is the takeoff; a step
+// down on the way is still the run-up (Doom II MAP20: the walkway down to
+// the edge). Touching down ends the flight: the target moves on, and the
+// player stops first. A step across a gap narrower than the player never
+// leaves the ground: it ends when the target moves past the touchdown.
 static void TrackJump(const k_pose_t *pose, k_vec2_t at)
 {
     // Waiting for a lift to bring the jump back is no part of it.
@@ -1747,6 +1750,7 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
                 K_Log(K_LOG_NAV, K_LOG_INFO, "running up for the jump to (%.0f,%.0f)",
                       path.points[status.target].x, path.points[status.target].y);
                 jump_phase = JUMP_RUNUP;
+                runup_floor = pose->floor;
             }
             break;
 
@@ -1755,7 +1759,11 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
             {
                 Settle(pose);
             }
-            else if (!pose->onground)
+            else if (pose->onground)
+            {
+                runup_floor = pose->floor;
+            }
+            else if (pose->floor < runup_floor - MAX_CLIMB)
             {
                 K_Log(K_LOG_NAV, K_LOG_INFO, "off the edge at (%.0f,%.0f) at %.1f units a tic",
                       at.x, at.y, status.speed);
