@@ -2321,8 +2321,12 @@ Each milestone builds and runs; the user reviews and commits between milestones.
           bot should not idle on a floor that hurts. Done for the way ahead (3.4, waiting dry):
           the user's point, that sometimes the only way out is a run through the nukage at once
           to catch a lift, is kept by judging it every tic. MAP11's pit no longer waits (its lift
-          is fast, down in 0.3 s; the whole pit is nukage anyway). Still to do: going back to a
-          dry spot from a floor that hurts, the brain's waits for moving sectors, and the route's
+          is fast, down in 0.3 s; the whole pit is nukage anyway). Going back to a dry spot from
+          a floor that hurts was measured and left out: over the regression set the bot stands
+          still on such a floor 6 times, for 0.3-1.5 s, at most a hit each, and the nearest dry
+          floor is up a ledge it dropped from (MAP09's second visit to the pit) or further than
+          the wait pays back (MAP09's start: the platform some 190 units off, the lift down 0.7 s
+          after the switch). Still to do: the brain's waits for moving sectors, and the route's
           damage counting waits nav spends dry (3.3).
        4. Radiation suits as something to fetch when the way crosses a floor that hurts: MAP24's
           bot drops into the big nukage pit and runs across it to the teleporter, past a suit
