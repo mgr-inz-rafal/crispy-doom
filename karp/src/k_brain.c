@@ -34,6 +34,9 @@
 
 #include "karp.h"
 #include "k_brain.h"
+#include "k_combat.h"
+#include "k_condition.h"
+#include "k_items.h"
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
@@ -83,12 +86,24 @@
 #define PICKUP_STEP 4.0
 #define STAND_CLEARANCE 17.0
 
+// Items worth a detour (k_items.h, plan 7.5) are looked for every
+// ITEM_CHECK_TICS while the player follows a route, the ITEM_ROUTES most
+// promising by worth and distance as the crow flies looked at by route
+// (MAX_ITEM_ROUTES when health is CRITICAL, any detour then being worth
+// it); one with no open way there, or none on from it, is not looked at
+// again for ITEM_SKIP_TICS.
+#define ITEM_CHECK_TICS TICRATE
+#define ITEM_ROUTES 2
+#define MAX_ITEM_ROUTES 4
+#define ITEM_SKIP_TICS (10 * TICRATE)
+
 typedef enum
 {
     GOAL_GOTO,              // a point (a click)
     GOAL_EXIT,              // any exit line
     GOAL_KEY,               // any key of a colour
     GOAL_TRIGGER,           // any line that moves a sector
+    GOAL_ITEM,              // an item worth a detour, on top of the chain
 } goal_type_t;
 
 // A place a goal can be met, and what to do there.
@@ -103,7 +118,8 @@ typedef struct
 typedef struct
 {
     goal_type_t type;
-    int param;              // GOAL_KEY: the key; GOAL_TRIGGER: the sector
+    int param;              // GOAL_KEY: the key; GOAL_TRIGGER: the sector;
+                            // GOAL_ITEM: the item (K_Items_Get)
     k_vec2_t point;         // GOAL_GOTO
 
     // Not planned until a candidate is chosen; planned again when it
@@ -116,8 +132,11 @@ typedef struct
     int num_tried;
     int shut;                   // times its way shut on the way (MAX_SHUT)
 
-    // GOAL_TRIGGER: the sector's heights when its line was gone for.
+    // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
+    // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
+    // itself), when it stopped.
     double floor, ceiling;
+    boolean settling;
     boolean used;           // a walk-over line was crossed
     boolean moving;
     boolean changed;        // the heights have differed from those since
@@ -166,6 +185,9 @@ static k_path_t probe;              // routes looked at while scratch is in use
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
 static char status[K_LOG_LINE_LEN * 2];
+static int item_check_tic;              // when to look for items next
+static int *item_skip;                  // per item: not looked at before this
+static int item_skip_size;
 
 //
 // Names
@@ -182,6 +204,11 @@ static void GoalName(const goal_t *goal, char *buf, int len)
         case GOAL_KEY:
             M_snprintf(buf, len, "GET %s KEY", goal->param == K_KEY_BLUE ? "BLUE"
                        : goal->param == K_KEY_YELLOW ? "YELLOW" : "RED");
+            break;
+
+        case GOAL_ITEM:
+            M_snprintf(buf, len, "GET %s", K_Items_Get(goal->param)->name);
+            M_ForceUppercase(buf);
             break;
 
         // The line's tag: a stair builder's steps after the first are not
@@ -531,6 +558,22 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                                keys[i].skull ? "skull key" : "keycard",
                                keys[i].at.x, keys[i].at.y);
                     ++count;
+                }
+            }
+            break;
+
+        case GOAL_ITEM:
+            {
+                const k_item_t *item = K_Items_Get(goal->param);
+
+                if (item->present)
+                {
+                    out[0].at = PickupSpot(item->at);
+                    out[0].kind = K_GOAL_POINT;
+                    out[0].line = -1;
+                    M_snprintf(out[0].what, sizeof(out[0].what), "%s at (%.0f,%.0f)",
+                               item->name, item->at.x, item->at.y);
+                    count = 1;
                 }
             }
             break;
@@ -1164,6 +1207,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     if (goal->type == GOAL_TRIGGER)
     {
         K_Map_SectorHeights(goal->param, &goal->floor, &goal->ceiling);
+        goal->settling = K_Graph_SectorBusy(goal->param);
 
         if (line_uses != NULL && candidate->line >= 0)
         {
@@ -1262,7 +1306,9 @@ static boolean DropNeedless(void)
     char name[64];
     int i;
 
-    if (depth < 2 || !K_Map_GetPlayer(&player))
+    // An item on top is a detour, not a fix for the goal below: the goal
+    // below has its way.
+    if (depth < 2 || goals[depth - 1].type == GOAL_ITEM || !K_Map_GetPlayer(&player))
     {
         return false;
     }
@@ -1318,6 +1364,7 @@ static void PlanGoal(goal_t *goal)
                goal->type == GOAL_EXIT ? "the map has no exit line"
              : goal->type == GOAL_KEY ? "no such key lies in the level"
              : goal->type == GOAL_TRIGGER ? "no line moves the sector any more"
+             : goal->type == GOAL_ITEM ? "it is gone"
              : "no way there");
 
     for (i = 0; i < count; ++i)
@@ -1459,6 +1506,11 @@ static void PlanGoal(goal_t *goal)
     {
         Go(goal, &candidates[best_open], open_length, reachable, count);
     }
+    else if (goal->type == GOAL_ITEM)
+    {
+        // A detour, not a step on the way: never worth a fix or a wait.
+        FailGoal(reason);
+    }
     else if (best_blocked >= 0)
     {
         goal_t *fix;
@@ -1560,6 +1612,21 @@ static boolean UpdateTrigger(goal_t *goal)
     k_mover_t mover = K_Graph_SectorMover(goal->param);
     char how[96];
 
+    // Busy when its line was gone for: what it does until it stops is not
+    // the line's doing, and nav waits at the switch meanwhile (Doom II
+    // MAP02: switch 102, gone for as door 30 closed by itself, counted as
+    // having moved it, twice in 0.1 s, then once more, using it up).
+    if (goal->settling)
+    {
+        if (K_Graph_SectorBusy(goal->param))
+        {
+            return false;
+        }
+
+        goal->settling = false;
+        K_Map_SectorHeights(goal->param, &goal->floor, &goal->ceiling);
+    }
+
     K_Map_SectorHeights(goal->param, &floor, &ceiling);
 
     if (floor != goal->floor || ceiling != goal->ceiling)
@@ -1607,6 +1674,146 @@ static boolean UpdateTrigger(goal_t *goal)
     return true;
 }
 
+// Pickups (plan, 7.5): an item worth a detour - one whose extra way, there
+// and on to where the route goes, is within how far out of its way the
+// player may go for it now (k_items.h) - goes on top of the chain, and
+// when it is picked up the goal below is planned again from there. Looked
+// for only while the player follows a route to the goal on top: not while
+// fighting, working a door, lift or switch, running a jump, going where a
+// click sent it, or waiting for a switch's sector. An item the player
+// could not get on from (down in a pit, past a one-way drop) is not gone
+// for. Returns true if one was added.
+static boolean ConsiderItems(goal_t *goal)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    int routes = K_Condition_Get()->health == K_NEED_CRITICAL ? MAX_ITEM_ROUTES : ITEM_ROUTES;
+    int order[MAX_ITEM_ROUTES];
+    double order_score[MAX_ITEM_ROUTES];
+    int found = 0, best = -1;
+    double best_slack = 0.0, best_detour = 0.0;
+    k_pose_t player;
+    k_vec2_t start, end;
+    goal_t *item_goal;
+    char name[64];
+    int i, k;
+
+    if (leveltime < item_check_tic)
+    {
+        return false;
+    }
+
+    item_check_tic = leveltime + ITEM_CHECK_TICS;
+
+    if (depth >= MAX_GOALS || !goal->planned || goal->type == GOAL_ITEM
+     || goal->type == GOAL_GOTO || (goal->type == GOAL_TRIGGER && (goal->used || goal->moving))
+     || nav->state != K_NAV_DRIVING || nav->action != K_ACTION_NONE || !K_Nav_CanPause()
+     || K_Combat_GetStatus()->battle || path == NULL || path->num_points < 1
+     || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+    end = path->points[path->num_points - 1];
+
+    if (item_skip_size < K_Items_Count())
+    {
+        item_skip = realloc(item_skip, K_Items_Count() * 2 * sizeof(*item_skip));
+        memset(item_skip + item_skip_size, 0,
+               (K_Items_Count() * 2 - item_skip_size) * sizeof(*item_skip));
+        item_skip_size = K_Items_Count() * 2;
+    }
+
+    // The most promising few, by worth and distance as the crow flies.
+    for (i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+        double distance = sqrt((item->at.x - start.x) * (item->at.x - start.x)
+                             + (item->at.y - start.y) * (item->at.y - start.y));
+        double score;
+
+        if (!item->present || item->reach <= 0.0 || distance > item->reach
+         || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i))
+        {
+            continue;
+        }
+
+        score = item->reach / (distance + 64.0);
+
+        // Kept best first.
+        if (found == routes && score <= order_score[routes - 1])
+        {
+            continue;
+        }
+
+        for (k = found < routes ? found++ : routes - 1;
+             k > 0 && order_score[k - 1] < score; --k)
+        {
+            order[k] = order[k - 1];
+            order_score[k] = order_score[k - 1];
+        }
+
+        order[k] = i;
+        order_score[k] = score;
+    }
+
+    for (k = 0; k < found; ++k)
+    {
+        const k_item_t *item = K_Items_Get(order[k]);
+        k_vec2_t spot = PickupSpot(item->at);
+        double there, detour;
+
+        K_Path_Find(&probe, start, player.cell, spot);
+
+        if (probe.result != K_PATH_FOUND)
+        {
+            item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
+            continue;
+        }
+
+        there = probe.length;
+        K_Path_Find(&probe, spot, -1, end);
+
+        if (probe.result != K_PATH_FOUND)
+        {
+            item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
+            continue;
+        }
+
+        detour = SDL_max(0.0, there + probe.length - nav->remaining);
+
+        if (detour <= item->reach && (best < 0 || item->reach - detour > best_slack))
+        {
+            best = order[k];
+            best_slack = item->reach - detour;
+            best_detour = detour;
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    // A switch not worked yet: going for it again after the item is not
+    // another use of its line (MAX_TRIGGERS).
+    if (goal->type == GOAL_TRIGGER && line_uses != NULL && goal->chosen.line >= 0
+     && line_uses[goal->chosen.line] > 0)
+    {
+        --line_uses[goal->chosen.line];
+    }
+
+    item_goal = Push(GOAL_ITEM, best);
+    GoalName(item_goal, name, sizeof(name));
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way, "
+          "worth %.0f (%.0f with those beside it)", name, K_Items_Get(best)->at.x,
+          K_Items_Get(best)->at.y, best_detour, K_Items_Get(best)->worth,
+          K_Items_Get(best)->together);
+    return true;
+}
+
 //
 // Interface
 //
@@ -1622,6 +1829,12 @@ void K_Brain_Reset(void)
     num_failed = 0;
     outcome[0] = '\0';
     exit_wanted = K_AutoplayEnabled();
+    item_check_tic = 0;
+
+    if (item_skip != NULL)
+    {
+        memset(item_skip, 0, item_skip_size * sizeof(*item_skip));
+    }
 
     free(line_uses);
     line_uses = calloc(SDL_max(numlines, 1), 1);
@@ -1689,13 +1902,21 @@ void K_Brain_Tick(void)
 
     goal = &goals[depth - 1];
 
-    if (goal->type == GOAL_KEY && K_Specials_HasKey(goal->param))
+    if ((goal->type == GOAL_KEY && K_Specials_HasKey(goal->param))
+     || (goal->type == GOAL_ITEM && !K_Items_Get(goal->param)->present))
     {
         DoneGoal("picked it up");
         return;
     }
 
-    if (DoneIfOpen(goal))
+    // Something else filled the need on the way (another item, say).
+    if (goal->type == GOAL_ITEM && K_Items_Get(goal->param)->worth <= 0.0)
+    {
+        DoneGoal("no longer needed");
+        return;
+    }
+
+    if (DoneIfOpen(goal) || ConsiderItems(goal))
     {
         return;
     }
@@ -1728,7 +1949,7 @@ void K_Brain_Tick(void)
                 goal->used = true;
                 goal->wait = 0;
             }
-            else if (goal->type == GOAL_KEY)
+            else if (goal->type == GOAL_KEY || goal->type == GOAL_ITEM)
             {
                 CandidateFailed(goal, "got there, but did not pick it up");
             }

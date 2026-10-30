@@ -17,11 +17,13 @@
 #include "k_condition.h"
 #include "k_log.h"
 
-// Health: CRITICAL below 25 until above 35; LOW below 50 until above 60.
+// Health: CRITICAL below 25 until above 35; LOW below 75 until above 85
+// (the user: at 50 the bot looked anything but comfy; below 75 a medikit's
+// 25 is none of it wasted).
 #define HEALTH_CRITICAL 25
 #define HEALTH_CRITICAL_OK 35
-#define HEALTH_LOW 50
-#define HEALTH_LOW_OK 60
+#define HEALTH_LOW 75
+#define HEALTH_LOW_OK 85
 
 // Armour: LOW below 25 until above 40.
 #define ARMOUR_LOW 25

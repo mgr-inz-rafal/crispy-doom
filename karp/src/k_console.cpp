@@ -24,6 +24,7 @@
 #include "k_condition.h"
 #include "k_console.h"
 #include "k_graph.h"
+#include "k_items.h"
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_map.h"
@@ -68,6 +69,7 @@ static bool view_cells;
 static bool view_centroids;
 static bool view_graph;
 static bool view_monsters = true;
+static bool view_items = true;
 static std::vector<ImVec2> screen_points;   // scratch for polygon drawing
 
 static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
@@ -843,6 +845,42 @@ static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t 
     }
 }
 
+// Items lying in the level as small diamonds: green health, blue armour,
+// yellow ammo, white weapons, violet power-ups; bright when worth a detour
+// now, faint when not.
+static void DrawItems(ImDrawList *draw, const ImVec2 &center)
+{
+    static const ImU32 colors[] =
+    {
+        IM_COL32(80, 220, 90, 255),     // K_ITEM_HEALTH
+        IM_COL32(90, 150, 255, 255),    // K_ITEM_ARMOUR
+        IM_COL32(240, 210, 70, 255),    // K_ITEM_AMMO
+        IM_COL32(235, 235, 235, 255),   // K_ITEM_WEAPON
+        IM_COL32(200, 120, 255, 255),   // K_ITEM_POWER
+    };
+    float size = SDL_max(3.0f * ui_scale, (float) (12.0 * view_scale));
+
+    for (int i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+        ImU32 color = colors[item->kind];
+        ImVec2 at = MapToScreen(center, item->at.x, item->at.y);
+
+        if (!item->present)
+        {
+            continue;
+        }
+
+        if (item->reach <= 0.0)
+        {
+            color = (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 70);
+        }
+
+        draw->AddQuadFilled(ImVec2(at.x, at.y - size), ImVec2(at.x + size, at.y),
+                            ImVec2(at.x, at.y + size), ImVec2(at.x - size, at.y), color);
+    }
+}
+
 static void DrawPlayerArrow(ImDrawList *draw, const ImVec2 &center,
                             const k_pose_t &player)
 {
@@ -1066,6 +1104,15 @@ static void DrawMapView(void)
                           "coming at the player.");
     }
 
+    ImGui::SameLine();
+    ImGui::Checkbox("Items", &view_items);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Green: health. Blue: armour. Yellow: ammo. White: weapons, "
+                          "backpack. Violet: power-ups.\nBright: worth a detour now.");
+    }
+
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -1201,6 +1248,11 @@ static void DrawMapView(void)
     {
         DrawRoute(draw, path, center);
         DrawGoal(draw, path, center);
+    }
+
+    if (view_items)
+    {
+        DrawItems(draw, center);
     }
 
     if (view_monsters)

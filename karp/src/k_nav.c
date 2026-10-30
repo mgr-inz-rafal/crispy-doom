@@ -47,10 +47,12 @@
 #include "doomdef.h"
 #include "doomstat.h"
 #include "m_misc.h"
+#include "r_state.h"
 
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
+#include "k_specials.h"
 
 #define K_PI 3.14159265358979323846
 
@@ -152,6 +154,10 @@
 #define PRESS_TICS 15
 #define MAX_PRESSES 3
 #define STALL_TICS 175
+
+// A switch whose sector is still on its way (a door closing by itself) is
+// waited at, for up to BUSY_TICS, and pressed once the sector stops.
+#define BUSY_TICS (15 * TICRATE)
 
 // Further than the player can move in a tic (MAXMOVE on each axis): it
 // teleported.
@@ -1102,15 +1108,41 @@ static boolean WeaponReady(const player_t *player)
            == &states[weaponinfo[player->readyweapon].readystate];
 }
 
+// Whether a sector a switch moves by its tag is held by a mover that has yet
+// to let go of it (K_Graph_SectorBusy): pressing now would do nothing (Doom
+// II MAP02: switch 102 pressed as door 30 closed by itself, the press lost
+// and counted as one of the switch's uses). Not a manual door's own line,
+// which moves the sector behind it, and reverses a closing door.
+static boolean LineBusy(int line)
+{
+    int special = K_Specials_LineSpecial(line);
+    int s;
+
+    if (K_Specials_MoverTrigger(special) == K_TRIGGER_NONE || K_Specials_ManualDoor(special))
+    {
+        return false;
+    }
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        if (sectors[s].tag == lines[line].tag && K_Graph_SectorBusy(s))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Pressing use on a door that is opening (or open) closes it, and on a
-// busy lift does nothing.
+// busy lift does nothing; a switch does nothing while its sector is busy.
 static boolean WorthPressing(void)
 {
     k_mover_t mover;
 
     if (action.kind == K_ACTION_USE || action.kind == K_ACTION_SHOOT)
     {
-        return true;
+        return !LineBusy(action.line);
     }
 
     mover = K_Graph_SectorMover(action.sector);
@@ -1168,7 +1200,7 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
             return;
         }
 
-        if (tic - action.press_tic > 1 && speed < 4.0 && WeaponReady(player)
+        if (tic - action.press_tic > 1 && speed < 4.0 && WeaponReady(player) && WorthPressing()
          && LineReaches(body, command, weapon == wp_fist || weapon == wp_chainsaw
                                        ? MELEE_REACH : SHOT_REACH))
         {
@@ -1526,6 +1558,19 @@ static void StartUseAction(void)
 static boolean UpdateUseAction(void)
 {
     ++action.tics;
+
+    // Its sector still on its way: wait at the switch, then press.
+    if (action.phase == PHASE_AIM && LineBusy(action.line))
+    {
+        if (status.tics - action.start_tics > BUSY_TICS)
+        {
+            FailAction("what the switch moves stays busy");
+            return false;
+        }
+
+        action.tics = 0;
+        return true;
+    }
 
     if (action.phase == PHASE_AIM && action.tics > AIM_TICS)
     {

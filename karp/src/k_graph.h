@@ -245,6 +245,13 @@ double K_Graph_DropDistance(k_vec2_t at, double floor, double reach);
 
 k_mover_t K_Graph_SectorMover(int sector);
 
+// Whether a mover holds the sector that will let go of it by itself: a door
+// (opening, open or closing), a floor, a lift that is not perpetual, a
+// ceiling that is not a crusher. A switch or walk-over line meant to move
+// the sector does nothing till then: EV_DoDoor, EV_DoFloor, EV_DoPlat and
+// EV_DoCeiling skip a sector that has a mover.
+int K_Graph_SectorBusy(int sector);
+
 // Whether a sector's floor is lowering (a floor, not a lift, on its way
 // down): no time to stand about on it (Doom II MAP08's sinking pillars).
 int K_Graph_FloorSinking(int sector);

@@ -3098,6 +3098,39 @@ k_mover_t K_Graph_SectorMover(int sector)
     return K_MOVER_OTHER;
 }
 
+int K_Graph_SectorBusy(int sector)
+{
+    const thinker_t *thinker = sectors[sector].specialdata;
+    actionf_p1 function;
+
+    if (thinker == NULL)
+    {
+        return 0;
+    }
+
+    function = thinker->function.acp1;
+
+    if (function == (actionf_p1) T_VerticalDoor || function == (actionf_p1) T_MoveFloor)
+    {
+        return 1;
+    }
+
+    if (function == (actionf_p1) T_PlatRaise)
+    {
+        return ((const plat_t *) thinker)->type != perpetualRaise;
+    }
+
+    if (function == (actionf_p1) T_MoveCeiling)
+    {
+        const ceiling_t *ceiling = (const ceiling_t *) thinker;
+
+        return ceiling->type != crushAndRaise && ceiling->type != fastCrushAndRaise
+            && ceiling->type != silentCrushAndRaise;
+    }
+
+    return 0;
+}
+
 int K_Graph_FloorSinking(int sector)
 {
     const floormove_t *floor = FloorMoverOf(&sectors[sector]);

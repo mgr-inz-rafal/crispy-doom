@@ -20,6 +20,7 @@
 #include "k_condition.h"
 #include "k_console.h"
 #include "k_graph.h"
+#include "k_items.h"
 #include "k_log.h"
 #include "k_map.h"
 #include "k_nav.h"
@@ -173,6 +174,7 @@ void K_LevelLoaded(void)
     K_Nav_Reset();
     K_Condition_Reset();
     K_Combat_Reset();
+    K_Items_Reset();
     K_Trace_Reset();
     level_completed = false;
 }
@@ -206,12 +208,14 @@ void K_Ticker(void)
     }
 
     // Jumps that moving sectors made possible (k_graph.h); how the player
-    // is doing, and what it can see.
+    // is doing, what it can see, and what the items lying about are worth
+    // to it.
     if ((autoplay_enabled || console_enabled) && gamestate == GS_LEVEL)
     {
         K_Graph_Tick();
         K_Condition_Tick();
         K_Combat_Tick(K_OwnsControls());
+        K_Items_Tick();
     }
 
     // On death the bot stops (the user): there is nothing more to learn

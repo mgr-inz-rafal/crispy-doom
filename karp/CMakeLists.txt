@@ -17,6 +17,7 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_condition.c"     "${KARP_DIR}/src/k_condition.h"
     "${KARP_DIR}/src/k_console.cpp"     "${KARP_DIR}/src/k_console.h"
     "${KARP_DIR}/src/k_graph.c"         "${KARP_DIR}/src/k_graph.h"
+    "${KARP_DIR}/src/k_items.c"         "${KARP_DIR}/src/k_items.h"
     "${KARP_DIR}/src/k_jump.c"          "${KARP_DIR}/src/k_jump.h"
     "${KARP_DIR}/src/k_log.c"           "${KARP_DIR}/src/k_log.h"
     "${KARP_DIR}/src/k_map.c"           "${KARP_DIR}/src/k_map.h"
