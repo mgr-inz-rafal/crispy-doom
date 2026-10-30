@@ -1,7 +1,8 @@
 # Karp - Stage 1 Plan: "Go To Location"
 
 > Status: approved; M0-M6 implemented, plus doors and lifts, GO TO EXIT, the goal stack and
-> teleporters; now playing through Doom II map by map (section 4).
+> teleporters; now playing through Doom II map by map (section 4). Combat, the next stage, is
+> planned in section 7.
 > All Karp code lives under `karp/`; engine edits are single-line hooks tagged `// [Karp]`.
 
 ## 1. Context
@@ -2392,7 +2393,7 @@ Each milestone builds and runs; the user reviews and commits between milestones.
 
 ## 6. Out of scope (later stages)
 
-Monsters and combat; remote doors and lifts, switches, walk-over triggers and collecting keys
+Monsters and combat (the next stage, section 7); remote doors and lifts, switches, walk-over triggers and collecting keys
 (manual doors and lifts work, section 3.2.1; the rest builds on the same live crossings); item
 priorities (medkits, ammo);
 path smoothing with player radius (beyond the M6 follow-ups); damaging-floor costs; lifting the
@@ -2408,3 +2409,193 @@ netgame guard; Heretic/Hexen.
   processing power (there is plenty) but better routes: from here to there it can be better to
   pass four confirmed checkpoints than to take a shorter route through a complex maze, along
   narrow ledges or past awkward obstacles.
+
+## 7. Combat (the next stage)
+
+> Status: planned with the user; no code yet. Monsters are back (no `-nomonsters`), tested at
+> `-skill 3`.
+
+Four Doom II maps do not finish with `-nomonsters`: MAP07 and MAP32 open their way only when
+monsters die (follow-up 10), MAP30 ends when the boss brain dies, and MAP23 needs a barrel shot
+(follow-up 3.2). And once monsters are in, every map needs fighting. Combat is more than shooting
+on sight: the bot has to manage ammo and weapons, choose what to fight and what to leave, and stay
+alive. None of it can be computed exactly at runtime, and it need not be: heuristics, survivable
+rather than perfect (the user). Perfect missile avoidance while dancing on a narrow ledge is not
+the aim. The design below is the user's, with the engine facts that shape it.
+
+Two new parts of the brain, on top of the goal stack (3.5) and nav (3.4):
+- the **condition** (7.1): how the player is doing (ammo, health, armour), which steers how bold
+  the bot is and which detours it takes;
+- **combat** (7.2-7.4): what the bot sees, what it fights and with what, and how it moves in a
+  fight.
+
+Proposed files: `k_sight.c` (sight checks on Karp's map data, 7.2), `k_combat.c` (perception,
+targets, weapons, battle mode) and `k_condition.c`, with plain C headers for the console like the
+others. Their decisions go to the log under `COMBAT` and `ITEMS` (3.8).
+
+### 7.1 The condition
+
+Three needs, each judged on its own, each with an urgency:
+- **ammo**: OK or LOW, for the weapons the player holds;
+- **health**: OK, LOW or CRITICAL;
+- **armour**: OK or LOW (none, or worn down).
+
+The **condition** is the worst of them, in the user's order from the lowest priority to the top:
+
+| Condition | When | What the bot does |
+|---|---|---|
+| COMFY | every need OK | runs, fights, solves the puzzles, goes to the exit; takes pickups on the way (7.5) |
+| LOW AMMO | ammo LOW | carries on, but detours for ammo and weapons; thinks more about switching weapons, and melee where it works |
+| LOW HEALTH | health LOW | as LOW AMMO, and detours for health and armour |
+| CRITICAL | health CRITICAL | survival: health is the top goal, fights are escaped |
+
+Armour LOW alone does not change the condition: it makes armour worth a detour once health is low,
+and a pickup on the way always. A single ladder would hide needs: low on health and on ammo at
+once, LOW HEALTH would walk past the shells it badly needs, so the needs stay separate and each is
+weighed where it matters. The console shows every need side by side next to the condition (the
+user), e.g. `COMFY - ammo OK, health OK, armour LOW`, and the log says when one changes.
+
+- **Hysteresis**: a need goes LOW below one threshold and back to OK only above a higher one
+  (say below 30 health, above 45), so a stimpack does not flip it back and forth.
+- **CRITICAL with no health to get** (none left, or none reachable) must not mean running about
+  for good, against the never-give-up rule (follow-up 11): careful play instead, fighting from
+  cover, starting no new fights, carrying on with the goals.
+- **Invulnerability**: while it lasts nothing hurts the player (`P_DamageMobj` ignores damage
+  under 1000, floors that hurt included), so the health need waits until it runs out.
+- **The health budget**: the cost of floors that hurt (3.3) is a stand-in until the bot knows its
+  health, armour and suits. The condition gives that budget: how much health the route can spend.
+
+For a start the condition is always COMFY (the user): the needs are worked out and shown, and
+acted on only from C4 (7.7).
+
+### 7.2 What the bot sees
+
+- **Monsters**: the bot knows every one, as most players know where the monsters stand on the
+  classic maps (the user): no exploring to uncover them. Each tic, a list from the thinkers (reading
+  mobjs is allowed, 2.4): type, position, velocity, health, awake or asleep (it has a target), what
+  it is doing (walking, winding up an attack, in pain, dead), and whether the player can see it.
+  The bot plans with all of them, but aims and fires only at the ones it can see.
+- **Projectiles** (`MF_MISSILE`): position, velocity, who fired them, the damage they do.
+- **Sight checks of our own**: `P_CheckSight` bumps `validcount`, so Karp may not call it (2.4).
+  Like the engine: the REJECT table first, then a trace over Karp's map data that keeps track of
+  the openings' heights, as the engine's sight slopes do. Barrels need the same (follow-up 3.2).
+- **Console**: monsters on the map (awake, asleep, seen), projectiles, the current target and the
+  line of fire.
+
+### 7.3 Fighting
+
+The user's points, with what the engine says:
+
+1. **Ammo supply.** Counted per type. The bot keeps a shot or two for gun switches still to work,
+   but only for those the fist cannot reach: the fist sets them off too (`P_LineAttack` at
+   `MELEERANGE`, 3.4), so only gun switches high up or across a pit need bullets or shells. The
+   brain counts them from the lines still ahead.
+2. **Weapons.** A table per weapon: damage, hitscan or projectile, splash, the range it is good
+   at, ammo per shot.
+   - A switch costs about 0.9 s (`A_Lower` and `A_Raise` move the weapon 96 units at 6 a tic, 16
+     tics down and 16 up), so weapons are chosen with hysteresis, or fights are spent switching.
+   - The pistol's and the chaingun's first shot after the trigger was let go is dead accurate
+     (`P_GunShot` with `!player->refire`): single taps far off, bursts up close.
+   - Vertical aim is automatic (vanilla autoaim, `P_AimLineAttack`): only the angle matters.
+   - Melee (the chainsaw, the berserk fist) against weak monsters when ammo runs low.
+   - **No rockets at anything closer than about 160 units**, monsters and walls alike (the blast
+     reaches 128 from where it hits), nor near barrels by the player. The exception: while
+     invulnerable, rockets everywhere (the user), as long as enough of it is left for the rocket
+     to land.
+3. **Fight or avoid.** A Cyberdemon with only the pistol in hand is not fought: avoiding means not
+   starting the fight, keeping moving, getting out of its sight. **Far monsters are ignored** (the
+   user): chasing a far hitscanner wastes time and ammo. If a far one keeps hitting the bot, the
+   bot gets out of its sight rather than going after it. Firing wakes monsters wherever the sound
+   reaches (`P_NoiseAlert` in `P_FireWeapon`, the fist too); that matters for sneaking past, later.
+4. **Target priority.** Hitscanners first: the zombieman, shotgunner, chaingunner and Spider
+   Mastermind, whose bullets cannot be dodged. Then arch-viles (they raise the dead, and their
+   flame), pain elementals (they spawn lost souls), then by threat: the damage a monster can do,
+   how close it is, how soon it would die. A monster within melee reach goes before that.
+5. **Dodging, projectiles only.** A hitscan hit is decided the moment the monster fires. Against
+   hitscanners: kill them first, keep the distance (their spread is an angle, so fewer hits far
+   off), break line of sight (6). Projectiles (imps, cacodemons, barons and knights, mancubi,
+   arachnotrons, revenants, the Cyberdemon) can be seen coming: for each one heading at the
+   player, its closest approach and how soon; if it would hit soon, step to the free side. Never
+   off a ledge or into a floor that hurts (`K_Graph_Clearance`, `K_Graph_DropDistance`): on a
+   narrow ledge, take the hit. A revenant's homing missile: break sight, or step aside late.
+6. **Breaking line of sight**, against hitscanners and arch-viles.
+   - A zombieman winds up for 10 tics before it fires, so only cover right beside the player
+     works then; between fights, keep cover near.
+   - The arch-vile's flame does nothing if it loses sight of the player before it lands, 66 tics
+     after the attack starts (`A_VileAttack` checks sight).
+   - Cover spots: nearby floor out of the threat's sight, sampled and sight-checked a few times a
+     second. Peek, shoot, step back.
+7. **Never stand still** in the sight of awake monsters, the more so when there are more than the
+   bot can manage: running about semi-randomly is a good way to survive in Doom (the user).
+8. **A bullet or two for gun switches**: point 1.
+
+### 7.4 Battle mode
+
+Who controls the player in a fight (the user's model):
+- **On the way**, nav follows the route as now. Combat may aim and fire at a monster in sight, but
+  only where nav does not need the facing: never during running jumps, presses (use, gun
+  switches) or careful legs along a ledge. The facing also changes the top speed: 16.7 units a
+  tic forward, 13.3 strafing alone, about 21 both at once. Nav's speed model must use the real top
+  speed for the current facing, or jump run-ups, waits on a dry floor and lift timing go wrong.
+- **Battle mode**: when awake monsters close enough to matter can see the bot, or monsters stand
+  in the way, the bot switches to battle mode. It leaves the route and clears the area: combat
+  controls movement and facing, target by target, strafing, dodging, using cover. A leash keeps
+  it from wandering far after monsters. Once the area is clear (or what is left is far, asleep,
+  or to be avoided), the bot goes back to its goals: the brain plans the top goal again from where
+  the player stands, since the chase may have taken it well off the route (the user).
+- **Strafe movement** (the user): circling a target, side to side, backing off, all while facing
+  it. The controller already moves the player in any direction whatever the facing (3.4: the
+  thrust is split into forward and side), so these are new movement patterns on top of it, not a
+  new controller: battle mode hands it a velocity and a facing.
+- **Monsters in the way** when not fighting: follow-up 3.3 (steer round them with some random
+  strafing, wait for them to move, plan round them).
+- **Fleeing** (CRITICAL): a goal pushed for health, or for a spot out of sight.
+
+### 7.5 Goals combat adds
+
+- **Pickups on the way**, in every condition: items within a small detour that are useful now.
+  Weapons and backpacks always, ammo when not full, armour when better than what is worn, health
+  only when not wasted (no medikit at 95). Cheap, natural, and the LOW conditions come less often.
+- **Detours** for the needs (the temporary goals in front of the chain, 3.5): GET <item>, its
+  candidates every item of the kind in the level, scored by route and by danger (a guarded
+  medikit loses to a lonely one further away).
+- **KILL ALL <kind>** (follow-up 10): Doom II MAP07 and MAP32, Doom's E1M8, E4M6, E4M8.
+- **Barrels** that block the way are removed by shooting them (follow-up 3.2), with the same
+  sight, aiming and firing. MAP23 needs nothing of its own (the user).
+
+### 7.6 Testing
+
+- **`-skill 3`** (Hurt Me Plenty, the game's default), the neutral level (the user): `-skill 1`
+  halves the damage and doubles ammo pickups, `-skill 5` doubles them too and brings fast,
+  respawning monsters; skills 1-2 place the easy set of monsters, 3 the medium, 4-5 the hard.
+- **On death, stop**, and log the cause: what hit the player, from where, the health over the last
+  seconds. Later, once the bot plays fairly well, it restarts a few times by itself and the logs
+  are compared for improvements (the user).
+- **Runs with monsters cannot be compared exactly across builds**: a tic's difference changes how
+  every monster moves (they draw from the same random numbers as everything else). Compare rates
+  over several runs instead: finished, died, health, time.
+- **The `-nomonsters` regression stays**, and guards: with nothing to fight, combat code must leave
+  it identical, until pickups on the way (C4) change routes on purpose.
+
+### 7.7 Order
+
+1. **C0 What the bot sees**: monsters, projectiles, the sight check, the console overlay. No change
+   in behaviour.
+2. **C1 Shooting on the way**: pick a target, aim where nav allows, fire, the weapon table, the
+   rocket rule. Death handling, and runs with monsters on a few early maps.
+3. **C2 Battle mode**: clearing the area, strafing, never standing still in sight, monsters in the
+   way, back to the goals.
+4. **C3 Dodging and cover**: projectiles; breaking line of sight against hitscanners and
+   arch-viles.
+5. **C4 The condition**: the needs, pickups on the way, detours, CRITICAL.
+6. **C5 The rest**: fight or avoid; barrels that block the way (MAP23); KILL ALL goals (MAP07,
+   MAP32); MAP30.
+
+### 7.8 Later, or left out
+
+- **EXPLORER** (the user's idea, jotted): when nothing is left to do but leave, the bot may choose
+  to explore: secret areas, far bonuses, to finish the map with full health and armour. A goal in
+  front of GO TO EXIT, taken when the condition and the time allow.
+- Left out for now: exact missile simulation (closest approach and a free side are enough), sound
+  (what a shot wakes, for sneaking past), infighting, BFG tricks, predicting where monsters walk
+  beyond a few tics.
