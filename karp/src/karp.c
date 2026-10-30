@@ -16,12 +16,15 @@
 
 #include "karp.h"
 #include "k_brain.h"
+#include "k_combat.h"
+#include "k_condition.h"
 #include "k_console.h"
 #include "k_graph.h"
 #include "k_log.h"
 #include "k_map.h"
 #include "k_nav.h"
 #include "k_settings.h"
+#include "k_sight.h"
 #include "k_specials.h"
 #include "k_trace.h"
 
@@ -165,8 +168,11 @@ void K_LevelLoaded(void)
     K_Map_Build();
     K_Specials_Build();
     K_Graph_Build();
+    K_Sight_Reset();
     K_Brain_Reset();
     K_Nav_Reset();
+    K_Condition_Reset();
+    K_Combat_Reset();
     K_Trace_Reset();
     level_completed = false;
 }
@@ -199,10 +205,22 @@ void K_Ticker(void)
         K_Trace_Tick();
     }
 
-    // Jumps that moving sectors made possible (k_graph.h).
+    // Jumps that moving sectors made possible (k_graph.h); how the player
+    // is doing, and what it can see.
     if ((autoplay_enabled || console_enabled) && gamestate == GS_LEVEL)
     {
         K_Graph_Tick();
+        K_Condition_Tick();
+        K_Combat_Tick(K_OwnsControls());
+    }
+
+    // On death the bot stops (the user): there is nothing more to learn
+    // from the run.
+    if (autoplay_enabled && quit_on_exit && gamestate == GS_LEVEL
+     && K_Combat_GetStatus()->died)
+    {
+        K_Log(K_LOG_SYS, K_LOG_INFO, "the player died - quitting (-quitonexit)");
+        I_Quit();
     }
 
     // An exit sets this during the tic; the intermission starts next tic.
@@ -230,13 +248,29 @@ void K_Ticker(void)
 void K_BuildTiccmd(ticcmd_t *cmd, int maketic)
 {
     k_command_t command;
+    double aim, vx, vy;
+    int aiming;
 
     if (!K_OwnsControls())
     {
         return;
     }
 
-    K_Nav_BuildCommand(maketic, &command);
+    // Nav moves the player, facing the target combat aims at where it can,
+    // or, fighting, at the velocity combat wants; combat then fires if the
+    // facing is on the target.
+    aiming = K_Combat_Aim(maketic, &aim);
+
+    if (K_Combat_Move(&vx, &vy))
+    {
+        K_Nav_BuildMoveCommand(maketic, vx, vy, aiming ? &aim : NULL, &command);
+    }
+    else
+    {
+        K_Nav_BuildCommand(maketic, aiming ? &aim : NULL, &command);
+    }
+
+    K_Combat_Fire(maketic, &command);
 
     cmd->forwardmove = command.forward;
     cmd->sidemove = command.side;

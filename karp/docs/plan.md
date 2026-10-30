@@ -2412,8 +2412,8 @@ netgame guard; Heretic/Hexen.
 
 ## 7. Combat (the next stage)
 
-> Status: planned with the user; no code yet. Monsters are back (no `-nomonsters`), tested at
-> `-skill 3`.
+> Status: C0, C1 and the first of C2 done (7.9): Doom II MAP01 and MAP02 finish with monsters.
+> Monsters are back (no `-nomonsters`), tested at `-skill 3`.
 
 Four Doom II maps do not finish with `-nomonsters`: MAP07 and MAP32 open their way only when
 monsters die (follow-up 10), MAP30 ends when the boss brain dies, and MAP23 needs a barrel shot
@@ -2429,9 +2429,9 @@ Two new parts of the brain, on top of the goal stack (3.5) and nav (3.4):
 - **combat** (7.2-7.4): what the bot sees, what it fights and with what, and how it moves in a
   fight.
 
-Proposed files: `k_sight.c` (sight checks on Karp's map data, 7.2), `k_combat.c` (perception,
-targets, weapons, battle mode) and `k_condition.c`, with plain C headers for the console like the
-others. Their decisions go to the log under `COMBAT` and `ITEMS` (3.8).
+Files: `k_sight.c` (sight checks, 7.2), `k_combat.c` (perception, targets, weapons, battle mode)
+and `k_condition.c`, with plain C headers for the console like the others. Their decisions go to
+the log under `COMBAT` (3.8; `ITEMS` to come with pickups), the condition's changes under `BRAIN`.
 
 ### 7.1 The condition
 
@@ -2477,8 +2477,14 @@ acted on only from C4 (7.7).
   The bot plans with all of them, but aims and fires only at the ones it can see.
 - **Projectiles** (`MF_MISSILE`): position, velocity, who fired them, the damage they do.
 - **Sight checks of our own**: `P_CheckSight` bumps `validcount`, so Karp may not call it (2.4).
-  Like the engine: the REJECT table first, then a trace over Karp's map data that keeps track of
-  the openings' heights, as the engine's sight slopes do. Barrels need the same (follow-up 3.2).
+  Done as a copy of it: the REJECT table first, then the trace through the BSP, in the engine's
+  fixed-point maths, reading the level read-only and marking lines with marks of its own. Barrels
+  need the same (follow-up 3.2).
+- **Seeing is not hitting**: a monster is a target only if the player's shots would find it -
+  from the gun's height (8 above the player's middle, not the eyes), within the autoaim's reach up
+  and down (`P_AimLineAttack`: a slope of 100/160), through the openings on the way. Seen only by
+  the eyes, a row of a monster's pixels over a ledge, below a window or through a gap in a floor
+  drew shot after shot into the wall (the user, Doom II MAP02).
 - **Console**: monsters on the map (awake, asleep, seen), projectiles, the current target and the
   line of fire.
 
@@ -2580,14 +2586,15 @@ Who controls the player in a fight (the user's model):
 ### 7.7 Order
 
 1. **C0 What the bot sees**: monsters, projectiles, the sight check, the console overlay. No change
-   in behaviour.
+   in behaviour. Done.
 2. **C1 Shooting on the way**: pick a target, aim where nav allows, fire, the weapon table, the
-   rocket rule. Death handling, and runs with monsters on a few early maps.
+   rocket rule. Death handling, and runs with monsters on a few early maps. Done.
 3. **C2 Battle mode**: clearing the area, strafing, never standing still in sight, monsters in the
-   way, back to the goals.
-4. **C3 Dodging and cover**: projectiles; breaking line of sight against hitscanners and
-   arch-viles.
-5. **C4 The condition**: the needs, pickups on the way, detours, CRITICAL.
+   way, back to the goals. Done but for monsters in the way.
+4. **C4 The condition**, next (the user, after MAP02: health and dodging will take the bot much
+   further, health first): the needs, pickups on the way, detours, CRITICAL.
+5. **C3 Dodging and cover**: projectiles (on MAP02 the bot stood in slow imp fireballs); breaking
+   line of sight against hitscanners and arch-viles.
 6. **C5 The rest**: fight or avoid; barrels that block the way (MAP23); KILL ALL goals (MAP07,
    MAP32); MAP30.
 
@@ -2599,3 +2606,47 @@ Who controls the player in a fight (the user's model):
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), infighting, BFG tricks, predicting where monsters walk
   beyond a few tics.
+
+### 7.9 Done so far
+
+- **The condition** (7.1) is worked out every tic and shown on a line of its own under the status
+  line, every need side by side, ammo as b(ullets), s(hells), r(ockets), c(ells) (the user: the
+  long form did not fit); changes are logged. Nothing acts on it yet. Marks: health LOW below 50
+  until above 60, CRITICAL below 25 until above 35; armour LOW below 25 until above 40; ammo LOW
+  when no ammo the player has a weapon for is at its low mark (bullets 20, shells 5, rockets 3,
+  cells 40), OK again above 30, 8, 5, 60.
+- **What the bot sees** (7.2): every monster and projectile each tic, which monsters the player
+  can see and which its shots would find; on the console's map (Monsters overlay) and in a Combat
+  section of the Bot tab. Hits taken, monsters dying and the player's death are logged (`COMBAT`).
+- **Shooting on the way** (7.3, `k_combat.c`): the target scores by the kind's threat
+  (hitscanners first), awake, attacking, near, little turning to it, a little for being the
+  target already and for being wounded (the user: a zombieman came up a corridor unshot while
+  the bot kept to a wounded monster further off). None further than 1024, asleep ones only within
+  512. Aimed at where it will be when the command runs; fired once the facing after the
+  command's turn is on it, and the shot along that facing would not meet a wall (it can graze a
+  corner the centre is clear of, the user). The weapon is the one doing most damage a tic,
+  counting no more than kills the target; the shotgun's rating falls off beyond 400, the super
+  shotgun's beyond 300; another weapon is brought up only at twice the rating and 3 s after the
+  last switch, unless the one in hand cannot hurt the target (with a gain of 1.3, 24 switches in
+  a minute on MAP02). Five shots without a hit and the target is left alone for 2 s (the user).
+- **Facing** (7.4): nav takes combat's aim wherever it does not need the facing: not running a
+  jump (and coming up to one, it faces the jump: on MAP02 a run-up begun facing a shotgun guy
+  left the edge at 13.2 units a tic and fell short), not pressing at a switch, door or lift; on
+  a lift ride it aims, unless the ride ends in a jump.
+- **Battle mode** (7.4): a target in sight for 8 tics in a row, awake within 512 (or asleep and
+  near), stops the route (`K_Nav_Pause`); the player strafes side to side within 128 of where the
+  fight began, keeping the target where its shots find it and open floor before a passage (the
+  user saw it peek in and out of a corridor), backing away from awake monsters within 192, never
+  over a drop or onto a floor that hurts. A second with nothing worth shooting and nav plans its
+  route again from where the player is. With a reach of 768 and no steady-sight rule, monsters
+  420 units off showing through a window for a tic or two stopped the bot 58 times on MAP02.
+  A target not hurt for 5 s in a fight is left alone for 10 s.
+- **On death** the run stops with `-quitonexit` (the user); the regression script's `-Monsters`
+  plays at `-skill 3` and reports kills and deaths.
+- **Results**, `-skill 3`: MAP01 in 31.7 s, 95 health, 11 of 19 killed (shooting on the way
+  alone: 9.2 s, 77 health, 3 killed, stuck once on a zombieman in the way). MAP02 in 97.3 s, 16
+  health, 60 of 70 killed, CRITICAL for its last minute (without battle mode it died at 15 s,
+  walking into a group of shotgun guys). MAP03-MAP05 died within 13 s with shooting on the way
+  alone, not tried since. The `-nomonsters` regression is unchanged.
+- Seen, not fixed: a run-up was still slow once while aiming (13.0 units a tic at the edge on
+  MAP02, though it landed).

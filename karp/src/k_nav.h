@@ -133,8 +133,32 @@ k_navtuning_t *K_Nav_Tuning(void);
 // arrival.
 k_navstate_t K_Nav_Tick(void);
 
-// The bot's input for the command that will run as game tic `tic`.
-void K_Nav_BuildCommand(int tic, k_command_t *command);
+// The player as it will be when game tic `tic` starts: now, with the
+// commands already sent for the tics before it replayed (walls ignored).
+// cell is left -1. Returns 0 when there is no player.
+int K_Nav_Predict(int tic, k_pose_t *pose);
+
+// The bot's input for the command that will run as game tic `tic`. aim, if
+// not NULL, is the way combat wants the player to face (radians): taken
+// wherever nav does not need the facing itself - not while running a jump,
+// nor at a switch, door or lift it is working; while it stands still, the
+// player turns to it all the same.
+void K_Nav_BuildCommand(int tic, const double *aim, k_command_t *command);
+
+// Fights (k_combat.h, battle mode): whether nav can leave its route now -
+// not while working a door, lift or switch past walking up to it, nor while
+// running a jump.
+int K_Nav_CanPause(void);
+
+// While paused, nav follows no route and notices nothing (stuck, arrival);
+// the goal stays. Resumed, it plans the route again from where the player
+// is: a fight can take it well off the route.
+void K_Nav_Pause(int pause);
+
+// The command while paused: the velocity combat wants (map units per tic),
+// sliding along walls and round solid things, facing aim if not NULL.
+void K_Nav_BuildMoveCommand(int tic, double vx, double vy, const double *aim,
+                            k_command_t *command);
 
 #ifdef __cplusplus
 }

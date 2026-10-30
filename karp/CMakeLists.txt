@@ -13,6 +13,8 @@ set(IMGUI_DIR "${KARP_DIR}/third_party/imgui")
 set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/karp.c"            "${KARP_DIR}/src/karp.h"
     "${KARP_DIR}/src/k_brain.c"         "${KARP_DIR}/src/k_brain.h"
+    "${KARP_DIR}/src/k_combat.c"        "${KARP_DIR}/src/k_combat.h"
+    "${KARP_DIR}/src/k_condition.c"     "${KARP_DIR}/src/k_condition.h"
     "${KARP_DIR}/src/k_console.cpp"     "${KARP_DIR}/src/k_console.h"
     "${KARP_DIR}/src/k_graph.c"         "${KARP_DIR}/src/k_graph.h"
     "${KARP_DIR}/src/k_jump.c"          "${KARP_DIR}/src/k_jump.h"
@@ -21,6 +23,7 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_nav.c"           "${KARP_DIR}/src/k_nav.h"
     "${KARP_DIR}/src/k_path.c"          "${KARP_DIR}/src/k_path.h"
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h"
+    "${KARP_DIR}/src/k_sight.c"         "${KARP_DIR}/src/k_sight.h"
     "${KARP_DIR}/src/k_specials.c"      "${KARP_DIR}/src/k_specials.h"
     "${KARP_DIR}/src/k_trace.c"         "${KARP_DIR}/src/k_trace.h")
 

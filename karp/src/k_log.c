@@ -32,11 +32,12 @@ static boolean enabled[K_LOG_NUMCATEGORIES] =
     true,       // K_LOG_NAV
     false,      // K_LOG_CTRL
     true,       // K_LOG_PLAYER
+    true,       // K_LOG_COMBAT
 };
 
 static const char *category_names[K_LOG_NUMCATEGORIES] =
 {
-    "SYS", "MAP", "BRAIN", "NAV", "CTRL", "PLAYER",
+    "SYS", "MAP", "BRAIN", "NAV", "CTRL", "PLAYER", "COMBAT",
 };
 
 static const char *level_prefixes[] =
@@ -90,7 +91,7 @@ static void WriteToSinks(const k_logentry_t *entry, const char *text)
     char time[16];
 
     K_Log_FormatTime(entry->leveltime, time, sizeof(time));
-    M_snprintf(line, sizeof(line), "%s %-5s %s%s", time,
+    M_snprintf(line, sizeof(line), "%s %-6s %s%s", time,
                category_names[entry->category],
                level_prefixes[entry->level], text);
 

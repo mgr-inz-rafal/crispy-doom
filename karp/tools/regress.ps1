@@ -11,7 +11,8 @@
 
     Afterwards each run's karp.log is in <Out>\logs\MAPnn.log, and one line per map is printed:
     the time it finished in and the health left, the keys picked up and when, and the first failed
-    goal of a map that did not finish.
+    goal of a map that did not finish. With -Monsters, also the kills, and the death if the player
+    died.
 
     The default maps are the Doom II regression set, all of which finish: MAP01, MAP02, MAP03,
     MAP04, MAP05, MAP06, MAP08, MAP09, MAP10, MAP11, MAP12, MAP13, MAP14, MAP15, MAP16, MAP17,
@@ -31,6 +32,9 @@
     MAP19 101 s, MAP17 153 s and MAP29 163 s, so they get 150, 150, 150, 200 and 200 by default;
     the rest take under 81 s.
 
+.PARAMETER Monsters
+    Play with monsters, at -skill 3 (Hurt Me Plenty), instead of -nomonsters.
+
 .PARAMETER Build
     The folder with crispy-doom.exe and its DLLs. Defaults to build\src\Release in this repo.
 
@@ -42,6 +46,9 @@
 
 .EXAMPLE
     .\karp\tools\regress.ps1 -Maps '24' -Seconds 150
+
+.EXAMPLE
+    .\karp\tools\regress.ps1 -Maps '01' -Monsters
 #>
 param(
     [string]$Iwad = $env:DOOM2_IWAD,
@@ -50,6 +57,7 @@ param(
                         '29', '31'),
     [int]$Seconds = 120,
     [hashtable]$Limits = @{ '09' = 150; '13' = 150; '17' = 200; '19' = 150; '29' = 200 },
+    [switch]$Monsters,
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),
     [string]$Out = (Join-Path $PSScriptRoot '..\..\build\karp-regress')
 )
@@ -71,6 +79,7 @@ $logs = Join-Path $Out 'logs'
 New-Item -ItemType Directory -Force -Path $runs, $logs | Out-Null
 
 $started = @{}
+$play = if ($Monsters) { @('-skill', '3') } else { @('-nomonsters') }
 
 foreach ($map in $Maps) {
     $dir = Join-Path $runs "MAP$map"
@@ -89,8 +98,8 @@ foreach ($map in $Maps) {
     }
 
     $started[$map] = Start-Process -FilePath (Join-Path $dir 'crispy-doom.exe') -WorkingDirectory $dir `
-        -PassThru -ArgumentList '-iwad', "`"$Iwad`"", '-window', '-nomouse', '-nosound', '-nomonsters',
-                                '-autoplay', '-karpconsole', '-quitonexit', '-warp', $map
+        -PassThru -ArgumentList (@('-iwad', "`"$Iwad`"", '-window', '-nomouse', '-nosound') + $play +
+                                 @('-autoplay', '-karpconsole', '-quitonexit', '-warp', $map))
 }
 
 $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -125,11 +134,21 @@ foreach ($map in $Maps) {
         '{0} at {1}' -f $_.Matches[0].Groups[2].Value.ToLower(), $_.Matches[0].Groups[1].Value
     }
     $failure = Select-String -Path $log -Pattern 'failed - ' | Select-Object -First 1
+    $death = Select-String -Path $log -Pattern 'COMBAT\s+.*died at' | Select-Object -First 1
+    $kills = Select-String -Path $log -Pattern 'is dead \((\d+) kills of (\d+)\)' | Select-Object -Last 1
 
     $text = if ($finish) { 'finished in {0} s' -f $finish.Matches[0].Groups[1].Value } else { 'not finished' }
 
     if ($finish -and $finish.Matches[0].Groups[2].Success) {
         $text += ', {0} health' -f $finish.Matches[0].Groups[2].Value
+    }
+
+    if ($Monsters) {
+        $text += if ($kills) { '; {0} of {1} killed' -f $kills.Matches[0].Groups[1].Value, $kills.Matches[0].Groups[2].Value } else { '; none killed' }
+    }
+
+    if ($death) {
+        $text += '; ' + ($death.Line -replace '^\S+\s+COMBAT\s+(WARNING:\s+)?', '')
     }
 
     if ($keys) {

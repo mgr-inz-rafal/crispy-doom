@@ -20,6 +20,8 @@
 #include "imgui_impl_sdlrenderer2.h"
 
 #include "k_brain.h"
+#include "k_combat.h"
+#include "k_condition.h"
 #include "k_console.h"
 #include "k_graph.h"
 #include "k_jump.h"
@@ -65,6 +67,7 @@ static bool view_plain_lines = true;
 static bool view_cells;
 static bool view_centroids;
 static bool view_graph;
+static bool view_monsters = true;
 static std::vector<ImVec2> screen_points;   // scratch for polygon drawing
 
 static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
@@ -75,6 +78,7 @@ static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
     ImVec4(0.50f, 0.85f, 0.50f, 1.0f),  // K_LOG_NAV
     ImVec4(0.75f, 0.60f, 0.95f, 1.0f),  // K_LOG_CTRL
     ImVec4(0.40f, 0.85f, 0.90f, 1.0f),  // K_LOG_PLAYER
+    ImVec4(1.00f, 0.55f, 0.45f, 1.0f),  // K_LOG_COMBAT
 };
 
 static const ImVec4 warning_color = ImVec4(1.00f, 0.85f, 0.30f, 1.0f);
@@ -776,6 +780,69 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
                       neighbours.c_str());
 }
 
+// Monsters as circles of their radius, with a tick the way they face: dark
+// red asleep, red awake, orange attacking; filled when the player's shots
+// would find them, faintly when it only sees them. The target is ringed in
+// white, with the line of fire from the player. Projectiles as dots with a tail the way they fly (8 tics of it):
+// grey the player's own, yellow coming at the player, orange the rest.
+static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t *player)
+{
+    const k_combatstatus_t *combat = K_Combat_GetStatus();
+    float thickness = SDL_max(1.0f, ui_scale);
+    int count = K_Combat_MonsterCount();
+
+    for (int i = 0; i < count; ++i)
+    {
+        const k_monster_t *monster = K_Combat_Monster(i);
+        ImU32 color = monster->attacking ? IM_COL32(255, 160, 40, 255)
+                    : monster->awake ? IM_COL32(235, 60, 50, 255)
+                    : IM_COL32(150, 70, 70, 255);
+        ImVec2 at = MapToScreen(center, monster->at.x, monster->at.y);
+        float radius = SDL_max(3.0f * ui_scale, (float) (monster->radius * view_scale));
+
+        if (monster->visible)
+        {
+            draw->AddCircleFilled(at, radius, (color & ~IM_COL32_A_MASK)
+                                              | IM_COL32(0, 0, 0, monster->shootable ? 130 : 40));
+        }
+
+        draw->AddCircle(at, radius, color, 0, thickness);
+        draw->AddLine(at, ImVec2(at.x + (float) cos(monster->angle) * radius * 1.6f,
+                                 at.y - (float) sin(monster->angle) * radius * 1.6f),
+                      color, thickness);
+    }
+
+    if (combat->target >= 0 && combat->target < count)
+    {
+        const k_monster_t *target = K_Combat_Monster(combat->target);
+        ImVec2 at = MapToScreen(center, target->at.x, target->at.y);
+        float radius = SDL_max(3.0f * ui_scale, (float) (target->radius * view_scale));
+
+        draw->AddCircle(at, radius + 3.0f * ui_scale, IM_COL32(255, 255, 255, 230), 0, thickness);
+
+        if (player != NULL)
+        {
+            DrawDashedLine(draw, MapToScreen(center, player->x, player->y), at,
+                           IM_COL32(255, 255, 255, 140), thickness);
+        }
+    }
+
+    for (int i = 0; i < K_Combat_ProjectileCount(); ++i)
+    {
+        const k_projectile_t *projectile = K_Combat_Projectile(i);
+        ImU32 color = projectile->own ? IM_COL32(170, 170, 170, 255)
+                    : projectile->incoming ? IM_COL32(255, 230, 60, 255)
+                    : IM_COL32(255, 140, 40, 255);
+        ImVec2 at = MapToScreen(center, projectile->at.x, projectile->at.y);
+        ImVec2 tail = MapToScreen(center, projectile->at.x - projectile->velocity.x * 8.0,
+                                  projectile->at.y - projectile->velocity.y * 8.0);
+
+        draw->AddLine(tail, at, (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 140), thickness);
+        draw->AddCircleFilled(at, SDL_max(2.0f * ui_scale,
+                                          (float) (projectile->radius * view_scale)), color);
+    }
+}
+
 static void DrawPlayerArrow(ImDrawList *draw, const ImVec2 &center,
                             const k_pose_t &player)
 {
@@ -988,6 +1055,17 @@ static void DrawMapView(void)
                           "a step too high or a solid thing.");
     }
 
+    ImGui::SameLine();
+    ImGui::Checkbox("Monsters", &view_monsters);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Dark red: asleep. Red: awake. Orange: attacking.\nFilled: the "
+                          "player's shots would find it; faintly: it is only seen.\n"
+                          "Ringed in white: the target.\nDots: projectiles, yellow when "
+                          "coming at the player.");
+    }
+
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -1123,6 +1201,11 @@ static void DrawMapView(void)
     {
         DrawRoute(draw, path, center);
         DrawGoal(draw, path, center);
+    }
+
+    if (view_monsters)
+    {
+        DrawMonsters(draw, center, have_player ? &player : NULL);
     }
 
     if (hovered_cell >= 0)
@@ -1492,6 +1575,43 @@ static void DrawPrioritiesTab(void)
     ImGui::PopTextWrapPos();
 }
 
+static void DrawCombat(void)
+{
+    const k_combatstatus_t *combat = K_Combat_GetStatus();
+    int incoming = 0;
+
+    for (int i = 0; i < K_Combat_ProjectileCount(); ++i)
+    {
+        incoming += K_Combat_Projectile(i)->incoming;
+    }
+
+    ImGui::SeparatorText("Combat");
+
+    if (ImGui::BeginTable("combat", 2, ImGuiTableFlags_RowBg))
+    {
+        if (combat->target >= 0 && combat->target < K_Combat_MonsterCount())
+        {
+            const k_monster_t *target = K_Combat_Monster(combat->target);
+
+            StatRow("Target", "%s at %.0f, %.0f (%.0f units)%s", target->name, target->at.x,
+                    target->at.y, target->distance, target->awake ? "" : ", asleep");
+        }
+        else
+        {
+            StatRow("Target", "none");
+        }
+
+        StatRow("Weapon", "%s", combat->weapon != NULL ? combat->weapon : "-");
+        StatRow("Monsters", "%d alive, %d in sight, %d of them awake", combat->alive,
+                combat->visible, combat->awake);
+        StatRow("Projectiles", "%d, %d coming at the player", K_Combat_ProjectileCount(),
+                incoming);
+        StatRow("Kills", "%d", combat->kills);
+        StatRow("Shots", "%d", combat->shots);
+        ImGui::EndTable();
+    }
+}
+
 static void DrawBotTab(void)
 {
     const k_map_t *map = K_Map_Get();
@@ -1535,17 +1655,67 @@ static void DrawBotTab(void)
     }
 
     DrawDriving();
+    DrawCombat();
 }
 
 //
 // Layout
 //
 
+static ImVec4 NeedColor(k_need_t need)
+{
+    return need == K_NEED_OK ? ImVec4(0.55f, 0.85f, 0.55f, 1.0f)
+         : need == K_NEED_LOW ? warning_color : error_color;
+}
+
+static void Separated(void)
+{
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+}
+
+// The condition and every need side by side (the user), ammo as b(ullets),
+// s(hells), r(ockets), c(ells); what combat is doing on a line of its own.
+static void DrawConditionLine(void)
+{
+    const k_conditionstatus_t *condition = K_Condition_Get();
+    k_need_t worst = condition->condition == K_CONDITION_COMFY ? K_NEED_OK
+                   : condition->condition == K_CONDITION_CRITICAL ? K_NEED_CRITICAL
+                   : K_NEED_LOW;
+    k_pose_t player;
+
+    if (!K_Map_Get()->loaded || !K_Map_GetPlayer(&player))
+    {
+        return;
+    }
+
+    ImGui::TextColored(category_colors[K_LOG_COMBAT], "CONDITION");
+    ImGui::SameLine();
+    ImGui::TextColored(NeedColor(worst), "%s", K_Condition_Name(condition->condition));
+    Separated();
+    ImGui::TextColored(NeedColor(condition->ammo), "ammo %s",
+                       K_Condition_NeedName(condition->ammo));
+    ImGui::SameLine();
+    ImGui::TextDisabled("(b%d s%d r%d c%d)", condition->bullets, condition->shells,
+                        condition->rockets, condition->cells);
+    Separated();
+    ImGui::TextColored(NeedColor(condition->health), "health %s (%d)",
+                       K_Condition_NeedName(condition->health), condition->health_points);
+    Separated();
+    ImGui::TextColored(NeedColor(condition->armour), "armour %s (%d)",
+                       K_Condition_NeedName(condition->armour), condition->armour_points);
+    ImGui::TextColored(category_colors[K_LOG_COMBAT], "COMBAT");
+    ImGui::SameLine();
+    ImGui::TextUnformatted(K_Combat_GetStatus()->text);
+}
+
 static void DrawStatusLine(void)
 {
     ImGui::TextColored(category_colors[K_LOG_BRAIN], "KARP");
     ImGui::SameLine();
     ImGui::TextUnformatted(K_Brain_Status());
+    DrawConditionLine();
 }
 
 static void DrawTopArea(float height)

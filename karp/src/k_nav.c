@@ -238,6 +238,7 @@ typedef struct
     k_mover_t mover;        // what moved it, last tic
     int presses;
     int press_tic;          // the tic of the last press
+    boolean jump_ride;      // a ride that ends in a jump: facing its way
 } action_t;
 
 static k_path_t path;
@@ -262,6 +263,13 @@ static double dry_back;
 static int dry_since;
 
 static sent_t sent[SENT_SIZE];
+
+// The way combat wants the player to face, for the command being built, or
+// NULL (K_Nav_BuildCommand).
+static const double *aim;
+
+// A fight holds the route (K_Nav_Pause).
+static boolean paused;
 
 // Positions over the last STUCK_TICS tics.
 static k_vec2_t history[STUCK_TICS];
@@ -933,7 +941,8 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     int target = status.target;
     int last = path.num_points - 1;
     k_vec2_t at = { body->x, body->y };
-    double distance, speed, vx, vy;
+    const double *face = aim;
+    double distance, speed, vx, vy, jump_face;
     boolean steady;
 
     // The waypoint may be reached during the tics still waiting to run.
@@ -946,10 +955,13 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     // Just landed from a jump: stop first.
     if (jump_phase == JUMP_SETTLE)
     {
-        Steer(body, 0.0, 0.0, NULL, false, command);
+        Steer(body, 0.0, 0.0, aim, false, command);
         return;
     }
 
+    // Straight along the jump's line, facing it, never where combat aims:
+    // full speed needs a facing within about 53 degrees of the way it runs
+    // (strafing alone tops out at 13.3 units a tic).
     if (OnJump(target))
     {
         SteerJump(body, target, command);
@@ -958,7 +970,7 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
 
     if (target == dry_point)
     {
-        SteerToStop(body, DrySpot(), NULL, command);
+        SteerToStop(body, DrySpot(), aim, command);
         return;
     }
 
@@ -986,17 +998,28 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     // angles over a pit).
     steady = careful[target] || (target > 0 && careful[target - 1]);
 
+    // Coming up to a jump's run-up while combat aims elsewhere: facing the
+    // jump already, so the run starts at full speed (Doom II MAP02: turned
+    // round at the start, the player left the edge at 13.2 units a tic and
+    // fell short).
+    if (aim != NULL && target < last && path.legs[target] == K_LEG_JUMP)
+    {
+        jump_face = atan2(path.points[target + 1].y - path.points[target].y,
+                          path.points[target + 1].x - path.points[target].x);
+        face = &jump_face;
+    }
+
     if (distance > 1e-6)
     {
         vx = (path.points[target].x - at.x) / distance * speed;
         vy = (path.points[target].y - at.y) / distance * speed;
         AvoidWalls(body, &vx, &vy);
         AvoidBlocks(body, path.points[target], &vx, &vy);
-        Steer(body, vx, vy, NULL, steady, command);
+        Steer(body, vx, vy, face, steady, command);
     }
     else
     {
-        Steer(body, 0.0, 0.0, NULL, steady, command);
+        Steer(body, 0.0, 0.0, face, steady, command);
     }
 }
 
@@ -1109,11 +1132,17 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
     {
         // Face the line on the way, if it is close.
         SteerToStop(body, action.spot,
-                    Distance(at, action.spot) < 96.0 ? &action.face : NULL, command);
+                    Distance(at, action.spot) < 96.0 ? &action.face : aim, command);
         return;
     }
 
-    SteerToHold(body, action.spot, &action.face, command);
+    // Waiting for a door or lift, or riding one, the facing is free until
+    // the next press; not on a ride that ends in a jump, nor at a gun switch
+    // (fire is held facing it).
+    SteerToHold(body, action.spot, aim != NULL && action.phase == PHASE_WAIT
+                                   && !action.jump_ride
+                                   && action.kind != K_ACTION_SHOOT ? aim : &action.face,
+                command);
 
     // Fire is held long enough for any weapon to see it: the chainsaw reads
     // it only as each frame of its idle animation starts, every 4 tics
@@ -1166,11 +1195,33 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
     }
 }
 
-void K_Nav_BuildCommand(int tic, k_command_t *command)
+int K_Nav_Predict(int tic, k_pose_t *pose)
+{
+    body_t body;
+
+    if (!Predict(tic, &body))
+    {
+        return 0;
+    }
+
+    pose->x = body.x;
+    pose->y = body.y;
+    pose->angle = body.angle;
+    pose->momx = body.momx;
+    pose->momy = body.momy;
+    pose->onground = body.onground;
+    pose->frozen = body.frozen;
+    pose->floor = body.floor;
+    pose->cell = -1;
+    return 1;
+}
+
+void K_Nav_BuildCommand(int tic, const double *aim_angle, k_command_t *command)
 {
     body_t body;
 
     memset(command, 0, sizeof(*command));
+    aim = aim_angle;
 
     if (!Predict(tic, &body))
     {
@@ -1188,7 +1239,34 @@ void K_Nav_BuildCommand(int tic, k_command_t *command)
             SteerAlongRoute(&body, command);
         }
     }
+    else if (aim != NULL)
+    {
+        // Standing still, it can still face where combat wants.
+        Steer(&body, 0.0, 0.0, aim, false, command);
+    }
 
+    Record(tic, command, &body);
+}
+
+void K_Nav_BuildMoveCommand(int tic, double vx, double vy, const double *aim_angle,
+                            k_command_t *command)
+{
+    body_t body;
+    k_vec2_t ahead;
+
+    memset(command, 0, sizeof(*command));
+    aim = aim_angle;
+
+    if (!Predict(tic, &body))
+    {
+        return;
+    }
+
+    ahead.x = body.x + vx * 8.0;
+    ahead.y = body.y + vy * 8.0;
+    AvoidWalls(&body, &vx, &vy);
+    AvoidBlocks(&body, ahead, &vx, &vy);
+    Steer(&body, vx, vy, aim, false, command);
     Record(tic, command, &body);
 }
 
@@ -1257,6 +1335,7 @@ static void StartJumpRide(int r)
     action.a = action.b = portal->a;
     action.spot = portal->a;
     action.face = atan2(jump->dir.y, jump->dir.x);
+    action.jump_ride = true;
     action.start_tics = status.tics;
     action.press_tic = -2;
     action.sector = map->subsectors[map->cells[path.cells[r]].subsector].sector;
@@ -2074,6 +2153,15 @@ k_navstate_t K_Nav_Tick(void)
         return status.state;
     }
 
+    // Fighting: the route waits, and the time spent is no sign of being
+    // stuck.
+    if (paused)
+    {
+        history_count = 0;
+        history_next = 0;
+        return status.state;
+    }
+
     at.x = pose.x;
     at.y = pose.y;
     ++status.tics;
@@ -2209,6 +2297,7 @@ void K_Nav_Reset(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    paused = false;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     jump_phase = JUMP_NONE;
@@ -2469,6 +2558,35 @@ int K_Nav_CarefulLeg(int leg)
 {
     return have_goal && leg >= 0 && leg < path.num_points - 1
         && (careful[leg] || careful[leg + 1]);
+}
+
+int K_Nav_CanPause(void)
+{
+    return status.state != K_NAV_DRIVING
+        || ((action.kind == K_ACTION_NONE || action.phase == PHASE_APPROACH)
+            && jump_phase == JUMP_NONE && !OnJump(status.target));
+}
+
+void K_Nav_Pause(int pause)
+{
+    k_pose_t pose;
+    k_vec2_t at;
+
+    if (paused == (pause != 0))
+    {
+        return;
+    }
+
+    paused = pause != 0;
+
+    if (!paused && status.state == K_NAV_DRIVING && K_Map_GetPlayer(&pose))
+    {
+        at.x = pose.x;
+        at.y = pose.y;
+        last_at = at;
+        last_floor = pose.floor;
+        Replan(at, "back on the way after the fight");
+    }
 }
 
 const k_navstatus_t *K_Nav_GetStatus(void)
