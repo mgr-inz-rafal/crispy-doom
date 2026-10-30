@@ -2603,9 +2603,17 @@ Who controls the player in a fight (the user's model):
 - **EXPLORER** (the user's idea, jotted): when nothing is left to do but leave, the bot may choose
   to explore: secret areas, far bonuses, to finish the map with full health and armour. A goal in
   front of GO TO EXIT, taken when the condition and the time allow.
+- **Infighting** (the user, jotted): an advanced technique, so never provoked on purpose, but when
+  it happens by accident it is not broken, it is used. A powerful monster (a Cyberdemon, Spider
+  Mastermind, baron, perhaps a cacodemon) whose target is another monster, not the player
+  (`mobj_t.target`, readable), is not shot: it is left to kill as many others as it can. In the
+  engine a monster hurt by another turns on it (`P_DamageMobj`; never on an arch-vile, and
+  projectiles of its own kind do not hurt it), and keeps to it while its `threshold` runs down
+  (100 of its chase steps, `A_Chase`), but any damage after that turns it on whoever did it, so a
+  stray shot at it ends the fight between them and brings it after the player.
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
-  (what a shot wakes, for sneaking past), infighting, BFG tricks, predicting where monsters walk
-  beyond a few tics.
+  (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
+  monsters walk beyond a few tics.
 
 ### 7.9 Done so far
 
