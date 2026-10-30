@@ -151,6 +151,7 @@
 #define ATTACK_HOLD 5
 #define ACTION_TURN 45.0
 #define SPOT_RADIUS 6.0
+#define SPOT_STEP 4.0
 #define HOLD_GAIN 0.3
 #define HOLD_SPEED 3.0
 
@@ -1409,6 +1410,50 @@ static void StartJumpRide(int r)
     jump_phase = JUMP_NONE;
 }
 
+// A spot in front of the line from a to b, moved along it to the nearest
+// place the player can stand, clear of walls and solid things, while it
+// stays in front of the line: a solid thing can stand in front of a door's
+// middle (Doom II MAP23: a burning barrel before door 5, and the bot stood
+// beside it, trying to get to the spot, until its goals gave up). If none
+// is clear, the spot as it was.
+static k_vec2_t ClearSpotAlong(k_vec2_t spot, k_vec2_t a, k_vec2_t b)
+{
+    double length = Distance(a, b);
+    double ux, uy, room, along;
+    int k;
+
+    if (length < 1e-6 || K_Graph_Clearance(spot, STAND_CLEARANCE) >= STAND_CLEARANCE)
+    {
+        return spot;
+    }
+
+    ux = (b.x - a.x) / length;
+    uy = (b.y - a.y) / length;
+    along = (spot.x - a.x) * ux + (spot.y - a.y) * uy;
+
+    for (k = 1; k * SPOT_STEP < length; ++k)
+    {
+        int side;
+
+        for (side = -1; side <= 1; side += 2)
+        {
+            double t = along + side * k * SPOT_STEP;
+            k_vec2_t moved = { spot.x + ux * side * k * SPOT_STEP,
+                               spot.y + uy * side * k * SPOT_STEP };
+
+            room = SDL_min(t, length - t);
+
+            if (room >= STAND_CLEARANCE
+             && K_Graph_Clearance(moved, STAND_CLEARANCE) >= STAND_CLEARANCE)
+            {
+                return moved;
+            }
+        }
+    }
+
+    return spot;
+}
+
 // The crossing out of route cell r needs a door or lift.
 static void StartAction(k_crossing_t crossing, int r)
 {
@@ -1464,6 +1509,7 @@ static void StartAction(k_crossing_t crossing, int r)
 
     action.spot.x = middle.x + nx * ACTION_DISTANCE;
     action.spot.y = middle.y + ny * ACTION_DISTANCE;
+    action.spot = ClearSpotAlong(action.spot, action.a, action.b);
     action.face = atan2(-ny, -nx);
     action.start_tics = status.tics;
     action.press_tic = -2;
@@ -2374,6 +2420,19 @@ k_navstate_t K_Nav_Tick(void)
     else if (Stuck(at))
     {
         boolean step;
+
+        // Held off the spot in front of the line, but near it: good enough,
+        // as after APPROACH_TICS.
+        if (action.kind != K_ACTION_NONE && Distance(at, action.spot) < USE_REACH)
+        {
+            K_Log(K_LOG_NAV, K_LOG_INFO, "held %.0f units off the spot at line %d - working "
+                  "it from here", Distance(at, action.spot), action.line);
+            SetPhase(action.kind == K_ACTION_RIDE ? PHASE_WAIT : PHASE_AIM);
+            history_count = 0;
+            history_next = 0;
+            status.remaining = Remaining(at);
+            return status.state;
+        }
 
         stuck_at = at;
 

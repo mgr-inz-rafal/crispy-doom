@@ -22,8 +22,9 @@
 //	What the monsters guarding an item would cost in health is taken off,
 //	weighed as health is (the user, MAP02: going for four stimpacks started
 //	a fight a lonely medikit would not have). Nothing is worth more health
-//	than the player has left. Only the guards count, not monsters on the
-//	way there (the user: those are met and fought anyway, and move about).
+//	than the player has left, unless health is CRITICAL. Only the guards
+//	count, not monsters on the way there (the user: those are met and fought
+//	anyway, and move about).
 //
 //	An item no spot the player can stand at touches - under a tree, a big
 //	column - is out of reach; under a barrel, until the barrel goes.
@@ -474,9 +475,12 @@ void K_Items_Tick(void)
             }
         }
 
-        // Less what its guards would cost, weighed as health.
+        // Less what its guards would cost, weighed as health. Nothing is
+        // worth more health than is left, unless health is CRITICAL: then
+        // staying where the fight is costs as much (MAP02: at 9 health every
+        // medikit near was guarded by a shotgun guy, and the bot stayed).
         weighted -= item->danger * health_weight;
-        item->reach = item->danger >= player->health
+        item->reach = item->danger >= player->health && condition->health != K_NEED_CRITICAL
                     ? 0.0 : SDL_max(0.0, SDL_min(weighted * UNITS_PER_POINT, most));
     }
 }

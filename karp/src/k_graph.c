@@ -2676,6 +2676,52 @@ int K_Graph_PinchNarrow(int cell, k_vec2_t at)
     return chord != NULL && ChordNarrow(cell, chord);
 }
 
+// The first standing barrel among the blocks within CLEARANCE of a-b, or -1.
+static int BarrelNear(k_vec2_t a, k_vec2_t b)
+{
+    int blocks[MAX_NEAR_BLOCKS];
+    int count = NearBlocks(a, b, CLEARANCE, blocks, MAX_NEAR_BLOCKS);
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (K_Map_Get()->blocks[blocks[i]].barrel)
+        {
+            return blocks[i];
+        }
+    }
+
+    return -1;
+}
+
+int K_Graph_BarrelInTheWay(int portal, int from)
+{
+    const k_portal_t *p = &graph.portals[portal];
+    int block = K_Map_CellBlock(p->cell[0] == from ? p->cell[1] : p->cell[0]);
+
+    if (block >= 0)
+    {
+        return K_Map_Get()->blocks[block].barrel ? block : -1;
+    }
+
+    return BarrelNear(p->a, p->b);
+}
+
+int K_Graph_PinchBarrel(int cell, k_vec2_t at)
+{
+    chord_t *chord = ChordAt(cell, at);
+    k_portal_t across;
+    stance_t stance;
+
+    if (chord == NULL)
+    {
+        return -1;
+    }
+
+    ChordStance(cell, chord, &across, &stance);
+    return BarrelNear(across.a, across.b);
+}
+
 int K_Graph_Passable(k_crossing_t crossing)
 {
     return crossing == K_CROSS_OPEN || crossing == K_CROSS_DOOR
@@ -2940,13 +2986,23 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
         double length = Length(Sub(at, closest));
         double distance = BlockDistance(blocks[i], at);
 
-        if (distance >= reach || length < 1e-6)
+        if (distance >= reach)
         {
             continue;
         }
 
-        found[count].away.x = (at.x - closest.x) / length;
-        found[count].away.y = (at.y - closest.y) / length;
+        // Inside its square: touching, away from its centre (a spot looked
+        // at for a goal, K_Graph_Clearance: Doom II MAP23's burning barrel
+        // in front of door 5 looked clear from its middle).
+        if (length < 1e-6)
+        {
+            closest = block->at;
+            length = Length(Sub(at, closest));
+            distance = 0.0;
+        }
+
+        found[count].away.x = length > 1e-6 ? (at.x - closest.x) / length : 1.0;
+        found[count].away.y = length > 1e-6 ? (at.y - closest.y) / length : 0.0;
         found[count].distance = distance;
         ++count;
     }

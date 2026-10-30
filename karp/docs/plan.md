@@ -965,8 +965,12 @@ door, lift or lift ride, an action starts:
    put the spot closer to the side wall than the player's radius (Doom II MAP01's exit door, where
    the bot pushed against the wall and never pressed). Doors and lifts sit centred in their
    alcoves. If the spot in front of the line's middle is off the floor, the portal's middle is
-   used. Close enough after 2 seconds, since the spot may be in a wall. The player starts facing
-   the line on the way, turning at up to 45 degrees a tic.
+   used. Where a wall or solid thing stops the player there, the spot slides along the line to
+   the nearest clear place still in front of it (Doom II MAP23: a burning barrel stands before
+   the middle of door 5, and the bot stood beside it until its goals gave up). Close enough after
+   2 seconds, since the spot may be in a wall; and at once when stuck within 60 of it (the stuck
+   check came first, at 1 second, and replanned the same walk up three times). The player starts
+   facing the line on the way, turning at up to 45 degrees a tic.
 2. **Press use** (door, lift), holding the spot: only when the engine's use trace would hit the
    line (64 units straight ahead from where the player is when that tic starts, after its turn;
    the check uses the predicted position and angle and allows 60), and only when it is worth it.
@@ -1859,7 +1863,9 @@ Each milestone builds and runs; the user reviews and commits between milestones.
      the corridor that is about 80 health. The user shot the ledge barrel from outside the yellow
      door (966,-356); the others went off out of sight and did no damage. A blast only hurts what
      the barrel can see, and the bot must know that (follow-up 3, second part).
-   So MAP23 waits for gap links first, then barrels.
+   So MAP23 waits for gap links first, then barrels. Both done: MAP23 finishes without monsters
+   in 68.7 s with 103 health, the exit barrel set off through its chain (7.9), and is in the
+   regression set.
 
    **Jumps** (3.2.2, follow-up 7). MAP02 played through by hand first (the trace): the red key's
    area is reached by a running jump west over a pit 96 wide (sector 73, floor -40, 8 below the
@@ -2172,6 +2178,10 @@ Each milestone builds and runs; the user reviews and commits between milestones.
            with the whole hall chaining.
          MAP23's start hall was thought to need a hardcoded route or a soulsphere (the user's
          first note); played through, it needs one barrel shot, from a spot out of sight.
+         **Done** (7.9, with combat), simpler than above: no damage is accepted, only safe spots
+         (every barrel of the chain 160 off or out of sight), and any barrel of the chain may be
+         the one shot (the user: MAP23's are placed so that shooting the one in the way hurts).
+         The crossing costs what any fixable one does.
       3. **Monsters** are never built into the map: they move. When one is in the way and is not
          to be killed, the steering that goes round blocks goes round it too, with some random
          strafing against the randomness of how monsters move (the user's note), then waiting
@@ -2423,12 +2433,13 @@ netgame guard; Heretic/Hexen.
 
 ## 7. Combat (the next stage)
 
-> Status: C0, C1, C2 (but monsters in the way) and C4 done (7.9): Doom II MAP01 and MAP02 finish
-> with monsters. Monsters are back (no `-nomonsters`), tested at `-skill 3`. Next: C3.
+> Status: C0, C1, C2 (but monsters in the way), C4 and barrels done (7.9): Doom II MAP01 and
+> MAP02 finish with monsters, MAP23 without. Monsters are back (no `-nomonsters`), tested at
+> `-skill 3`. Next: C3.
 
 Four Doom II maps do not finish with `-nomonsters`: MAP07 and MAP32 open their way only when
 monsters die (follow-up 10), MAP30 ends when the boss brain dies, and MAP23 needs a barrel shot
-(follow-up 3.2). And once monsters are in, every map needs fighting. Combat is more than shooting
+(follow-up 3.2; done with the barrels, 7.3 point 9). And once monsters are in, every map needs fighting. Combat is more than shooting
 on sight: the bot has to manage ammo and weapons, choose what to fight and what to leave, and stay
 alive. None of it can be computed exactly at runtime, and it need not be: heuristics, survivable
 rather than perfect (the user). Perfect missile avoidance while dancing on a narrow ledge is not
@@ -2551,6 +2562,31 @@ The user's points, with what the engine says:
 7. **Never stand still** in the sight of awake monsters, the more so when there are more than the
    bot can manage: running about semi-randomly is a good way to survive in Doom (the user).
 8. **A bullet or two for gun switches**: point 1.
+9. **Barrels** (the user, on Doom II MAP02, whose barrels are placed to teach how they behave:
+   not "always shoot", but judged as items are). Engine facts: 20 health; dead, one blows up 12
+   to 15 tics later, hurting what can see it for 128 less the distance (the larger of the x and
+   y distances, less the victim's radius), never a Cyberdemon or Spider Mastermind; a dead
+   barrel is a quarter of its height; barrels under 118 apart set each other off; a blast is
+   credited to whoever set the barrel off, so survivors turn on that one (infighting for free
+   when a monster does it). Four parts:
+   - **A hazard**, always: no shot that could graze a barrel whose chain would reach the player
+     (within 160 and in sight), counting the weapon's spread and barrels behind the target; no
+     fist or chainsaw near one; in battle, spots near barrels score less, near ones about to go
+     off far less; out of a fight, a blast about to go off that could reach the player holds the
+     route while it steps away.
+   - **A weapon**: a barrel whose blast is worth 1.5 times a shot at the target (each monster
+     hurt by its kind's cost and the share of its health taken, a walking one as if it walked
+     away during the fuse, times the odds a shot pops it); another only at 1.5 times the worth;
+     none with a monster in the line of fire (the shot, and the autoaim, find it first); in a
+     fight only with a weapon that pops it at one go (the user: with the pistol, the shots go to
+     the shotgun guy and things change before it goes off). Only the barrel shot counts, not
+     the chain (the user: too much).
+   - **A trap**: one within blast reach of the route ahead that a live monster could see (MAP02:
+     the shotgun guys nearly always set one off as the player passes) is popped first, but only
+     when cheap: nothing else to shoot, ammo not LOW, a hitscan weapon in hand.
+   - **In the way** (follow-up 3.2): SHOOT BARREL, a fix like a switch: from a safe spot round
+     any barrel of its chain, shot until it goes off; the way is taken only once the chain is
+     over (a blast pushes a barrel off its square before it goes off itself).
 
 ### 7.4 Battle mode
 
@@ -2619,8 +2655,8 @@ Who controls the player in a fight (the user's model):
    further, health first): the needs, pickups on the way, detours, CRITICAL. Done.
 5. **C3 Dodging and cover**: projectiles (on MAP02 the bot stood in slow imp fireballs); breaking
    line of sight against hitscanners and arch-viles.
-6. **C5 The rest**: fight or avoid; barrels that block the way (MAP23); KILL ALL goals (MAP07,
-   MAP32); MAP30.
+6. **C5 The rest**: fight or avoid; barrels that block the way (MAP23, done with all of the
+   barrels, 7.3 point 9); KILL ALL goals (MAP07, MAP32); MAP30.
 
 ### 7.8 Later, or left out
 
@@ -2691,6 +2727,17 @@ Who controls the player in a fight (the user's model):
   times, and was used up). The brain likewise waits for such a sector before it counts what the
   line did.
 - **Never stuck for good** (follow-up 11, done by time) and **stepping aside when stuck** (3.4).
+- **CRITICAL, at once**: health turning CRITICAL looks for health that tic, not within the second
+  (MAP02: a demon bit the bot 0.9 s after, before the next look); and a guarded item is not
+  ruled out for costing more health than is left, since staying in the fight costs as much
+  (MAP02: at 9 health every medikit near was guarded by a shotgun guy, and the bot stayed).
+- **Barrels** (7.3 point 9): hazard, weapon, trap and in the way, with a yellow ring on the
+  console for the one shot at. MAP02 with monsters: four barrels set off for their blasts, trap
+  barrels popped ahead, one blast stepped away from, no barrel damage; MAP23 without monsters
+  finishes (68.7 s, 103 health), the exit barrel set off through a barrel of its chain.
+- **Clearance inside a solid thing** (`K_Graph_Clearance`): a point inside a thing's square
+  counted as clear (MAP23's burning barrel before door 5); now 0. Door and lift press spots
+  slide clear of solid things (3.4).
 - **What the bot sees** (7.2): every monster and projectile each tic, which monsters the player
   can see and which its shots would find; on the console's map (Monsters overlay) and in a Combat
   section of the Bot tab. Hits taken, monsters dying and the player's death are logged (`COMBAT`).
@@ -2724,7 +2771,9 @@ Who controls the player in a fight (the user's model):
   health, 60 of 70 killed, CRITICAL for its last minute (without battle mode it died at 15 s,
   walking into a group of shotgun guys). MAP03-MAP05 died within 13 s with shooting on the way
   alone, not tried since. With pickups, danger and fleeing: MAP02 in 110.7 s, 60 health, 60 of 70
-  killed, health detours at 57 and 24 health. The `-nomonsters` regression finishes all 28 maps;
+  killed, health detours at 57 and 24 health. With barrels: 108.7 s, 29 health, 58 of 70 killed,
+  through the trap after the red key (rooms of monsters open on a narrow space) on three
+  CRITICAL escapes. The `-nomonsters` regression finishes all 28 maps;
   pickups change some routes on purpose (soulspheres on MAP05, MAP08, MAP11, MAP27, MAP29; armour
   on MAP09, MAP11, MAP17, MAP20, MAP28; medikits on MAP24 and MAP25).
 - Seen, not fixed: a run-up was still slow once while aiming (13.0 units a tic at the edge on

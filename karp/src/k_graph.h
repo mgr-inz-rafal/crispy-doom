@@ -172,6 +172,15 @@ int K_Graph_Pinched(int cell, k_vec2_t from_a, k_vec2_t from_b,
 int K_Graph_PinchSectors(int cell, k_vec2_t at, int *sectors, int max);
 int K_Graph_PinchNarrow(int cell, k_vec2_t at);
 
+// A standing barrel that blocks the crossing (K_CROSS_THING: its square
+// over the cell beyond) or makes it too narrow (K_CROSS_NARROW: within the
+// player's radius of it), or -1: shot, it is out of the way (Doom II
+// MAP23). Barrels only: other solid things stay.
+int K_Graph_BarrelInTheWay(int portal, int from);
+
+// The same for a gap inside a cell (K_Graph_Pinched), at its middle.
+int K_Graph_PinchBarrel(int cell, k_vec2_t at);
+
 // How long the action a crossing needs is expected to take, in tics: 0
 // for an open one. For a teleporter, the time the player stands frozen
 // on arrival. beyond, if not NULL, gets the part of it the player spends

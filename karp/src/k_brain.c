@@ -41,6 +41,7 @@
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
+#include "k_sight.h"
 #include "k_specials.h"
 
 #define MAX_GOALS 8
@@ -94,6 +95,31 @@
 // A door that leaves less headroom than the player's height is shut.
 #define PLAYER_HEIGHT 56.0
 
+// A barrel in the way (plan, 7.3) goes off with its chain: the barrels under
+// BARREL_CHAIN apart that see each other, up to MAX_CHAIN. Any of them may be
+// the one shot (the user: MAP23's are placed so that shooting the one in
+// the way hurts; the user shot one on a ledge from outside the yellow door,
+// and the rest went off out of sight). It is shot from a spot BARREL_RINGS
+// from it, in BARREL_WAYS directions, that the player can stand at, in reach
+// of the shots, and safe from every barrel of the chain: BARREL_SAFE off, or
+// out of its sight (a blast hurts only what can see it; a dead barrel is a
+// quarter of its height, BLAST_HEIGHT). Shooting gives up after
+// BARREL_SHOOT_TICS out of a fight (combat shoots until it goes off, or
+// misses too often). Once it is gone, the player goes on only when no shot
+// barrel within BARREL_CHAIN_WAIT of it or of the player is still to go off.
+#define BARREL_WAYS 16
+#define BARREL_SAFE 160.0
+#define BARREL_CHAIN 118.0
+#define MAX_CHAIN 32
+#define BARREL_SHOOT_TICS (10 * TICRATE)
+#define BARREL_CHAIN_WAIT 400.0
+#define GUN_HEIGHT 36.0
+#define EYE_HEIGHT 42.0
+#define BARREL_HEIGHT 42.0
+#define BLAST_HEIGHT 10.0
+
+static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
+
 // Items worth a detour (k_items.h, plan 7.5) are looked for every
 // ITEM_CHECK_TICS while the player follows a route, the ITEM_ROUTES most
 // promising by worth and distance as the crow flies looked at by route
@@ -112,6 +138,7 @@ typedef enum
     GOAL_KEY,               // any key of a colour
     GOAL_TRIGGER,           // any line that moves a sector
     GOAL_ITEM,              // an item worth a detour, on top of the chain
+    GOAL_BARREL,            // a barrel in the way, shot from a safe spot
 } goal_type_t;
 
 // A place a goal can be met, and what to do there.
@@ -120,14 +147,16 @@ typedef struct
     k_vec2_t at;
     k_goalkind_t kind;
     int line;               // the line to work, -1 for a key or a point
-    char what[48];          // "exit switch at line 162", "blue keycard"...
+    k_vec2_t aim;           // GOAL_BARREL: the barrel to shoot from there
+    char what[64];          // "exit switch at line 162", "blue keycard"...
 } candidate_t;
 
 typedef struct
 {
     goal_type_t type;
     int param;              // GOAL_KEY: the key; GOAL_TRIGGER: the sector;
-                            // GOAL_ITEM: the item (K_Items_Get)
+                            // GOAL_ITEM: the item (K_Items_Get); GOAL_BARREL:
+                            // the barrel's block (k_block_t)
     k_vec2_t point;         // GOAL_GOTO
 
     // Not planned until a candidate is chosen; planned again when it
@@ -141,6 +170,8 @@ typedef struct
     int num_tried;
     int shut;                   // times its way shut on the way (MAX_SHUT)
     boolean idle;               // GO TO EXIT: no way for now, waiting
+    boolean shooting;           // GOAL_BARREL: at the spot, combat shooting
+                                // (wait counts the tics)
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
     // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
@@ -199,6 +230,7 @@ static k_path_t probe;              // routes looked at while scratch is in use
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
 static char status[K_LOG_LINE_LEN * 2];
 static int item_check_tic;              // when to look for items next
+static boolean was_critical;            // health was CRITICAL at the last look
 static int *item_skip;                  // per item: not looked at before this
 static int item_skip_size;
 
@@ -222,6 +254,12 @@ static void GoalName(const goal_t *goal, char *buf, int len)
         case GOAL_ITEM:
             M_snprintf(buf, len, "GET %s", K_Items_Get(goal->param)->name);
             M_ForceUppercase(buf);
+            break;
+
+        case GOAL_BARREL:
+            M_snprintf(buf, len, "SHOOT BARREL at (%.0f,%.0f)",
+                       K_Map_Get()->blocks[goal->param].at.x,
+                       K_Map_Get()->blocks[goal->param].at.y);
             break;
 
         // The line's tag: a stair builder's steps after the first are not
@@ -504,6 +542,141 @@ static boolean WasTried(const goal_t *goal, k_vec2_t at)
     return i >= 0 && leveltime < goal->tried_until[i];
 }
 
+// The floor a block stands on.
+static double BlockFloor(int block)
+{
+    const k_block_t *b = &K_Map_Get()->blocks[block];
+    int cell = K_Map_CellAt(b->at.x, b->at.y);
+
+    return cell >= 0 ? K_Map_CellFloor(cell) : 0.0;
+}
+
+static double AxisDistance(k_vec2_t a, k_vec2_t b)
+{
+    return SDL_max(fabs(b.x - a.x), fabs(b.y - a.y));
+}
+
+// The standing barrels that go off with the barrel (BARREL_CHAIN), itself
+// first. Returns how many.
+static int BarrelChain(int block, int *chain)
+{
+    const k_map_t *map = K_Map_Get();
+    int count = 1;
+    int i, b, k;
+
+    chain[0] = block;
+
+    for (i = 0; i < count; ++i)
+    {
+        const k_block_t *bomb = &map->blocks[chain[i]];
+        double bomb_floor = BlockFloor(chain[i]);
+
+        for (b = 0; b < map->num_blocks && count < MAX_CHAIN; ++b)
+        {
+            const k_block_t *other = &map->blocks[b];
+
+            for (k = 0; k < count && chain[k] != b; ++k)
+            {
+            }
+
+            // P_RadiusAttack: the barrel hit must see the one going off.
+            if (k < count || !other->barrel || !K_Map_BlockStands(b)
+             || AxisDistance(bomb->at, other->at) >= BARREL_CHAIN
+             || !K_Sight_Check(other->at.x, other->at.y,
+                               BlockFloor(b) + BARREL_HEIGHT * 0.75, bomb->at.x, bomb->at.y,
+                               bomb_floor, bomb_floor + BLAST_HEIGHT))
+            {
+                continue;
+            }
+
+            chain[count++] = b;
+        }
+    }
+
+    return count;
+}
+
+// Spots to set off a barrel in the way from (BARREL_RINGS): round any
+// barrel of its chain, on floor the player can stand on, that barrel in
+// reach of the shots, every barrel of the chain BARREL_SAFE off or out of
+// sight. Returns how many.
+static int BarrelSpots(int block, candidate_t *out, int max)
+{
+    const k_map_t *map = K_Map_Get();
+    int chain[MAX_CHAIN];
+    int length = BarrelChain(block, chain);
+    int count = 0;
+    int m, r, k, c;
+
+    for (m = 0; m < length; ++m)
+    {
+        const k_block_t *barrel = &map->blocks[chain[m]];
+        double bottom = BlockFloor(chain[m]);
+
+        for (r = 0; r < arrlen(barrel_rings); ++r)
+        {
+            for (k = 0; k < BARREL_WAYS && count < max; ++k)
+            {
+                double angle = k * 2.0 * 3.14159265358979323846 / BARREL_WAYS;
+                k_vec2_t spot = { barrel->at.x + cos(angle) * barrel_rings[r],
+                                  barrel->at.y + sin(angle) * barrel_rings[r] };
+                int cell = K_Map_CellAt(spot.x, spot.y);
+                boolean safe = true;
+                double floor;
+
+                if (cell < 0 || K_Graph_Clearance(spot, 17.0) < 17.0)
+                {
+                    continue;
+                }
+
+                floor = K_Map_CellFloor(cell);
+
+                if (!K_Sight_Aim(spot.x, spot.y, floor + GUN_HEIGHT, barrel->at.x, barrel->at.y,
+                                 bottom, bottom + BARREL_HEIGHT))
+                {
+                    continue;
+                }
+
+                for (c = 0; c < length && safe; ++c)
+                {
+                    const k_block_t *other = &map->blocks[chain[c]];
+                    double other_floor = BlockFloor(chain[c]);
+
+                    safe = AxisDistance(spot, other->at) >= BARREL_SAFE
+                        || !K_Sight_Check(spot.x, spot.y, floor + EYE_HEIGHT, other->at.x,
+                                          other->at.y, other_floor, other_floor + BLAST_HEIGHT);
+                }
+
+                if (!safe)
+                {
+                    continue;
+                }
+
+                out[count].at = spot;
+                out[count].kind = K_GOAL_POINT;
+                out[count].line = -1;
+                out[count].aim = barrel->at;
+
+                if (m == 0)
+                {
+                    M_snprintf(out[count].what, sizeof(out[count].what),
+                               "spot %.0f units from it", barrel_rings[r]);
+                }
+                else
+                {
+                    M_snprintf(out[count].what, sizeof(out[count].what),
+                               "spot %.0f units from the barrel at (%.0f,%.0f) of its chain",
+                               barrel_rings[r], barrel->at.x, barrel->at.y);
+                }
+
+                ++count;
+            }
+        }
+    }
+
+    return count;
+}
+
 // Where to go to pick up a key lying at `at` (K_Graph_PickupSpot); with no
 // spot to stand at, the key itself: the route finds the way or not.
 static k_vec2_t KeySpot(k_vec2_t at)
@@ -631,6 +804,10 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                     count = 1;
                 }
             }
+            break;
+
+        case GOAL_BARREL:
+            count = BarrelSpots(goal->param, out, max);
             break;
 
         case GOAL_TRIGGER:
@@ -792,6 +969,16 @@ static boolean FixForPinch(int cell, k_vec2_t at, goal_type_t *type, int *param,
     int narrowing[8];
     int count = K_Graph_PinchSectors(cell, at, narrowing, arrlen(narrowing));
     int best = OpenSoonest(narrowing, count);
+    int barrel = K_Graph_PinchBarrel(cell, at);
+
+    // A barrel narrowing it: shot.
+    if (barrel >= 0 && Allowed(GOAL_BARREL, barrel))
+    {
+        *type = GOAL_BARREL;
+        *param = barrel;
+        *want = 0;
+        return true;
+    }
 
     if (best < 0)
     {
@@ -830,9 +1017,18 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     int sectors_[8];
     int wants[8];
     int count = 2;
-    int i;
+    int barrel, i;
 
     *want = 0;
+
+    // A barrel standing in the way, or narrowing it: shot (Doom II MAP23).
+    if ((crossing == K_CROSS_THING || crossing == K_CROSS_NARROW)
+     && (barrel = K_Graph_BarrelInTheWay(portal, from)) >= 0 && Allowed(GOAL_BARREL, barrel))
+    {
+        *type = GOAL_BARREL;
+        *param = barrel;
+        return true;
+    }
 
     if (crossing == K_CROSS_LOCKED)
     {
@@ -1259,6 +1455,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     goal->wait = 0;
     goal->waited = 0;
     goal->idle = false;
+    goal->shooting = false;
 
     if (goal->type == GOAL_TRIGGER)
     {
@@ -1422,6 +1619,7 @@ static void PlanGoal(goal_t *goal)
              : goal->type == GOAL_KEY ? "no such key lies in the level"
              : goal->type == GOAL_TRIGGER ? "no line moves the sector any more"
              : goal->type == GOAL_ITEM ? "it is gone, or no spot touches it"
+             : goal->type == GOAL_BARREL ? "no safe spot to shoot it from"
              : "no way there");
 
     for (i = 0; i < count; ++i)
@@ -1776,6 +1974,15 @@ static boolean ConsiderItems(goal_t *goal)
     char name[64], guarded[64] = "";
     int i, k;
 
+    // Health just went CRITICAL: looked at now, not within the second (Doom
+    // II MAP02: a demon bit the bot 0.9 s after, before the next look).
+    if (critical && !was_critical)
+    {
+        item_check_tic = 0;
+    }
+
+    was_critical = critical;
+
     if (leveltime < item_check_tic)
     {
         return false;
@@ -1912,6 +2119,21 @@ static void UpdateEscape(void)
                     && K_Condition_Get()->health == K_NEED_CRITICAL);
 }
 
+// At the spot for a barrel in the way, combat shoots it.
+static void UpdateShooting(void)
+{
+    const goal_t *goal = depth > 0 ? &goals[depth - 1] : NULL;
+
+    if (goal != NULL && goal->type == GOAL_BARREL && goal->shooting)
+    {
+        K_Combat_ShootBarrel(1, goal->chosen.aim.x, goal->chosen.aim.y);
+    }
+    else
+    {
+        K_Combat_ShootBarrel(0, 0.0, 0.0);
+    }
+}
+
 //
 // Interface
 //
@@ -1928,6 +2150,7 @@ void K_Brain_Reset(void)
     outcome[0] = '\0';
     exit_wanted = K_AutoplayEnabled();
     item_check_tic = 0;
+    was_critical = false;
 
     if (item_skip != NULL)
     {
@@ -1991,6 +2214,7 @@ void K_Brain_Tick(void)
     const k_item_t *item;
 
     UpdateEscape();
+    UpdateShooting();
 
     if (depth == 0 && exit_wanted)
     {
@@ -2009,6 +2233,26 @@ void K_Brain_Tick(void)
      || (goal->type == GOAL_ITEM && !K_Items_Get(goal->param)->present))
     {
         DoneGoal("picked it up");
+        return;
+    }
+
+    // Gone, and the chain over: a blast pushes a barrel off its square
+    // before it goes off itself (MAP23: the bot set off for the way on, and
+    // the barrel in it hit it for 48).
+    if (goal->type == GOAL_BARREL && !K_Map_BlockStands(goal->param))
+    {
+        const k_block_t *barrel = &K_Map_Get()->blocks[goal->param];
+        k_pose_t player;
+
+        if (K_Combat_BlastsPending(barrel->at.x, barrel->at.y, BARREL_CHAIN_WAIT) > 0
+         || (K_Map_GetPlayer(&player)
+             && K_Combat_BlastsPending(player.x, player.y, BARREL_CHAIN_WAIT) > 0))
+        {
+            M_StringCopy(goal->note, "waiting for the chain to go off", sizeof(goal->note));
+            return;
+        }
+
+        DoneGoal("it went off");
         return;
     }
 
@@ -2066,6 +2310,17 @@ void K_Brain_Tick(void)
         return;
     }
 
+    // At the spot, combat shoots; a fight comes first, and does not count.
+    if (goal->type == GOAL_BARREL && goal->shooting)
+    {
+        if (!K_Combat_GetStatus()->battle && ++goal->wait > BARREL_SHOOT_TICS)
+        {
+            CandidateFailed(goal, "the shots did not set it off");
+        }
+
+        return;
+    }
+
     switch (K_Nav_Tick())
     {
         case K_NAV_ARRIVED:
@@ -2082,6 +2337,12 @@ void K_Brain_Tick(void)
             else if (goal->type == GOAL_KEY || goal->type == GOAL_ITEM)
             {
                 CandidateFailed(goal, "got there, but did not pick it up");
+            }
+            else if (goal->type == GOAL_BARREL)
+            {
+                goal->shooting = true;
+                goal->wait = 0;
+                M_StringCopy(goal->note, "shooting it", sizeof(goal->note));
             }
             else
             {

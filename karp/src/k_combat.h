@@ -60,6 +60,8 @@ typedef struct
     int shots;              // fire presses this level
     int died;               // the player died this level
     int battle;             // fighting: the route waits (battle mode)
+    int barrel;             // shooting a barrel, at barrel_at
+    k_vec2_t barrel_at;
     char text[96];          // what it is doing, for the console
 } k_combatstatus_t;
 
@@ -92,6 +94,15 @@ double K_Combat_Danger(double x, double y, double floor);
 // is started, one going on is broken off, and the player runs, shooting on
 // the way (plan, 7.4: fleeing).
 void K_Combat_Escape(int on);
+
+// Set by the brain while it wants the barrel at (x, y) out of the way: shot
+// at from where the player is, once no monster is to be shot, with a weapon
+// that pops it (brought up if need be). It must be in reach of the shots,
+// and its chain clear of the player.
+void K_Combat_ShootBarrel(int on, double x, double y);
+
+// How many barrels within reach of (x, y) are shot and about to blow up.
+int K_Combat_BlastsPending(double x, double y, double reach);
 
 // After nav built the command: brings up the weapon wanted, and fires if,
 // after the command's turn, the player faces the target. Leaves alone a

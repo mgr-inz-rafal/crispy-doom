@@ -19,7 +19,14 @@
 //	tapped, fired only from the ready state. The plasma rifle is held: let
 //	go, it pauses 20 tics after each ball. Rockets are never fired at
 //	anything close (the blast reaches 128 from where it hits), unless the
-//	player is invulnerable; no shot goes through a barrel near the player.
+//	player is invulnerable.
+//
+//	Barrels (plan, 7.3): never set off near the player, by a shot that could
+//	graze one (spread counted, and those behind the target) or a blow; kept
+//	away from in battle. Shot on purpose, from a safe distance, when the
+//	blast is worth more than a shot at the target, when one by the route
+//	ahead could be set off by monsters as the player passes (if cheap), or
+//	when the brain wants one out of the way.
 //
 //	Battle mode (plan, 7.4), as a human who is not speedrunning plays (the
 //	user): a monster near enough to matter, awake, or asleep but close,
@@ -54,6 +61,7 @@
 #include "p_local.h"
 
 #include "k_combat.h"
+#include "k_condition.h"
 #include "k_graph.h"
 #include "k_log.h"
 #include "k_sight.h"
@@ -134,9 +142,70 @@
 #define ROCKET_MIN 160.0
 #define INVULN_LEFT 70
 
-// No shot through a standing barrel within BARREL_HOLD of the player.
-#define BARREL_HOLD 200.0
+// Barrels (MT_BARREL, 20 health): dead, one blows up 12 to 15 tics later
+// (S_BEXP to A_Explode), hurting whatever can see it for BLAST less the
+// distance - the larger of the x and y distances, less the victim's radius
+// (P_RadiusAttack) - never a Cyberdemon or Spider Mastermind. Barrels
+// under BARREL_CHAIN apart set each other off (20 health: BLAST - 20 + the
+// radius). The player keeps BLAST_SAFE from any barrel that could go off:
+// the blast, its radius and a margin. No shot can graze a barrel that close
+// (BARREL_MARGIN), counting the weapon's spread and the barrels behind the
+// target, which a miss flies on to (the user: on Doom II MAP02 the bot came
+// close to shooting barrels beside it).
+#define BLAST 128.0
+#define BARREL_HEALTH 20.0
+#define BARREL_RADIUS 10.0
+#define BARREL_HEIGHT 42.0
+#define BLAST_HEIGHT 10.0
+#define BARREL_CHAIN 118.0
+#define BLAST_SAFE 160.0
 #define BARREL_MARGIN 4.0
+#define MAX_BARRELS 256
+
+// A barrel is shot instead of the target when its blast is worth
+// BARREL_GAIN times a shot at the target, and at least BARREL_MIN (a
+// zombieman's cost): the monsters it would hurt, each by its kind's cost
+// and the share of its health it would take, times the odds a shot pops
+// it; one walking about as if it walked away DRIFT_PER_SPEED times its
+// speed during the fuse, one attacking or asleep where it stands. Only the
+// barrel shot counts, not those it would set off (the user: chains are too
+// much). Another barrel is taken only at BARREL_SWITCH times the worth.
+// With the weapon in hand, in BARREL_SHOTS shots at the most on average,
+// and in a fight at one go (not the pistol or chaingun). It is shot at
+// until it goes off: only shots that take none of its health count, and
+// after BARREL_MISSES of them it is left alone a while (MAP23: two pistol
+// bullets took 15, and it was left for another).
+#define BARREL_GAIN 1.5
+#define BARREL_SWITCH 1.5
+#define BARREL_MIN 5.0
+#define DRIFT_PER_SPEED 2.5
+#define BARREL_SHOTS 2
+#define BARREL_MISSES 3
+
+// The brain's barrel is the live one within BLOCKING_DRIFT of where it
+// stood.
+#define BLOCKING_DRIFT 32.0
+
+// A trap barrel (the user, MAP02: one the shotgun guys nearly always set
+// off as the player passes): within BLAST_SAFE of the route TRAP_AHEAD
+// ahead, where a live monster within TRAP_SEEN could see it. Popped first,
+// from where the player is, but only when it is cheap: nothing else to
+// shoot, ammo not LOW, a hitscan weapon in hand. Looked for every
+// TRAP_TICS.
+#define TRAP_AHEAD 768.0
+#define TRAP_SEEN 1536.0
+#define TRAP_TICS 8
+
+// In battle, a spot within BLAST_SAFE of a barrel scores less: a monster's
+// shot may set it off (the user: hit hard by a barrel a monster shot).
+#define BARREL_AWAY 2.0
+#define DYING_AWAY 6.0
+
+// Out of a fight, a shot barrel about to go off whose blast could reach the
+// player holds the route while the player steps away from it at DODGE_SPEED
+// (MAP02: the bot shot one from a safe distance, then walked on toward it
+// and its chain hit it).
+#define DODGE_SPEED 16.0
 
 // A projectile is incoming when it will pass within the player's radius
 // and PROJECTILE_MARGIN of it, within PROJECTILE_HORIZON tics.
@@ -284,6 +353,44 @@ static k_vec2_t move;               // the velocity wanted
 
 // Fights broken off: the brain goes for health, CRITICAL (K_Combat_Escape).
 static boolean escape;
+
+// Barrels in the level, live ones and those about to blow up. Barrels that
+// would set each other off share a chain; a chain with a barrel within
+// BLAST_SAFE of the player is near: never shot, never grazed.
+typedef struct
+{
+    const mobj_t *mo;
+    k_vec2_t at;
+    double z;
+    boolean live;           // not yet shot to death
+    int chain;              // the first barrel of its chain
+} barrel_t;
+
+typedef enum
+{
+    BARREL_NONE,
+    BARREL_WEAPON,          // its blast is worth more than a shot at the target
+    BARREL_TRAP,            // by the route ahead, where monsters could set it off
+    BARREL_BLOCKING,        // in the way: the brain asked (K_Combat_ShootBarrel)
+} barrelwhy_t;
+
+static barrel_t barrels[MAX_BARRELS];
+static int num_barrels;
+static boolean chain_near[MAX_BARRELS];     // per chain (its first barrel)
+
+static const mobj_t *barrel_mo;             // the barrel shot at, NULL if none
+static int barrel_target = -1;              // its index this tic
+static barrelwhy_t barrel_why;
+static int barrel_health;                   // its health last tic
+static int barrel_misses;                   // shots that took none of it
+static char barrel_reason[64];
+
+// The barrel the brain wants gone (BARREL_BLOCKING), if any.
+static boolean blocking_wanted;
+static k_vec2_t blocking_at;
+
+// Stepping away from a blast about to go off (DODGE_SPEED).
+static boolean dodging;
 
 static double ToMap(fixed_t value)
 {
@@ -477,6 +584,115 @@ static void AddProjectile(const mobj_t *mo, const mobj_t *player_mo, k_vec2_t me
     }
 }
 
+// The larger of the x and y distances: how the engine measures a blast.
+static double AxisDistance(k_vec2_t a, k_vec2_t b)
+{
+    return SDL_max(fabs(b.x - a.x), fabs(b.y - a.y));
+}
+
+// A barrel standing, or shot and about to blow up (before A_Explode). Its
+// chain is worked out later (UpdateChains).
+static void AddBarrel(const mobj_t *mo, boolean *changed)
+{
+    boolean live = mo->health > 0 && (mo->flags & MF_SHOOTABLE);
+    barrel_t *barrel;
+
+    if (num_barrels == MAX_BARRELS
+     || (!live && (mo->state == NULL || mo->state - states < S_BEXP
+                   || mo->state - states >= S_BEXP4)))
+    {
+        return;
+    }
+
+    barrel = &barrels[num_barrels++];
+    *changed |= barrel->mo != mo || barrel->live != live;
+    barrel->mo = mo;
+    barrel->at.x = ToMap(mo->x);
+    barrel->at.y = ToMap(mo->y);
+    barrel->z = ToMap(mo->z);
+    barrel->live = live;
+}
+
+static int ChainOf(int i)
+{
+    while (barrels[i].chain != i)
+    {
+        i = barrels[i].chain = barrels[barrels[i].chain].chain;
+    }
+
+    return i;
+}
+
+// Which live barrels would set each other off, when the list changed
+// (live barrels stand still); and which chains are near the player: have a
+// barrel within BLAST_SAFE whose blast could see it (a dead barrel is a
+// quarter of its height, BLAST_HEIGHT).
+static void UpdateChains(boolean changed, const mobj_t *player_mo)
+{
+    k_vec2_t me = { ToMap(player_mo->x), ToMap(player_mo->y) };
+    double eye = ToMap(player_mo->z) + ToMap(player_mo->height) * 0.75;
+    int i, j;
+
+    if (changed)
+    {
+        for (i = 0; i < num_barrels; ++i)
+        {
+            barrels[i].chain = i;
+        }
+
+        for (i = 0; i < num_barrels; ++i)
+        {
+            for (j = i + 1; j < num_barrels; ++j)
+            {
+                if (barrels[i].live && barrels[j].live
+                 && AxisDistance(barrels[i].at, barrels[j].at) < BARREL_CHAIN
+                 && ChainOf(i) != ChainOf(j) && K_Sight_Things(barrels[j].mo, barrels[i].mo))
+                {
+                    barrels[ChainOf(j)].chain = ChainOf(i);
+                }
+            }
+        }
+
+        for (i = 0; i < num_barrels; ++i)
+        {
+            ChainOf(i);
+        }
+    }
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        chain_near[i] = false;
+    }
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        if (barrels[i].live && !chain_near[barrels[i].chain]
+         && AxisDistance(me, barrels[i].at) < BLAST_SAFE
+         && K_Sight_Check(me.x, me.y, eye, barrels[i].at.x, barrels[i].at.y, barrels[i].z,
+                          barrels[i].z + BLAST_HEIGHT))
+        {
+            chain_near[barrels[i].chain] = true;
+        }
+    }
+}
+
+// Whether a live barrel is near enough that a melee blow might hit it.
+static boolean BarrelBeside(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    int i;
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        if (barrels[i].live && AxisDistance(me, barrels[i].at) < BLAST_SAFE)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static boolean WasAlive(const mobj_t *mo)
 {
     int i;
@@ -498,10 +714,13 @@ static void Collect(const player_t *player)
     const mobj_t *player_mo = player->mo;
     k_vec2_t me = { ToMap(player_mo->x), ToMap(player_mo->y) };
     const thinker_t *thinker;
+    int was_barrels = num_barrels;
+    boolean changed = false;
     int i;
 
     num_monsters = 0;
     num_projectiles = 0;
+    num_barrels = 0;
     status.alive = status.visible = status.awake = 0;
 
     for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
@@ -516,6 +735,10 @@ static void Collect(const player_t *player)
         if (mo->flags & MF_MISSILE)
         {
             AddProjectile(mo, player_mo, me);
+        }
+        else if (mo->type == MT_BARREL)
+        {
+            AddBarrel(mo, &changed);
         }
         else if (IsMonster(mo))
         {
@@ -543,6 +766,7 @@ static void Collect(const player_t *player)
     }
 
     num_was_alive = num_monsters;
+    UpdateChains(changed || num_barrels != was_barrels, player_mo);
 }
 
 // "the imp", "its own blast"; what hurt the player.
@@ -554,7 +778,8 @@ static void AttackerName(const player_t *player, char *buf, int buf_len)
     }
     else if (player->attacker == player->mo)
     {
-        M_StringCopy(buf, "its own blast", buf_len);
+        // A barrel's blast counts as whoever set it off.
+        M_StringCopy(buf, "a blast it set off (its rocket, or a barrel)", buf_len);
     }
     else
     {
@@ -594,9 +819,12 @@ static boolean Selectable(const player_t *player, const weapon_t *weapon)
         && !(weapon->weapon == wp_shotgun && player->weaponowned[wp_supershotgun]);
 }
 
-// The damage a tic the weapon would do to the monster, no more than kills
-// it counting (and a half: not all hits land as hoped).
-static double Rating(const player_t *player, const weapon_t *weapon, const k_monster_t *monster)
+// The damage a shot of the weapon would do, on average, to a thing of the
+// radius at the distance: 0 if it cannot fire, the thing is out of a melee
+// weapon's reach, a barrel is beside the player (a blow could set it off),
+// or a rocket would hurt the player too.
+static double ShotDamage(const player_t *player, const weapon_t *weapon, double distance,
+                         double radius)
 {
     double damage = weapon->damage, hit = 1.0;
 
@@ -607,7 +835,7 @@ static double Rating(const player_t *player, const weapon_t *weapon, const k_mon
 
     if (weapon->reach > 0.0)
     {
-        if (monster->distance - monster->radius > weapon->reach)
+        if (distance - radius > weapon->reach || BarrelBeside(player))
         {
             return 0.0;
         }
@@ -619,29 +847,37 @@ static double Rating(const player_t *player, const weapon_t *weapon, const k_mon
     }
     else if (weapon->flies)
     {
-        if (weapon->weapon == wp_missile && monster->distance < ROCKET_MIN
+        if (weapon->weapon == wp_missile && distance < ROCKET_MIN
          && player->powers[pw_invulnerability] < INVULN_LEFT)
         {
             return 0.0;
         }
 
-        hit = 1.0 / (1.0 + monster->distance / 512.0);
+        hit = 1.0 / (1.0 + distance / 512.0);
     }
-    else if (!(weapon->taps && monster->distance > TAP_DISTANCE))
+    else if (!(weapon->taps && distance > TAP_DISTANCE))
     {
-        double half = atan2(monster->radius, monster->distance) * 180.0 / K_PI;
+        double half = atan2(radius, distance) * 180.0 / K_PI;
 
         hit = SDL_min(1.0, half / weapon->spread);
     }
 
-    if (weapon->range > 0.0 && monster->distance > weapon->range)
+    if (weapon->range > 0.0 && distance > weapon->range)
     {
-        double share = weapon->range / monster->distance;
+        double share = weapon->range / distance;
 
         hit *= SDL_max(0.25, share * share);
     }
 
-    return SDL_min(damage * hit, monster->health * 1.5) / weapon->tics;
+    return damage * hit;
+}
+
+// The damage a tic the weapon would do to the monster, no more than kills
+// it counting (and a half: not all hits land as hoped).
+static double Rating(const player_t *player, const weapon_t *weapon, const k_monster_t *monster)
+{
+    return SDL_min(ShotDamage(player, weapon, monster->distance, monster->radius),
+                   monster->health * 1.5) / weapon->tics;
 }
 
 static boolean Ignored(const mobj_t *mo)
@@ -797,20 +1033,52 @@ static void ChooseTarget(const player_t *player)
     }
 }
 
+static void DropBarrel(void);
+
 // A shot fired at the target (the ammo went down) that did not hurt it;
 // after MISS_SHOTS of them the target is left alone for a moment.
 static void CountMisses(const player_t *player)
 {
     ammotype_t ammo = weaponinfo[player->readyweapon].ammo;
     int now = ammo == am_noammo ? 0 : player->ammo[ammo];
-
-    if (status.target >= 0 && ammo == last_ammo_type && now < last_ammo)
-    {
-        ++misses;
-    }
+    boolean fired = ammo == last_ammo_type && now < last_ammo;
 
     last_ammo_type = ammo;
     last_ammo = now;
+
+    // Shots at a barrel are no misses at the target. One that took none of
+    // its health is (a hitscan hit lands the tic it is fired); BARREL_MISSES
+    // of them: left alone a while.
+    if (barrel_mo != NULL)
+    {
+        int health = 0, i;
+
+        for (i = 0; i < num_barrels; ++i)
+        {
+            if (barrels[i].mo == barrel_mo && barrels[i].live)
+            {
+                health = barrel_mo->health;
+            }
+        }
+
+        if (fired && health > 0 && health >= barrel_health && ++barrel_misses >= BARREL_MISSES)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "the barrel at (%.0f,%.0f) seems out of reach of "
+                  "the shots - %d without a hit; left alone for %d s", status.barrel_at.x,
+                  status.barrel_at.y, barrel_misses, IGNORE_TICS / TICRATE);
+            Ignore(barrel_mo, IGNORE_TICS);
+            DropBarrel();
+            return;
+        }
+
+        barrel_health = health;
+        return;
+    }
+
+    if (status.target >= 0 && fired)
+    {
+        ++misses;
+    }
 
     if (status.target >= 0 && misses >= MISS_SHOTS)
     {
@@ -869,6 +1137,427 @@ static void ChooseWeapon(const player_t *player)
     {
         wanted = current->weapon;
         status.weapon = current->name;
+    }
+}
+
+// The damage a shot of the weapon would do to a barrel: pistol and chaingun
+// are tapped at it, so their first bullet goes straight.
+static double BarrelShot(const player_t *player, const weapon_t *weapon, double distance)
+{
+    if (weapon == NULL || weapon->reach > 0.0 || weapon->weapon == wp_bfg
+     || !CanFire(player, weapon))
+    {
+        return 0.0;
+    }
+
+    return weapon->taps ? weapon->damage : ShotDamage(player, weapon, distance, BARREL_RADIUS);
+}
+
+// Whether the weapon pops a barrel at the distance in BARREL_SHOTS shots.
+static boolean CanPop(const player_t *player, const weapon_t *weapon, double distance)
+{
+    return BarrelShot(player, weapon, distance) * BARREL_SHOTS >= BARREL_HEALTH;
+}
+
+// A weapon the player has that pops the barrel, the cheapest ammo first;
+// NULL if none.
+static const weapon_t *PopWeapon(const player_t *player, double distance)
+{
+    static const weapontype_t order[] =
+    {
+        wp_pistol, wp_chaingun, wp_shotgun, wp_supershotgun, wp_plasma, wp_missile
+    };
+    int i;
+
+    for (i = 0; i < arrlen(order); ++i)
+    {
+        const weapon_t *weapon = WeaponOf(order[i]);
+
+        if (Selectable(player, weapon) && CanPop(player, weapon, distance))
+        {
+            return weapon;
+        }
+    }
+
+    return NULL;
+}
+
+// Whether a monster stands in the line of fire to the barrel, before it:
+// the shot (and the autoaim) would find the monster first (MAP02: three
+// shots at a barrel behind a shotgun guy all hit the guy).
+static boolean MonsterInTheWay(k_vec2_t me, const barrel_t *barrel)
+{
+    double distance = Distance(me, barrel->at);
+    double ux, uy;
+    int i;
+
+    if (distance < 1.0)
+    {
+        return false;
+    }
+
+    ux = (barrel->at.x - me.x) / distance;
+    uy = (barrel->at.y - me.y) / distance;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+        double along = (monster->at.x - me.x) * ux + (monster->at.y - me.y) * uy;
+        double across = fabs((monster->at.y - me.y) * ux - (monster->at.x - me.x) * uy);
+
+        if (along > 0.0 && along < distance - BARREL_RADIUS
+         && across < monster->radius + BARREL_MARGIN)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether the barrel can be shot at from where the player is: live, its
+// chain clear of the player, the shot reaching it with no monster in the
+// way, not left alone.
+static boolean BarrelInReach(const player_t *player, const barrel_t *barrel, k_vec2_t me)
+{
+    return barrel->live && !chain_near[barrel->chain] && !Ignored(barrel->mo)
+        && Distance(me, barrel->at) <= TARGET_REACH
+        && K_Sight_Aim(me.x, me.y, GunHeight(player->mo), barrel->at.x, barrel->at.y,
+                       barrel->z, barrel->z + BARREL_HEIGHT)
+        && !MonsterInTheWay(me, barrel);
+}
+
+static void AddName(char *list, int len, int *count, const char *name)
+{
+    if (*count < 2)
+    {
+        M_snprintf(list + strlen(list), len - strlen(list), "%sthe %s",
+                   *count > 0 ? " and " : "", name);
+    }
+    else if (*count == 2)
+    {
+        M_StringConcat(list, " and more", len);
+    }
+
+    ++*count;
+}
+
+// What the barrel's blast is worth (BARREL_GAIN), and what it would do,
+// for the log ("kill the zombieman, hurt the imp").
+static double BlastWorth(const barrel_t *barrel, char *what, int what_len)
+{
+    char killed[64] = "", hurt[64] = "";
+    int num_killed = 0, num_hurt = 0;
+    double worth = 0.0;
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+        const mobj_t *mo = monster_mobjs[i];
+        double cost = Kind(monster->type)->cost;
+        double reach, damage, share;
+
+        if (cost <= 0.0 || monster->type == MT_CYBORG || monster->type == MT_SPIDER)
+        {
+            continue;
+        }
+
+        reach = SDL_max(0.0, AxisDistance(barrel->at, monster->at) - monster->radius);
+
+        if (monster->awake && !monster->attacking)
+        {
+            reach += mo->info->speed * DRIFT_PER_SPEED;
+        }
+
+        damage = BLAST - reach;
+
+        if (damage <= 0.0 || !K_Sight_Things(mo, barrel->mo))
+        {
+            continue;
+        }
+
+        share = SDL_min(1.0, damage / SDL_max(monster->health, 1));
+
+        if (!monster->awake
+         && fabs(Wrap(atan2(barrel->at.y - monster->at.y, barrel->at.x - monster->at.x)
+                      - monster->angle)) > K_PI / 2.0)
+        {
+            share *= ASLEEP_AWAY;
+        }
+
+        worth += cost * share;
+
+        if (damage >= monster->health)
+        {
+            AddName(killed, sizeof(killed), &num_killed, monster->name);
+        }
+        else
+        {
+            AddName(hurt, sizeof(hurt), &num_hurt, monster->name);
+        }
+    }
+
+    M_snprintf(what, what_len, "%s%s%s%s%s", num_killed > 0 ? "kill " : "", killed,
+               num_killed > 0 && num_hurt > 0 ? ", " : "", num_hurt > 0 ? "hurt " : "", hurt);
+    return worth;
+}
+
+// What a shot at the target with the weapon in hand is worth, as a blast
+// is (BlastWorth): its kind's cost times the share of its health it takes.
+static double ShotWorth(const player_t *player)
+{
+    const weapon_t *weapon = WeaponOf(player->readyweapon);
+    const k_monster_t *monster;
+
+    if (status.target < 0 || weapon == NULL)
+    {
+        return 0.0;
+    }
+
+    monster = &monsters[status.target];
+    return Kind(monster->type)->cost
+         * SDL_min(1.0, ShotDamage(player, weapon, monster->distance, monster->radius)
+                        / SDL_max(monster->health, 1));
+}
+
+// Whether the route ahead passes within BLAST_SAFE of the barrel, and some
+// live monster could see it (and so set it off as the player passes).
+static boolean TrapBarrel(const barrel_t *barrel, k_vec2_t me)
+{
+    const k_path_t *path = K_Nav_GetPath();
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    double left = TRAP_AHEAD;
+    boolean by_route = false;
+    k_vec2_t a = me;
+    int k, s, i;
+
+    if (path == NULL || nav->state != K_NAV_DRIVING)
+    {
+        return false;
+    }
+
+    for (k = SDL_max(nav->target, 1); k < path->num_points && left > 0.0 && !by_route; ++k)
+    {
+        k_vec2_t b = path->points[k];
+        double length = Distance(a, b);
+        int steps = (int) (length / 16.0) + 1;
+
+        for (s = 0; s <= steps && !by_route; ++s)
+        {
+            k_vec2_t point = { a.x + (b.x - a.x) * s / steps, a.y + (b.y - a.y) * s / steps };
+
+            by_route = AxisDistance(point, barrel->at) < BLAST_SAFE;
+        }
+
+        left -= length;
+        a = b;
+    }
+
+    for (i = 0; by_route && i < num_monsters; ++i)
+    {
+        if (Kind(monsters[i].type)->cost > 0.0
+         && Distance(monsters[i].at, barrel->at) < TRAP_SEEN
+         && K_Sight_Things(monster_mobjs[i], barrel->mo))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void DropBarrel(void)
+{
+    barrel_mo = NULL;
+    barrel_target = -1;
+    barrel_why = BARREL_NONE;
+    barrel_misses = 0;
+}
+
+static void SetBarrel(int index, barrelwhy_t why, const char *reason)
+{
+    if (barrels[index].mo != barrel_mo || why != barrel_why)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "shooting the barrel at (%.0f,%.0f) - %s",
+              barrels[index].at.x, barrels[index].at.y, reason);
+        barrel_misses = 0;
+        barrel_health = barrels[index].mo->health;
+    }
+
+    barrel_mo = barrels[index].mo;
+    barrel_target = index;
+    barrel_why = why;
+    status.barrel_at = barrels[index].at;
+
+    if (reason != barrel_reason)
+    {
+        M_StringCopy(barrel_reason, reason, sizeof(barrel_reason));
+    }
+}
+
+// Whether to shoot a barrel rather than the target (plan, 7.3; the user, on
+// Doom II MAP02's barrels): one the brain wants out of the way, when no
+// monster is to be shot; one whose blast is worth more than a shot at the
+// target; or a trap barrel by the route ahead, when nothing else is to be
+// shot and it is cheap.
+static void ChooseBarrel(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    const weapon_t *weapon = WeaponOf(player->readyweapon);
+    double shot_worth = ShotWorth(player), best_worth = 0.0, current_worth = 0.0;
+    char what[96], best_what[96] = "", current_what[96] = "", reason[96];
+    boolean fighting = status.target >= 0 || battle;
+    int current = -1, best = -1, i;
+
+    for (i = 0; barrel_mo != NULL && i < num_barrels; ++i)
+    {
+        if (barrels[i].mo == barrel_mo)
+        {
+            current = i;
+        }
+    }
+
+    if (barrel_mo != NULL && (current < 0 || !barrels[current].live))
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "the barrel at (%.0f,%.0f) is going off",
+              status.barrel_at.x, status.barrel_at.y);
+        DropBarrel();
+        current = -1;
+    }
+
+    barrel_target = -1;
+
+    // In the way (K_Combat_ShootBarrel): from where the brain sent the
+    // player, with whatever weapon pops it. Held on to once found: each hit
+    // pushes it a little (MAP23: two bullets pushed one off where the brain
+    // saw it, and it was not shot again).
+    if (blocking_wanted && status.target < 0)
+    {
+        if (current >= 0 && barrel_why == BARREL_BLOCKING
+         && BarrelInReach(player, &barrels[current], me))
+        {
+            SetBarrel(current, BARREL_BLOCKING, barrel_reason);
+            return;
+        }
+
+        for (i = 0; i < num_barrels; ++i)
+        {
+            if (barrels[i].live && AxisDistance(barrels[i].at, blocking_at) < BLOCKING_DRIFT
+             && (best < 0 || Distance(barrels[i].at, blocking_at)
+                             < Distance(barrels[best].at, blocking_at)))
+            {
+                best = i;
+            }
+        }
+
+        if (best >= 0 && BarrelInReach(player, &barrels[best], me))
+        {
+            SetBarrel(best, BARREL_BLOCKING, "it is in the way");
+            return;
+        }
+
+        best = -1;
+    }
+
+    if (player->pendingweapon != wp_nochange || weapon == NULL)
+    {
+        DropBarrel();
+        return;
+    }
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        double chance = SDL_min(1.0, BarrelShot(player, weapon, Distance(me, barrels[i].at))
+                                     / BARREL_HEALTH);
+        double worth;
+
+        // In a fight, only with a weapon that pops it at one go (the user:
+        // with the pistol it takes two or three shots, the autoaim sends
+        // some to the monsters, and things change before it goes off).
+        if (chance * BARREL_SHOTS < 1.0 || (fighting && chance < 1.0)
+         || !BarrelInReach(player, &barrels[i], me))
+        {
+            continue;
+        }
+
+        // Worth the odds that a shot pops it.
+        worth = BlastWorth(&barrels[i], what, sizeof(what)) * chance;
+
+        if (i == current && barrel_why == BARREL_WEAPON)
+        {
+            current_worth = worth;
+            M_StringCopy(current_what, what, sizeof(current_what));
+        }
+
+        if (worth > best_worth)
+        {
+            best = i;
+            best_worth = worth;
+            M_StringCopy(best_what, what, sizeof(best_what));
+        }
+    }
+
+    // Another barrel only when clearly better (MAP02: three barrels in a
+    // tenth of a second, none of them shot).
+    if (current_worth > 0.0 && best != current && best_worth < current_worth * BARREL_SWITCH)
+    {
+        best = current;
+        best_worth = current_worth;
+        M_StringCopy(best_what, current_what, sizeof(best_what));
+    }
+
+    // Kept while still worth the shot at the target.
+    if (best >= 0 && best_worth >= BARREL_MIN
+     && (best_worth > shot_worth * BARREL_GAIN
+         || (best == current && barrel_why == BARREL_WEAPON && best_worth >= shot_worth)))
+    {
+        M_snprintf(reason, sizeof(reason), "its blast would %s", best_what);
+        SetBarrel(best, BARREL_WEAPON, reason);
+        return;
+    }
+
+    // A trap ahead: only when it is cheap.
+    if (status.target >= 0 || battle || K_Condition_Get()->ammo != K_NEED_OK
+     || weapon->reach > 0.0 || weapon->flies)
+    {
+        DropBarrel();
+        return;
+    }
+
+    if (current >= 0 && barrel_why == BARREL_TRAP
+     && BarrelInReach(player, &barrels[current], me)
+     && CanPop(player, weapon, Distance(me, barrels[current].at))
+     && (leveltime % TRAP_TICS != 0 || TrapBarrel(&barrels[current], me)))
+    {
+        SetBarrel(current, BARREL_TRAP, barrel_reason);
+        return;
+    }
+
+    DropBarrel();
+
+    if (leveltime % TRAP_TICS != 0)
+    {
+        return;
+    }
+
+    best = -1;
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        double distance = Distance(me, barrels[i].at);
+
+        if ((best < 0 || distance < Distance(me, barrels[best].at))
+         && BarrelInReach(player, &barrels[i], me) && CanPop(player, weapon, distance)
+         && TrapBarrel(&barrels[i], me))
+        {
+            best = i;
+        }
+    }
+
+    if (best >= 0)
+    {
+        SetBarrel(best, BARREL_TRAP, "the way passes it, where monsters could set it off");
     }
 }
 
@@ -1002,6 +1691,19 @@ static void ChooseMove(const player_t *player)
             }
         }
 
+        // Out of the blast of barrels the monsters' shots may set off, and
+        // most of all of those already going off.
+        for (i = 0; i < num_barrels; ++i)
+        {
+            double axis = AxisDistance(far, barrels[i].at);
+
+            if (axis < BLAST_SAFE)
+            {
+                score -= (barrels[i].live ? BARREL_AWAY : DYING_AWAY)
+                       * (BLAST_SAFE - axis) / BLAST_SAFE;
+            }
+        }
+
         if (score > best_score)
         {
             best_score = score;
@@ -1109,6 +1811,85 @@ static void UpdateBattle(const player_t *player)
     }
 }
 
+// The nearest shot barrel about to go off whose blast could reach the
+// player (a dead barrel is a quarter of its height), or -1.
+static int PendingBlast(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double eye = ToMap(player->mo->z) + ToMap(player->mo->height) * 0.75;
+    int best = -1, i;
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        if (!barrels[i].live && AxisDistance(me, barrels[i].at) < BLAST_SAFE
+         && (best < 0 || AxisDistance(me, barrels[i].at) < AxisDistance(me, barrels[best].at))
+         && K_Sight_Check(me.x, me.y, eye, barrels[i].at.x, barrels[i].at.y, barrels[i].z,
+                          barrels[i].z + BLAST_HEIGHT))
+        {
+            best = i;
+        }
+    }
+
+    return best;
+}
+
+// Out of a fight, away from a blast about to go off: the route waits while
+// the player steps the walkable way that gets furthest from it. In battle
+// the strafing keeps away from it (ChooseMove).
+static void UpdateDodge(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double floor = ToMap(player->mo->floorz);
+    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    int blast = battle ? -1 : PendingBlast(player);
+    double best = -1.0;
+    int k;
+
+    if (battle)
+    {
+        dodging = false;
+        return;
+    }
+
+    if (blast < 0 || (!dodging && !K_Nav_CanPause()))
+    {
+        if (dodging)
+        {
+            dodging = false;
+            move.x = move.y = 0.0;
+            K_Nav_Pause(0);
+        }
+
+        return;
+    }
+
+    if (!dodging)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the barrel at (%.0f,%.0f) about "
+              "to go off - the route waits", barrels[blast].at.x, barrels[blast].at.y);
+        dodging = true;
+        K_Nav_Pause(1);
+    }
+
+    move.x = move.y = 0.0;
+
+    for (k = 0; k < MOVE_WAYS; ++k)
+    {
+        double angle = k * 2.0 * K_PI / MOVE_WAYS;
+        double ux = cos(angle), uy = sin(angle);
+        k_vec2_t near = { me.x + ux * MOVE_LOOK * 0.5, me.y + uy * MOVE_LOOK * 0.5 };
+        k_vec2_t far = { me.x + ux * MOVE_LOOK, me.y + uy * MOVE_LOOK };
+        double away = AxisDistance(far, barrels[blast].at);
+
+        if (away > best && Walkable(near, floor, hurts) && Walkable(far, floor, hurts))
+        {
+            best = away;
+            move.x = ux * DODGE_SPEED;
+            move.y = uy * DODGE_SPEED;
+        }
+    }
+}
+
 void K_Combat_Reset(void)
 {
     MarkAttackStates();
@@ -1134,6 +1915,10 @@ void K_Combat_Reset(void)
     strafe_tics = 0;
     move.x = move.y = 0.0;
     escape = false;
+    num_barrels = 0;
+    DropBarrel();
+    blocking_wanted = false;
+    dodging = false;
 }
 
 void K_Combat_Tick(int driving)
@@ -1176,6 +1961,8 @@ void K_Combat_Tick(int driving)
         target_mo = NULL;
         wanted = -1;
         status.weapon = NULL;
+        DropBarrel();
+        status.barrel = false;
         M_StringCopy(status.text, "dead", sizeof(status.text));
         return;
     }
@@ -1186,10 +1973,23 @@ void K_Combat_Tick(int driving)
         ChooseTarget(player);
         CountMisses(player);
         ChooseWeapon(player);
+        ChooseBarrel(player);
         UpdateBattle(player);
+        UpdateDodge(player);
+    }
+    else
+    {
+        barrel_target = -1;
     }
 
-    if (status.target >= 0)
+    status.barrel = barrel_target >= 0;
+
+    if (barrel_target >= 0)
+    {
+        M_snprintf(status.text, sizeof(status.text), "shooting the barrel at (%.0f,%.0f) - %s",
+                   status.barrel_at.x, status.barrel_at.y, barrel_reason);
+    }
+    else if (status.target >= 0)
     {
         M_snprintf(status.text, sizeof(status.text), "%s the %s, %.0f units - %s",
                    battle ? "fighting" : escape ? "escaping, shooting at"
@@ -1228,12 +2028,12 @@ int K_Combat_Aim(int tic, double *angle)
     k_pose_t pose;
     k_vec2_t at;
 
-    if (status.target < 0 || !K_Nav_Predict(tic, &pose))
+    if ((status.target < 0 && barrel_target < 0) || !K_Nav_Predict(tic, &pose))
     {
         return 0;
     }
 
-    at = TargetAt(tic);
+    at = barrel_target >= 0 ? barrels[barrel_target].at : TargetAt(tic);
     *angle = atan2(at.y - pose.y, at.x - pose.x);
     return 1;
 }
@@ -1259,44 +2059,100 @@ static boolean LineOfFire(const player_t *player, k_vec2_t from, double facing,
                        from.y + sin(facing) * reach, monster->z, monster->z + monster->height);
 }
 
-// Whether a standing barrel near the player is on the line of fire: the
-// shot would set it off.
-static boolean BarrelInTheWay(k_vec2_t from, k_vec2_t to)
+// Whether a shot along the facing could set off a barrel whose chain would
+// hurt the player: one the shot could graze - within the weapon's spread
+// (none when accurate), and a margin, of the facing, in reach of the shot -
+// before the target or behind it, where a miss flies on to. A rocket also
+// sets off barrels near where it lands (impact).
+static boolean BarrelAtRisk(const player_t *player, k_vec2_t from, double facing,
+                            const weapon_t *weapon, k_vec2_t impact, boolean accurate)
 {
-    const k_map_t *map = K_Map_Get();
-    double distance = Distance(from, to);
-    double ux, uy;
-    int b;
+    double gun = GunHeight(player->mo);
+    int i;
 
-    if (distance < 1.0)
+    for (i = 0; i < num_barrels; ++i)
     {
-        return false;
-    }
+        const barrel_t *barrel = &barrels[i];
+        double distance, spread;
 
-    ux = (to.x - from.x) / distance;
-    uy = (to.y - from.y) / distance;
-
-    for (b = 0; b < map->num_blocks; ++b)
-    {
-        const k_block_t *block = &map->blocks[b];
-        double along, across;
-
-        if (!block->barrel || !K_Map_BlockStands(b))
+        if (!barrel->live || !chain_near[barrel->chain])
         {
             continue;
         }
 
-        along = (block->at.x - from.x) * ux + (block->at.y - from.y) * uy;
-        across = fabs((block->at.y - from.y) * ux - (block->at.x - from.x) * uy);
+        if (weapon->weapon == wp_missile && AxisDistance(barrel->at, impact) < BARREL_CHAIN)
+        {
+            return true;
+        }
 
-        if (along > 0.0 && along < SDL_min(distance, BARREL_HOLD)
-         && across < block->radius + BARREL_MARGIN)
+        distance = SDL_max(Distance(from, barrel->at), 1.0);
+        spread = (accurate ? 0.0 : weapon->spread * K_PI / 180.0)
+               + atan2(BARREL_RADIUS + BARREL_MARGIN, distance);
+
+        if (fabs(Wrap(atan2(barrel->at.y - from.y, barrel->at.x - from.x) - facing)) < spread
+         && K_Sight_Aim(from.x, from.y, gun, barrel->at.x, barrel->at.y, barrel->z,
+                        barrel->z + BARREL_HEIGHT))
         {
             return true;
         }
     }
 
     return false;
+}
+
+// Firing at the barrel shot at: with the weapon in hand, or, at one in the
+// way, one that pops it. Pistol and chaingun only from the ready state, so
+// the bullet goes straight.
+static void FireAtBarrel(const player_t *player, const k_pose_t *pose, k_command_t *command)
+{
+    const barrel_t *barrel = &barrels[barrel_target];
+    const weapon_t *weapon = WeaponOf(player->readyweapon);
+    k_vec2_t from = { pose->x, pose->y };
+    double distance = SDL_max(Distance(from, barrel->at), 1.0);
+    double facing, tolerance;
+
+    if (barrel_why == BARREL_BLOCKING && !CanPop(player, weapon, distance))
+    {
+        const weapon_t *pop = PopWeapon(player, distance);
+
+        if (pop != NULL && player->pendingweapon == wp_nochange
+         && leveltime - last_switch >= SWITCH_TICS)
+        {
+            command->change = 1;
+            command->weapon = pop->slot;
+            last_switch = leveltime;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "bringing up the %s for the barrel at (%.0f,%.0f)",
+                  pop->name, barrel->at.x, barrel->at.y);
+        }
+
+        return;
+    }
+
+    if (weapon == NULL || !CanFire(player, weapon))
+    {
+        return;
+    }
+
+    facing = pose->angle + command->turn / ANGLETURN_PER_RADIAN;
+    tolerance = SDL_max(atan2(BARREL_RADIUS * AIM_SHARE, distance), MIN_TOLERANCE);
+
+    if (fabs(Wrap(atan2(barrel->at.y - from.y, barrel->at.x - from.x) - facing)) > tolerance
+     || (weapon->taps && !WeaponReady(player))
+     || BarrelAtRisk(player, from, facing, weapon, barrel->at, weapon->taps)
+     || !K_Sight_Aim(from.x, from.y, GunHeight(player->mo),
+                     from.x + cos(facing) * (distance - BARREL_RADIUS),
+                     from.y + sin(facing) * (distance - BARREL_RADIUS), barrel->z,
+                     barrel->z + BARREL_HEIGHT))
+    {
+        return;
+    }
+
+    command->attack = 1;
+
+    if (WeaponReady(player))
+    {
+        ++status.shots;
+    }
 }
 
 void K_Combat_Fire(int tic, k_command_t *command)
@@ -1310,9 +2166,16 @@ void K_Combat_Fire(int tic, k_command_t *command)
 
     // At a gun switch nav has the weapon it needs up; not while fighting,
     // when nav waits.
-    if (status.target < 0 || status.died || command->use || command->attack || command->change
+    if ((status.target < 0 && barrel_target < 0) || status.died || command->use
+     || command->attack || command->change
      || (!battle && K_Nav_GetStatus()->action == K_ACTION_SHOOT) || !K_Nav_Predict(tic, &pose))
     {
+        return;
+    }
+
+    if (barrel_target >= 0)
+    {
+        FireAtBarrel(player, &pose, command);
         return;
     }
 
@@ -1351,7 +2214,7 @@ void K_Combat_Fire(int tic, k_command_t *command)
      || (weapon->reach > 0.0 && distance - monster->radius > weapon->reach)
      || (weapon->weapon == wp_missile && distance < ROCKET_MIN
          && player->powers[pw_invulnerability] < INVULN_LEFT)
-     || BarrelInTheWay(from, at)
+     || BarrelAtRisk(player, from, facing, weapon, at, weapon->taps && player->refire == 0)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))
      || !LineOfFire(player, from, facing, monster))
     {
@@ -1406,9 +2269,29 @@ void K_Combat_Escape(int on)
     escape = on != 0;
 }
 
+void K_Combat_ShootBarrel(int on, double x, double y)
+{
+    blocking_wanted = on != 0;
+    blocking_at.x = x;
+    blocking_at.y = y;
+}
+
+int K_Combat_BlastsPending(double x, double y, double reach)
+{
+    k_vec2_t at = { x, y };
+    int count = 0, i;
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        count += !barrels[i].live && AxisDistance(barrels[i].at, at) < reach;
+    }
+
+    return count;
+}
+
 int K_Combat_Move(double *vx, double *vy)
 {
-    if (!battle)
+    if (!battle && !dodging)
     {
         return 0;
     }

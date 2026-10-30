@@ -785,7 +785,8 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
 // Monsters as circles of their radius, with a tick the way they face: dark
 // red asleep, red awake, orange attacking; filled when the player's shots
 // would find them, faintly when it only sees them. The target is ringed in
-// white, with the line of fire from the player. Projectiles as dots with a tail the way they fly (8 tics of it):
+// white, with the line of fire from the player; a barrel shot at, in
+// yellow. Projectiles as dots with a tail the way they fly (8 tics of it):
 // grey the player's own, yellow coming at the player, orange the rest.
 static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t *player)
 {
@@ -822,10 +823,25 @@ static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t 
 
         draw->AddCircle(at, radius + 3.0f * ui_scale, IM_COL32(255, 255, 255, 230), 0, thickness);
 
-        if (player != NULL)
+        if (player != NULL && !combat->barrel)
         {
             DrawDashedLine(draw, MapToScreen(center, player->x, player->y), at,
                            IM_COL32(255, 255, 255, 140), thickness);
+        }
+    }
+
+    // A barrel shot at: ringed in yellow, with the line of fire.
+    if (combat->barrel)
+    {
+        ImVec2 at = MapToScreen(center, combat->barrel_at.x, combat->barrel_at.y);
+        float radius = SDL_max(3.0f * ui_scale, (float) (10.0 * view_scale));
+
+        draw->AddCircle(at, radius + 3.0f * ui_scale, IM_COL32(255, 220, 60, 240), 0, thickness);
+
+        if (player != NULL)
+        {
+            DrawDashedLine(draw, MapToScreen(center, player->x, player->y), at,
+                           IM_COL32(255, 220, 60, 160), thickness);
         }
     }
 
