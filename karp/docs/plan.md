@@ -2359,6 +2359,17 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        would open a shorter one. Doom II MAP14: after switch 393 the blue key is 2077 units off,
        by two lifts; crossing lines 1366 and 1383 opens doors to a way of 1452 (found only by
        luck, on a replan after a failed jump: 9 s).
+   17. **Salt** (the user, jotted). The bot is deterministic: the same build on the same map
+       plays the same game to the tic (Doom's random numbers start over with each level, and
+       the bot's choices follow from the game). Good for demos and for comparing builds, but a
+       viewer may take it for a demo played back rather than a level solved live. A bot
+       parameter (say `-karpsalt [seed]`), off by default, adds salt: small variations in
+       strafe timing, the step aside when stuck, steering and aim within their tolerances,
+       reaction times. Drawn from the bot's own generator, never `P_Random` (2.4), seeded from
+       the value given or else the clock, and logged, so a run can be repeated. The first
+       different command changes how every monster moves, so runs diverge from there. Demos
+       still record the commands and play back exactly. Also useful for testing with monsters:
+       several seeds a map give rates (finished, died, health, time) instead of one run (7.6).
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -2369,8 +2380,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
   `build\src\Release\crispy-doom.exe -iwad $env:DOOM_IWAD -warp 01 -nomonsters -autoplay -karpconsole`
   (Doom 1: `-warp 1 1`).
 - Map regressions: `karp\tools\regress.ps1 -Iwad <DOOM2.WAD>` (or set `DOOM2_IWAD`) runs MAP01,
-  02, 03, 04, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27,
-  28, 29, 31 (all finish, in about 165 s) in parallel, with
+  02, 03, 04, 05, 06, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+  27, 28, 29, 31 (all finish, in about 165 s) in parallel, with
   `-quitonexit -nosound` added, and prints per map the finish time and health left, keys and
   first failure; the
   logs land in `build\karp-regress\logs`. Each instance runs from its own folder holding a copy
@@ -2673,6 +2684,12 @@ Who controls the player in a fight (the user's model):
   stray shot at it ends the fight between them and brings it after the player.
 - **Turning speed when aiming** (the user, jotted): the bot turns to a target faster than a human
   could, which looks unnatural. Noticed and left alone for now (the user).
+- **Barrel chains set off by others** (the user, jotted): monsters and stray missiles set barrels
+  off too. Today the bot steps away from a barrel already shot only when that barrel's own blast
+  could reach it, and only out of a fight (in battle, strafing scores spots near it lower). A
+  chain going off nearby: every live barrel of its chain will follow, 12 to 15 tics apart, so
+  the bot should step away from the whole chain at once, ahead of the blasts, before the fight
+  and the route.
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.
