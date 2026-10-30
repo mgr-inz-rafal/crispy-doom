@@ -33,14 +33,22 @@ typedef struct
     k_itemkind_t kind;
     int present;            // still lying there
     int dropped;            // dropped by a monster (half the ammo)
+    int reachable;          // some spot the player can stand at touches it
+                            // (K_Graph_PickupSpot): not under a tree, say
+    k_vec2_t spot;          // reachable: where to go to pick it up
     double worth;           // what picking it up would give now, roughly in
                             // health points; 0 if the player would not pick
                             // it up, or it would give nothing that matters
     double together;        // with the items beside it, picked up on the same
                             // trip
+    double danger;          // what the monsters guarding it would cost in
+                            // health (K_Combat_Danger); it, reachable and
+                            // spot looked at about once a second while it is
+                            // worth anything
     double reach;           // how far out of its way the player may go for
-                            // it and those beside it now, in map units of
-                            // detour (0: none)
+                            // it and those beside it now, the danger taken
+                            // off, in map units of detour (0: none, or out
+                            // of reach)
 } k_item_t;
 
 // Called by Karp on every level load.

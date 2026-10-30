@@ -15,10 +15,11 @@
 //	again from wherever the player is: the world has changed.
 //
 //	A goal is done when its condition holds, however that came about. A
-//	candidate that fails is not chosen again; a goal whose candidates all
-//	fail fails for the rest of the level, is never pushed again, and the
-//	goal below looks for another way. A click on the console's map pushes
-//	a GOTO on top; when it ends, the rest resumes.
+//	candidate that fails is not chosen again for a while; a goal whose
+//	candidates all fail fails, is not pushed again for a while, and the
+//	goal below looks for another way. Nothing is given up for good: GO TO
+//	EXIT never fails, and with no way it waits and plans again. A click on
+//	the console's map pushes a GOTO on top; when it ends, the rest resumes.
 //
 
 #include <math.h>
@@ -74,17 +75,24 @@
 #define RETRY_TICS TICRATE
 #define MAX_WAIT_TICS (15 * TICRATE)
 
-// A key is picked up when the player's box touches the key's (radius 20):
-// within 36 on each axis. Where the player cannot stand at the key, it
-// goes to the nearest point within PICKUP_REACH on each axis (some margin)
-// that is on floor and STAND_CLEARANCE from anything that stops it, its
-// radius plus one. Searched in steps of PICKUP_STEP.
+// Nothing is given up for good (follow-up 11, the user): something out of
+// the player's hands may still open a way - a monster crossing a walk-over
+// line, a slow floor, a door bounced off a monster - or a second try go
+// better than the first. A goal that failed may go on the stack again after
+// FAIL_TICS, twice that after failing again, and so on up to MAX_FAIL_TICS;
+// a candidate that did not work out is tried again after TRIED_TICS; a
+// line's uses (MAX_TRIGGERS) count for LINE_USES_TICS after the last one.
+// GO TO EXIT never fails: with no way, it is planned again every IDLE_TICS
+// (Doom II MAP02: stuck by a barrel for 8 s, the blue key was given up for
+// good, then the exit, and the bot stood idle).
+#define FAIL_TICS (30 * TICRATE)
+#define MAX_FAIL_TICS (240 * TICRATE)
+#define TRIED_TICS (30 * TICRATE)
+#define LINE_USES_TICS (30 * TICRATE)
+#define IDLE_TICS (5 * TICRATE)
+
 // A door that leaves less headroom than the player's height is shut.
 #define PLAYER_HEIGHT 56.0
-
-#define PICKUP_REACH 28.0
-#define PICKUP_STEP 4.0
-#define STAND_CLEARANCE 17.0
 
 // Items worth a detour (k_items.h, plan 7.5) are looked for every
 // ITEM_CHECK_TICS while the player follows a route, the ITEM_ROUTES most
@@ -129,8 +137,10 @@ typedef struct
     char note[K_LOG_LINE_LEN];  // what it is doing or waiting for
 
     k_vec2_t tried[MAX_TRIED];  // candidates that failed
+    int tried_until[MAX_TRIED]; // and when each may be tried again
     int num_tried;
     int shut;                   // times its way shut on the way (MAX_SHUT)
+    boolean idle;               // GO TO EXIT: no way for now, waiting
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
     // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
@@ -165,6 +175,8 @@ typedef struct
 {
     goal_type_t type;
     int param;
+    int count;              // times it failed this level
+    int until;              // when it may go on the stack again
     char text[K_LOG_LINE_LEN];
 } failed_t;
 
@@ -180,6 +192,7 @@ static int keys_lying[K_NUM_KEYS];
 static k_vec2_t keys_at[K_NUM_KEYS][MAX_CANDIDATES];
 static k_vec2_t planned_from;
 static unsigned char *line_uses;    // per line, as a trigger goal's choice
+static int *line_last;              // per line, when it was last chosen
 static k_path_t scratch;
 static k_path_t probe;              // routes looked at while scratch is in use
 
@@ -254,7 +267,7 @@ static void GoalName(const goal_t *goal, char *buf, int len)
 // The stack
 //
 
-static boolean IsFailed(goal_type_t type, int param)
+static failed_t *FailedEntry(goal_type_t type, int param)
 {
     int i;
 
@@ -262,11 +275,19 @@ static boolean IsFailed(goal_type_t type, int param)
     {
         if (failed[i].type == type && failed[i].param == param)
         {
-            return true;
+            return &failed[i];
         }
     }
 
-    return false;
+    return NULL;
+}
+
+// Failed, and not yet due to be tried again.
+static boolean IsFailed(goal_type_t type, int param)
+{
+    const failed_t *entry = FailedEntry(type, param);
+
+    return entry != NULL && leveltime < entry->until;
 }
 
 static boolean OnStack(goal_type_t type, int param)
@@ -291,12 +312,29 @@ static boolean Allowed(goal_type_t type, int param)
     return depth < MAX_GOALS && !IsFailed(type, param) && !OnStack(type, param);
 }
 
+// How many times a line was chosen lately: the count starts over
+// LINE_USES_TICS after the last time.
+static int LineUses(int line)
+{
+    if (line_uses == NULL)
+    {
+        return 0;
+    }
+
+    if (leveltime - line_last[line] >= LINE_USES_TICS)
+    {
+        line_uses[line] = 0;
+    }
+
+    return line_uses[line];
+}
+
 // Whether a line can still be worked: it has its special (one-shot lines
-// lose it once used) and has not been worked MAX_TRIGGERS times.
+// lose it once used) and has not been worked MAX_TRIGGERS times lately.
 static boolean LineWorks(int line)
 {
     return K_Specials_MoverTrigger(K_Specials_LineSpecial(line)) != K_TRIGGER_NONE
-        && (line_uses == NULL || line_uses[line] < MAX_TRIGGERS);
+        && LineUses(line) < MAX_TRIGGERS;
 }
 
 // Whether a line still works and moves its sectors one of the ways wanted
@@ -355,51 +393,101 @@ static void DoneGoal(const char *how)
     Pop();
 }
 
+// Not pushed again for a while: FAIL_TICS, doubled each time it fails
+// again, up to MAX_FAIL_TICS. Never GO TO EXIT (PlanGoal waits instead).
 static void FailGoal(const char *why)
 {
     goal_t *goal = &goals[depth - 1];
+    failed_t *entry = FailedEntry(goal->type, goal->param);
     char name[64];
+    int tics, i;
+
+    // A new entry; when the list is full, in place of the one due first.
+    if (entry == NULL && num_failed < MAX_FAILED)
+    {
+        entry = &failed[num_failed++];
+        entry->count = 0;
+    }
+    else if (entry == NULL)
+    {
+        for (entry = &failed[0], i = 1; i < num_failed; ++i)
+        {
+            if (failed[i].until < entry->until)
+            {
+                entry = &failed[i];
+            }
+        }
+
+        entry->count = 0;
+    }
+
+    entry->type = goal->type;
+    entry->param = goal->param;
+    tics = FAIL_TICS << SDL_min(entry->count, 3);
+    tics = SDL_min(tics, MAX_FAIL_TICS);
+    entry->until = leveltime + tics;
+    ++entry->count;
 
     GoalName(goal, name, sizeof(name));
-    K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s failed - %s", name, why);
-
-    if (num_failed < MAX_FAILED)
-    {
-        failed[num_failed].type = goal->type;
-        failed[num_failed].param = goal->param;
-        M_snprintf(failed[num_failed].text, sizeof(failed[num_failed].text),
-                   "%s - %s", name, why);
-        ++num_failed;
-    }
+    K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s failed - %s; trying again in %d s", name, why,
+          tics / TICRATE);
+    M_snprintf(entry->text, sizeof(entry->text), "%s - %s", name, why);
 
     if (depth == 1)
     {
         M_snprintf(outcome, sizeof(outcome), "%s failed - %s", name, why);
     }
 
-    // Not added again this level; a click that ends brings it back.
-    if (goal->type == GOAL_EXIT)
-    {
-        exit_wanted = false;
-    }
-
     Pop();
 }
 
-// The chosen candidate did not work out: plan again without it.
+// A candidate tried at the point, -1 if none.
+static int TriedIndex(const goal_t *goal, k_vec2_t at)
+{
+    int i;
+
+    for (i = 0; i < goal->num_tried; ++i)
+    {
+        if (fabs(goal->tried[i].x - at.x) < 1.0 && fabs(goal->tried[i].y - at.y) < 1.0)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// The chosen candidate did not work out: plan again without it, for
+// TRIED_TICS.
 static void CandidateFailed(goal_t *goal, const char *why)
 {
     char name[64];
+    int i = TriedIndex(goal, goal->chosen.at);
 
     GoalName(goal, name, sizeof(name));
     K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s: the %s did not work out - %s", name,
           goal->chosen.what, why);
 
-    if (goal->num_tried < MAX_TRIED)
+    // Its own entry again, else a new one, else the one due first.
+    if (i < 0 && goal->num_tried < MAX_TRIED)
     {
-        goal->tried[goal->num_tried++] = goal->chosen.at;
+        i = goal->num_tried++;
+    }
+    else if (i < 0)
+    {
+        int k;
+
+        for (i = 0, k = 1; k < goal->num_tried; ++k)
+        {
+            if (goal->tried_until[k] < goal->tried_until[i])
+            {
+                i = k;
+            }
+        }
     }
 
+    goal->tried[i] = goal->chosen.at;
+    goal->tried_until[i] = leveltime + TRIED_TICS;
     goal->planned = false;
     K_Nav_Clear();
 }
@@ -408,54 +496,21 @@ static void CandidateFailed(goal_t *goal, const char *why)
 // Candidates
 //
 
+// Tried lately and did not work out.
 static boolean WasTried(const goal_t *goal, k_vec2_t at)
 {
-    int i;
+    int i = TriedIndex(goal, at);
 
-    for (i = 0; i < goal->num_tried; ++i)
-    {
-        if (fabs(goal->tried[i].x - at.x) < 1.0 && fabs(goal->tried[i].y - at.y) < 1.0)
-        {
-            return true;
-        }
-    }
-
-    return false;
+    return i >= 0 && leveltime < goal->tried_until[i];
 }
 
-// Where to go to pick up a key lying at `at`: there, if the player can
-// stand there, else the nearest spot it can stand at that still touches
-// the key. A key can lie on an impassable line, to be picked up from one
-// side only (Doom II MAP05).
-static k_vec2_t PickupSpot(k_vec2_t at)
+// Where to go to pick up a key lying at `at` (K_Graph_PickupSpot); with no
+// spot to stand at, the key itself: the route finds the way or not.
+static k_vec2_t KeySpot(k_vec2_t at)
 {
-    int steps = (int) (PICKUP_REACH / PICKUP_STEP);
-    k_vec2_t best = at;
-    int best_distance = -1;
-    int i, j;
+    k_vec2_t spot;
 
-    if (K_Graph_Clearance(at, STAND_CLEARANCE) >= STAND_CLEARANCE)
-    {
-        return at;
-    }
-
-    for (i = -steps; i <= steps; ++i)
-    {
-        for (j = -steps; j <= steps; ++j)
-        {
-            k_vec2_t spot = { at.x + i * PICKUP_STEP, at.y + j * PICKUP_STEP };
-            int distance = i * i + j * j;
-
-            if ((best_distance < 0 || distance < best_distance)
-             && K_Graph_Clearance(spot, STAND_CLEARANCE) >= STAND_CLEARANCE)
-            {
-                best = spot;
-                best_distance = distance;
-            }
-        }
-    }
-
-    return best;
+    return K_Graph_PickupSpot(at, &spot) ? spot : at;
 }
 
 static int LineCandidate(int line, k_trigger_t trigger, const char *what,
@@ -550,7 +605,7 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 
                 for (i = 0; i < found; ++i)
                 {
-                    out[count].at = PickupSpot(keys[i].at);
+                    out[count].at = KeySpot(keys[i].at);
                     out[count].kind = K_GOAL_POINT;
                     out[count].line = -1;
                     M_snprintf(out[count].what, sizeof(out[count].what), "%s %s at "
@@ -566,9 +621,9 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
             {
                 const k_item_t *item = K_Items_Get(goal->param);
 
-                if (item->present)
+                if (item->present && item->reachable)
                 {
-                    out[0].at = PickupSpot(item->at);
+                    out[0].at = item->spot;
                     out[0].kind = K_GOAL_POINT;
                     out[0].line = -1;
                     M_snprintf(out[0].what, sizeof(out[0].what), "%s at (%.0f,%.0f)",
@@ -1203,6 +1258,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     goal->changed = false;
     goal->wait = 0;
     goal->waited = 0;
+    goal->idle = false;
 
     if (goal->type == GOAL_TRIGGER)
     {
@@ -1211,7 +1267,8 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
 
         if (line_uses != NULL && candidate->line >= 0)
         {
-            ++line_uses[candidate->line];
+            line_uses[candidate->line] = LineUses(candidate->line) + 1;
+            line_last[candidate->line] = leveltime;
         }
     }
 
@@ -1364,7 +1421,7 @@ static void PlanGoal(goal_t *goal)
                goal->type == GOAL_EXIT ? "the map has no exit line"
              : goal->type == GOAL_KEY ? "no such key lies in the level"
              : goal->type == GOAL_TRIGGER ? "no line moves the sector any more"
-             : goal->type == GOAL_ITEM ? "it is gone"
+             : goal->type == GOAL_ITEM ? "it is gone, or no spot touches it"
              : "no way there");
 
     for (i = 0; i < count; ++i)
@@ -1555,6 +1612,23 @@ static void PlanGoal(goal_t *goal)
         goal->waited += RETRY_TICS;
         K_Nav_Clear();
     }
+    else if (goal->type == GOAL_EXIT)
+    {
+        // Never given up: the goals that failed on the way come back after
+        // a while, and something may open a way meanwhile.
+        if (!goal->idle)
+        {
+            LogReasons(name);
+            K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s: no way for now - %s; waiting, planning again "
+                  "every %d s", name, reason, IDLE_TICS / TICRATE);
+            goal->idle = true;
+        }
+
+        M_snprintf(goal->note, sizeof(goal->note), "no way for now, waiting - %s", reason);
+        goal->retry_tic = leveltime + IDLE_TICS;
+        goal->waited = 0;
+        K_Nav_Clear();
+    }
     else
     {
         LogReasons(name);
@@ -1679,23 +1753,27 @@ static boolean UpdateTrigger(goal_t *goal)
 // player may go for it now (k_items.h) - goes on top of the chain, and
 // when it is picked up the goal below is planned again from there. Looked
 // for only while the player follows a route to the goal on top: not while
-// fighting, working a door, lift or switch, running a jump, going where a
-// click sent it, or waiting for a switch's sector. An item the player
-// could not get on from (down in a pit, past a one-way drop) is not gone
-// for. Returns true if one was added.
+// working a door, lift or switch, running a jump, going where a click sent
+// it, or waiting for a switch's sector; not while fighting either, unless
+// health is CRITICAL, and then only health, which breaks the fight off
+// (UpdateEscape). An item the player could not get on from (down in a pit,
+// past a one-way drop) is not gone for. Returns true if one was added.
 static boolean ConsiderItems(goal_t *goal)
 {
     const k_navstatus_t *nav = K_Nav_GetStatus();
     const k_path_t *path = K_Nav_GetPath();
-    int routes = K_Condition_Get()->health == K_NEED_CRITICAL ? MAX_ITEM_ROUTES : ITEM_ROUTES;
+    boolean critical = K_Condition_Get()->health == K_NEED_CRITICAL;
+    boolean fighting = K_Combat_GetStatus()->battle;
+    int routes = critical ? MAX_ITEM_ROUTES : ITEM_ROUTES;
     int order[MAX_ITEM_ROUTES];
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
     double best_slack = 0.0, best_detour = 0.0;
+    const k_item_t *chosen;
     k_pose_t player;
     k_vec2_t start, end;
     goal_t *item_goal;
-    char name[64];
+    char name[64], guarded[64] = "";
     int i, k;
 
     if (leveltime < item_check_tic)
@@ -1705,10 +1783,11 @@ static boolean ConsiderItems(goal_t *goal)
 
     item_check_tic = leveltime + ITEM_CHECK_TICS;
 
+    // In a fight nav waits: it was free to when the fight began.
     if (depth >= MAX_GOALS || !goal->planned || goal->type == GOAL_ITEM
      || goal->type == GOAL_GOTO || (goal->type == GOAL_TRIGGER && (goal->used || goal->moving))
-     || nav->state != K_NAV_DRIVING || nav->action != K_ACTION_NONE || !K_Nav_CanPause()
-     || K_Combat_GetStatus()->battle || path == NULL || path->num_points < 1
+     || nav->state != K_NAV_DRIVING || path == NULL || path->num_points < 1
+     || (fighting ? !critical : (nav->action != K_ACTION_NONE || !K_Nav_CanPause()))
      || !K_Map_GetPlayer(&player))
     {
         return false;
@@ -1735,7 +1814,8 @@ static boolean ConsiderItems(goal_t *goal)
         double score;
 
         if (!item->present || item->reach <= 0.0 || distance > item->reach
-         || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i))
+         || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i)
+         || (fighting && item->kind != K_ITEM_HEALTH))
         {
             continue;
         }
@@ -1762,7 +1842,7 @@ static boolean ConsiderItems(goal_t *goal)
     for (k = 0; k < found; ++k)
     {
         const k_item_t *item = K_Items_Get(order[k]);
-        k_vec2_t spot = PickupSpot(item->at);
+        k_vec2_t spot = item->spot;
         double there, detour;
 
         K_Path_Find(&probe, start, player.cell, spot);
@@ -1807,11 +1887,29 @@ static boolean ConsiderItems(goal_t *goal)
 
     item_goal = Push(GOAL_ITEM, best);
     GoalName(item_goal, name, sizeof(name));
+    chosen = K_Items_Get(best);
+
+    if (chosen->danger >= 0.5)
+    {
+        M_snprintf(guarded, sizeof(guarded), ", guarded: %.0f health at risk", chosen->danger);
+    }
+
     K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way, "
-          "worth %.0f (%.0f with those beside it)", name, K_Items_Get(best)->at.x,
-          K_Items_Get(best)->at.y, best_detour, K_Items_Get(best)->worth,
-          K_Items_Get(best)->together);
+          "worth %.0f (%.0f with those beside it)%s", name, chosen->at.x, chosen->at.y,
+          best_detour, chosen->worth, chosen->together, guarded);
     return true;
+}
+
+// Fleeing (plan, 7.4): while health is CRITICAL and the goal on top is
+// health, combat starts no fight and breaks off the one going on; the
+// player runs for it, shooting on the way at what it sees. With no health
+// to go for, fights go on as before: running to nowhere is no safer, and
+// cover comes with dodging (C3).
+static void UpdateEscape(void)
+{
+    K_Combat_Escape(depth > 0 && goals[depth - 1].type == GOAL_ITEM
+                    && K_Items_Get(goals[depth - 1].param)->kind == K_ITEM_HEALTH
+                    && K_Condition_Get()->health == K_NEED_CRITICAL);
 }
 
 //
@@ -1838,6 +1936,8 @@ void K_Brain_Reset(void)
 
     free(line_uses);
     line_uses = calloc(SDL_max(numlines, 1), 1);
+    free(line_last);
+    line_last = calloc(SDL_max(numlines, 1), sizeof(*line_last));
 
     K_Path_SetBlockCost(BlockCost);
     K_Path_SetPinchCost(PinchCost);
@@ -1888,6 +1988,9 @@ void K_Brain_RequestGoto(double x, double y)
 void K_Brain_Tick(void)
 {
     goal_t *goal;
+    const k_item_t *item;
+
+    UpdateEscape();
 
     if (depth == 0 && exit_wanted)
     {
@@ -1913,6 +2016,33 @@ void K_Brain_Tick(void)
     if (goal->type == GOAL_ITEM && K_Items_Get(goal->param)->worth <= 0.0)
     {
         DoneGoal("no longer needed");
+        return;
+    }
+
+    // Monsters came, or woke, and guard it now for more than it is worth
+    // (or a solid thing came to stand by it): left for a while.
+    if (goal->type == GOAL_ITEM && (item = K_Items_Get(goal->param))->reach <= 0.0)
+    {
+        char name[64];
+
+        GoalName(goal, name, sizeof(name));
+
+        if (!item->reachable)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - no spot touches it now", name);
+        }
+        else
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - guarded now, %.0f health at risk "
+                  "for %.0f", name, item->danger, item->together);
+        }
+
+        if (goal->param < item_skip_size)
+        {
+            item_skip[goal->param] = leveltime + ITEM_SKIP_TICS;
+        }
+
+        Pop();
         return;
     }
 
@@ -2036,7 +2166,20 @@ int K_Brain_FailedCount(void)
 
 const char *K_Brain_FailedText(int index)
 {
-    return failed[index].text;
+    static char text[K_LOG_LINE_LEN + 32];
+    int left = failed[index].until - leveltime;
+
+    if (left > 0)
+    {
+        M_snprintf(text, sizeof(text), "%s (again in %d s)", failed[index].text,
+                   (left + TICRATE - 1) / TICRATE);
+    }
+    else
+    {
+        M_snprintf(text, sizeof(text), "%s (may be tried again)", failed[index].text);
+    }
+
+    return text;
 }
 
 const char *K_Brain_Status(void)

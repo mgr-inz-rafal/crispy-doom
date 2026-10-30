@@ -19,6 +19,15 @@
 //	beside it (Doom II MAP02: three stimpacks side by side, 30 health on
 //	one trip, were left at 25 health as worth 10 each).
 //
+//	What the monsters guarding an item would cost in health is taken off,
+//	weighed as health is (the user, MAP02: going for four stimpacks started
+//	a fight a lonely medikit would not have). Nothing is worth more health
+//	than the player has left. Only the guards count, not monsters on the
+//	way there (the user: those are met and fought anyway, and move about).
+//
+//	An item no spot the player can stand at touches - under a tree, a big
+//	column - is out of reach; under a barrel, until the barrel goes.
+//
 //	Items are found by place and sprite each tic, so each keeps its index
 //	for the level, and an item no longer found has been picked up.
 //
@@ -36,6 +45,7 @@
 
 #include "k_combat.h"
 #include "k_condition.h"
+#include "k_graph.h"
 #include "k_items.h"
 
 // Map units of detour a point of worth pays for, and the most for each
@@ -55,6 +65,10 @@
 // Items this close to one another are picked up on one trip.
 #define TOGETHER 64.0
 
+// An item's guards and pickup spot are looked at every LOOK_TICS, the items
+// spread over the tics.
+#define LOOK_TICS TICRATE
+
 #define BUCKETS 4096
 
 typedef struct
@@ -62,7 +76,9 @@ typedef struct
     k_item_t item;
     fixed_t x, y;
     spritenum_t sprite;
+    double z;               // the floor it lies on
     int seen;               // the tic it was last found, plus one
+    int looked_tic;         // when its guards and spot were last looked at
     int next;               // in its bucket, -1 at the end
     double weighted;        // its worth, weighted by need
     double most;            // the longest detour its need allows
@@ -186,6 +202,7 @@ static entry_t *Find(const mobj_t *mo, int stamp)
     entry->item.at.x = ToMap(mo->x);
     entry->item.at.y = ToMap(mo->y);
     entry->item.dropped = (mo->flags & MF_DROPPED) != 0;
+    entry->looked_tic = -2 * LOOK_TICS;
     Describe(mo->sprite, &entry->item.name, &entry->item.kind);
     entry->next = buckets[bucket];
     buckets[bucket] = num_entries++;
@@ -365,7 +382,10 @@ void K_Items_Tick(void)
         if (thinker->function.acp1 == (actionf_p1) P_MobjThinker && (mo->flags & MF_SPECIAL)
          && Describe(mo->sprite, &name, &kind))
         {
-            Find(mo, stamp)->seen = stamp;
+            entry_t *entry = Find(mo, stamp);
+
+            entry->seen = stamp;
+            entry->z = ToMap(mo->z);
         }
     }
 
@@ -389,6 +409,16 @@ void K_Items_Tick(void)
         item->present = entry->seen == stamp;
         item->worth = item->present ? Worth(player, entry, fights) : 0.0;
         entry->most = REACH_SMALL;
+
+        // Its guards and spot, about once a second; at once when it has been
+        // worth nothing for a while.
+        if (item->worth > 0.0
+         && ((leveltime + i) % LOOK_TICS == 0 || leveltime - entry->looked_tic > LOOK_TICS))
+        {
+            item->danger = K_Combat_Danger(item->at.x, item->at.y, entry->z);
+            item->reachable = K_Graph_PickupSpot(item->at, &item->spot);
+            entry->looked_tic = leveltime;
+        }
 
         switch (item->kind)
         {
@@ -424,7 +454,7 @@ void K_Items_Tick(void)
 
         item->together = item->worth;
 
-        if (item->worth <= 0.0)
+        if (item->worth <= 0.0 || !item->reachable)
         {
             item->reach = 0.0;
             continue;
@@ -444,7 +474,10 @@ void K_Items_Tick(void)
             }
         }
 
-        item->reach = SDL_min(weighted * UNITS_PER_POINT, most);
+        // Less what its guards would cost, weighed as health.
+        weighted -= item->danger * health_weight;
+        item->reach = item->danger >= player->health
+                    ? 0.0 : SDL_max(0.0, SDL_min(weighted * UNITS_PER_POINT, most));
     }
 }
 

@@ -847,7 +847,7 @@ static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t 
 
 // Items lying in the level as small diamonds: green health, blue armour,
 // yellow ammo, white weapons, violet power-ups; bright when worth a detour
-// now, faint when not.
+// now, faint when not; outlined red when monsters guard them.
 static void DrawItems(ImDrawList *draw, const ImVec2 &center)
 {
     static const ImU32 colors[] =
@@ -878,6 +878,13 @@ static void DrawItems(ImDrawList *draw, const ImVec2 &center)
 
         draw->AddQuadFilled(ImVec2(at.x, at.y - size), ImVec2(at.x + size, at.y),
                             ImVec2(at.x, at.y + size), ImVec2(at.x - size, at.y), color);
+
+        if (item->worth > 0.0 && item->danger >= 0.5)
+        {
+            draw->AddQuad(ImVec2(at.x, at.y - size), ImVec2(at.x + size, at.y),
+                          ImVec2(at.x, at.y + size), ImVec2(at.x - size, at.y),
+                          IM_COL32(255, 60, 60, 220), 1.5f * ui_scale);
+        }
     }
 }
 
@@ -1616,7 +1623,7 @@ static void DrawPrioritiesTab(void)
 
     if (K_Brain_FailedCount() > 0)
     {
-        ImGui::SeparatorText("Failed this level");
+        ImGui::SeparatorText("Failed, tried again later");
 
         for (int i = 0; i < K_Brain_FailedCount(); ++i)
         {

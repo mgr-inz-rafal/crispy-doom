@@ -81,6 +81,16 @@
 #define MAX_STUCK 3
 #define UNSTUCK_DISTANCE 64.0
 
+// Stuck, the player first steps aside or back for UNSTICK_TICS at
+// UNSTICK_SPEED, a way clear for UNSTICK_LOOK, chosen by a hash of the time
+// (Karp may not draw the game's random numbers, plan 2.4): steering round a
+// solid thing can cancel out with sliding along a wall beside it, and the
+// route stays good while the player stands still (Doom II MAP02: a barrel
+// close to a wall held the bot 8 s, until its goals gave up).
+#define UNSTICK_TICS 12
+#define UNSTICK_SPEED 6.0
+#define UNSTICK_LOOK 32.0
+
 // Corners slow the player down: full speed through a straight line, down
 // to this fraction of it through a right angle or sharper.
 #define MIN_CORNER_SPEED 0.2
@@ -282,6 +292,8 @@ static k_vec2_t history[STUCK_TICS];
 static int history_count;
 static int history_next;
 static k_vec2_t stuck_at;
+static int unstick_tics;    // stepping aside, UNSTICK_TICS
+static k_vec2_t unstick_dir;
 static k_vec2_t last_at;    // after the previous tic
 static double last_floor;   // the floor stood on then
 
@@ -977,6 +989,16 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     if (target == dry_point)
     {
         SteerToStop(body, DrySpot(), aim, command);
+        return;
+    }
+
+    // Stepping aside after getting stuck; the way was checked clear.
+    if (unstick_tics > 0)
+    {
+        vx = unstick_dir.x * UNSTICK_SPEED;
+        vy = unstick_dir.y * UNSTICK_SPEED;
+        AvoidWalls(body, &vx, &vy);
+        Steer(body, vx, vy, aim, false, command);
         return;
     }
 
@@ -1852,6 +1874,7 @@ static void StartRoute(void)
 {
     MarkCareful();
     dry_point = -1;
+    unstick_tics = 0;
     status.target = 1;
     status.route_cell = 0;
     status.remaining = path.length;
@@ -2057,6 +2080,71 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
     }
 }
 
+static boolean CellHurts(int cell)
+{
+    const k_map_t *map = K_Map_Get();
+
+    return K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0;
+}
+
+// A cheap hash for stepping aside: the same game gives the same steps.
+static unsigned int Hash(unsigned int x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+// Whether the player can step to a point: floor within a step of its own,
+// clear of walls and solid things, not by an edge it could slip off, not a
+// floor that hurts unless it stands on one already.
+static boolean Steppable(k_vec2_t at, double floor, boolean hurts)
+{
+    k_vec2_t min = { at.x - STAND_CLEARANCE, at.y - STAND_CLEARANCE };
+    k_vec2_t max = { at.x + STAND_CLEARANCE, at.y + STAND_CLEARANCE };
+    int cell = K_Map_CellAt(at.x, at.y);
+    int blocks[1];
+
+    return cell >= 0 && K_Map_CellBlock(cell) < 0
+        && fabs(K_Map_CellFloor(cell) - floor) <= MAX_CLIMB
+        && K_Graph_Clearance(at, STAND_CLEARANCE) >= STAND_CLEARANCE
+        && K_Graph_DropDistance(at, K_Map_CellFloor(cell), STAND_CLEARANCE + 8.0)
+           >= STAND_CLEARANCE + 8.0
+        && K_Map_BlocksNear(min, max, blocks, 1) == 0
+        && (hurts || !CellHurts(cell));
+}
+
+// Stuck on the way to the route's target: a way to step aside, or back,
+// that is clear; tried in an order the hash picks. Returns false if none is.
+static boolean ChooseUnstick(k_vec2_t at, const k_pose_t *pose)
+{
+    static const double turns[] = { 90.0, -90.0, 135.0, -135.0, 180.0 };
+    k_vec2_t to = path.points[SDL_min(status.target, path.num_points - 1)];
+    double ahead = atan2(to.y - at.y, to.x - at.x);
+    boolean hurts = pose->cell >= 0 && CellHurts(pose->cell);
+    unsigned int first = Hash((unsigned int) leveltime * 31u + status.stuck);
+    int i;
+
+    for (i = 0; i < arrlen(turns); ++i)
+    {
+        double angle = ahead + turns[(first + i) % arrlen(turns)] * K_PI / 180.0;
+        k_vec2_t dir = { cos(angle), sin(angle) };
+        k_vec2_t near = { at.x + dir.x * UNSTICK_LOOK * 0.5, at.y + dir.y * UNSTICK_LOOK * 0.5 };
+        k_vec2_t far = { at.x + dir.x * UNSTICK_LOOK, at.y + dir.y * UNSTICK_LOOK };
+
+        if (Steppable(near, pose->floor, hurts) && Steppable(far, pose->floor, hurts))
+        {
+            unstick_dir = dir;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Whether the player has hardly moved over the last STUCK_TICS tics.
 static boolean Stuck(k_vec2_t at)
 {
@@ -2088,13 +2176,6 @@ static double Remaining(k_vec2_t at)
     }
 
     return remaining;
-}
-
-static boolean CellHurts(int cell)
-{
-    const k_map_t *map = K_Map_Get();
-
-    return K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0;
 }
 
 // How long the way from route point `from` to `to` takes at the most, as
@@ -2238,6 +2319,11 @@ k_navstate_t K_Nav_Tick(void)
     last_floor = pose.floor;
     UpdateDry();
 
+    if (unstick_tics > 0)
+    {
+        --unstick_tics;
+    }
+
     if (!Progress(at, &pose, teleported) || !UpdateAction(at, status.speed))
     {
         return status.state;
@@ -2287,6 +2373,8 @@ k_navstate_t K_Nav_Tick(void)
     }
     else if (Stuck(at))
     {
+        boolean step;
+
         stuck_at = at;
 
         if (++status.stuck > MAX_STUCK)
@@ -2297,13 +2385,17 @@ k_navstate_t K_Nav_Tick(void)
             return status.state;
         }
 
-        M_snprintf(text, sizeof(text), "stuck at (%.0f,%.0f) for %d tics (%d/%d)",
-                   at.x, at.y, STUCK_TICS, status.stuck, MAX_STUCK);
+        step = ChooseUnstick(at, &pose);
+        M_snprintf(text, sizeof(text), "stuck at (%.0f,%.0f) for %d tics (%d/%d)%s",
+                   at.x, at.y, STUCK_TICS, status.stuck, MAX_STUCK,
+                   step ? ", stepping aside first" : "");
 
         if (!Replan(at, text))
         {
             return status.state;
         }
+
+        unstick_tics = step ? UNSTICK_TICS : 0;
     }
 
     status.remaining = Remaining(at);
@@ -2342,6 +2434,7 @@ void K_Nav_Reset(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    unstick_tics = 0;
     paused = false;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
@@ -2586,6 +2679,7 @@ void K_Nav_Clear(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    unstick_tics = 0;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     status.goal_line = -1;

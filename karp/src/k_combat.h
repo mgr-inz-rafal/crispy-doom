@@ -80,6 +80,19 @@ int K_Combat_Aim(int tic, double *angle);
 // its route. Returns 0 when not fighting: nav drives.
 int K_Combat_Move(double *vx, double *vy);
 
+// What going to (x, y), on a floor at `floor`, would cost in health,
+// roughly: the live monsters within 1024 that could see the player there
+// (in full within 512, less beyond), each by what a fight with its kind
+// takes; asleep and facing away, half. Only the monsters at the spot, not
+// those on the way to it (the user: those are met and fought anyway, and
+// move about).
+double K_Combat_Danger(double x, double y, double floor);
+
+// Set by the brain while it goes for health with health CRITICAL: no fight
+// is started, one going on is broken off, and the player runs, shooting on
+// the way (plan, 7.4: fleeing).
+void K_Combat_Escape(int on);
+
 // After nav built the command: brings up the weapon wanted, and fires if,
 // after the command's turn, the player faces the target. Leaves alone a
 // command in which nav uses, fires or changes weapons itself.

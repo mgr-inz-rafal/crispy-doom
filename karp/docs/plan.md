@@ -814,9 +814,14 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
 - **Off the route:** a cell that is not on the route but is one open crossing from a route cell
   (a corner cut through a neighbouring cell) is tolerated. Anywhere else (fell off a ledge, got
   pushed) the route is replanned from where the player is, with a log line.
-- **Stuck:** moved under 8 units over the last 35 tics: replan, with a log line. After 3 times in
-  a row the goal fails ("stuck at (x,y)"); the count starts over once the player gets 64 units
-  from where it last got stuck. A replan that finds no route fails the goal at once.
+- **Stuck:** moved under 8 units over the last 35 tics: replan, with a log line, and first step
+  aside or back for 12 tics at 6 units a tic, a way clear for 32 units (walls, solid things,
+  edges, floors that hurt), tried in an order a hash of the time picks (no `P_Random`, 2.4).
+  Steering round a solid thing can cancel out with sliding along a wall beside it, and the route
+  stays good while the player stands still: on Doom II MAP02 with monsters a barrel close to a
+  wall held the bot 8 s, until its goals gave up. After 3 times in a row the goal fails ("stuck
+  at (x,y)"); the count starts over once the player gets 64 units from where it last got stuck.
+  A replan that finds no route fails the goal at once. Failing is never for good (follow-up 11).
 - **Arrival:** at the last waypoint, within 16 units of the goal and slower than 1 unit/tic: the
   goal is done and the route is dropped.
 - **Prediction check:** the position predicted for the tic that just ran is compared with the
@@ -2187,7 +2192,8 @@ Each milestone builds and runs; the user reviews and commits between milestones.
       player off a ledge it hangs over (likely MAP03's fall too).
    6. **Stuck recovery.** Before replanning when stuck, block the crossing ahead for a while, so
       the new route really differs. If the player stays stuck too long, try semi-random moves in
-      different directions, strafing included, to work free. Also loops that are not stuck:
+      different directions, strafing included, to work free (done: a step aside or back before
+      each replan, 3.4). Also loops that are not stuck:
       dropped back into an earlier route cell, the player follows the same route again
       ("back in route cell" in the log), so a fall that repeats repeats forever (MAP16 before
       the ledge fix in 3.3). Count them, and plan round the place after a few.
@@ -2271,9 +2277,14 @@ Each milestone builds and runs; the user reviews and commits between milestones.
          never chosen again for that goal;
        - a line is worked at most 3 times a level;
        - waiting while sectors move ends after 15 seconds with a failure.
-       To do: failures, tried candidates and line uses expire (after a while, or when the world
-       changes: a sector moved, a door opened, the player is somewhere new), and an emptied
-       stack idles and plans GO TO EXIT again from time to time.
+       Done (by time only, not yet when the world changes): a failed goal may go on the stack
+       again after 30 s, twice that each time it fails again, up to 4 minutes; a candidate that
+       did not work out is tried again after 30 s; a line's uses count for 30 s after the last
+       one; GO TO EXIT never fails, and with no way it waits and plans again every 5 s (logged
+       once). The console lists the failures with when each comes back. Doom II MAP02 with
+       monsters: stuck by a barrel, the blue key was given up for good, then the exit, and the
+       bot stood idle. Still to do: retry sooner when the world changes (a sector moved, a door
+       opened, the player is somewhere new), and fetch weapons and ammo while waiting.
    12. **Lasting fixes first, passing ones last.** The brain works the first blocked crossing on
        a route, and only then sees the next one. When that first fix does not last (a lift goes
        back up after 3 s, a door closes after 4) and a later crossing needs a long way round
@@ -2412,8 +2423,8 @@ netgame guard; Heretic/Hexen.
 
 ## 7. Combat (the next stage)
 
-> Status: C0, C1 and the first of C2 done (7.9): Doom II MAP01 and MAP02 finish with monsters.
-> Monsters are back (no `-nomonsters`), tested at `-skill 3`.
+> Status: C0, C1, C2 (but monsters in the way) and C4 done (7.9): Doom II MAP01 and MAP02 finish
+> with monsters. Monsters are back (no `-nomonsters`), tested at `-skill 3`. Next: C3.
 
 Four Doom II maps do not finish with `-nomonsters`: MAP07 and MAP32 open their way only when
 monsters die (follow-up 10), MAP30 ends when the boss brain dies, and MAP23 needs a barrel shot
@@ -2431,7 +2442,8 @@ Two new parts of the brain, on top of the goal stack (3.5) and nav (3.4):
 
 Files: `k_sight.c` (sight checks, 7.2), `k_combat.c` (perception, targets, weapons, battle mode)
 and `k_condition.c`, with plain C headers for the console like the others. Their decisions go to
-the log under `COMBAT` (3.8; `ITEMS` to come with pickups), the condition's changes under `BRAIN`.
+the log under `COMBAT` (3.8), the condition's changes and the pickups under `BRAIN`. Items are
+`k_items.c` (7.5).
 
 ### 7.1 The condition
 
@@ -2459,14 +2471,15 @@ user), e.g. `COMFY - ammo OK, health OK, armour LOW`, and the log says when one 
   (say below 30 health, above 45), so a stimpack does not flip it back and forth.
 - **CRITICAL with no health to get** (none left, or none reachable) must not mean running about
   for good, against the never-give-up rule (follow-up 11): careful play instead, fighting from
-  cover, starting no new fights, carrying on with the goals.
+  cover, starting no new fights, carrying on with the goals. For now fights go on as usual then:
+  running to nowhere is no safer, and cover comes with C3.
 - **Invulnerability**: while it lasts nothing hurts the player (`P_DamageMobj` ignores damage
   under 1000, floors that hurt included), so the health need waits until it runs out.
 - **The health budget**: the cost of floors that hurt (3.3) is a stand-in until the bot knows its
   health, armour and suits. The condition gives that budget: how much health the route can spend.
 
-For a start the condition is always COMFY (the user): the needs are worked out and shown, and
-acted on only from C4 (7.7).
+Until C4 the needs were only worked out and shown (the user); since C4 they steer the pickups
+and detours (7.5) and fleeing (7.4).
 
 ### 7.2 What the bot sees
 
@@ -2513,6 +2526,10 @@ The user's points, with what the engine says:
    user): chasing a far hitscanner wastes time and ammo. If a far one keeps hitting the bot, the
    bot gets out of its sight rather than going after it. Firing wakes monsters wherever the sound
    reaches (`P_NoiseAlert` in `P_FireWeapon`, the fist too); that matters for sneaking past, later.
+   **A fight that looks hard to win** is left, or not started, even with health still OK (jotted,
+   C5): the health it would take - each attacker's damage rate times how long the bot needs to
+   kill them all with the ammo it has - against the health left, with a margin; or ammo that
+   cannot kill them at all. Built on the same per-kind costs as the danger around items (7.5).
 4. **Target priority.** Hitscanners first: the zombieman, shotgunner, chaingunner and Spider
    Mastermind, whose bullets cannot be dodged. Then arch-viles (they raise the dead, and their
    flame), pain elementals (they spawn lost souls), then by threat: the damage a monster can do,
@@ -2555,7 +2572,12 @@ Who controls the player in a fight (the user's model):
   new controller: battle mode hands it a velocity and a facing.
 - **Monsters in the way** when not fighting: follow-up 3.3 (steer round them with some random
   strafing, wait for them to move, plan round them).
-- **Fleeing** (CRITICAL): a goal pushed for health, or for a spot out of sight.
+- **Fleeing** (CRITICAL): a goal pushed for health, or for a spot out of sight. Done for health:
+  while health is CRITICAL and the goal on top is health, combat starts no fight and breaks off
+  the one going on at once; the player runs for it, shooting on the way at what it sees. At
+  CRITICAL, health is looked for during fights too (only health then). The player outruns every
+  walking monster; hitscanners shoot it in the back, so out of their sight comes with C3. With no
+  health to go for, fights go on as usual.
 
 ### 7.5 Goals combat adds
 
@@ -2564,7 +2586,9 @@ Who controls the player in a fight (the user's model):
   only when not wasted (no medikit at 95). Cheap, natural, and the LOW conditions come less often.
 - **Detours** for the needs (the temporary goals in front of the chain, 3.5): GET <item>, its
   candidates every item of the kind in the level, scored by route and by danger (a guarded
-  medikit loses to a lonely one further away).
+  medikit loses to a lonely one further away). Danger counts the monsters at the item only, not
+  those on the way there (the user: they are met and fought anyway, and move about); added later
+  if runs show the bot walking into big fights on its way to an item that looked safe.
 - **KILL ALL <kind>** (follow-up 10): Doom II MAP07 and MAP32, Doom's E1M8, E4M6, E4M8.
 - **Barrels** that block the way are removed by shooting them (follow-up 3.2), with the same
   sight, aiming and firing. MAP23 needs nothing of its own (the user).
@@ -2591,8 +2615,8 @@ Who controls the player in a fight (the user's model):
    rocket rule. Death handling, and runs with monsters on a few early maps. Done.
 3. **C2 Battle mode**: clearing the area, strafing, never standing still in sight, monsters in the
    way, back to the goals. Done but for monsters in the way.
-4. **C4 The condition**, next (the user, after MAP02: health and dodging will take the bot much
-   further, health first): the needs, pickups on the way, detours, CRITICAL.
+4. **C4 The condition** (the user, after MAP02: health and dodging will take the bot much
+   further, health first): the needs, pickups on the way, detours, CRITICAL. Done.
 5. **C3 Dodging and cover**: projectiles (on MAP02 the bot stood in slow imp fireballs); breaking
    line of sight against hitscanners and arch-viles.
 6. **C5 The rest**: fight or avoid; barrels that block the way (MAP23); KILL ALL goals (MAP07,
@@ -2611,6 +2635,8 @@ Who controls the player in a fight (the user's model):
   projectiles of its own kind do not hurt it), and keeps to it while its `threshold` runs down
   (100 of its chase steps, `A_Chase`), but any damage after that turns it on whoever did it, so a
   stray shot at it ends the fight between them and brings it after the player.
+- **Turning speed when aiming** (the user, jotted): the bot turns to a target faster than a human
+  could, which looks unnatural. Noticed and left alone for now (the user).
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.
@@ -2619,10 +2645,52 @@ Who controls the player in a fight (the user's model):
 
 - **The condition** (7.1) is worked out every tic and shown on a line of its own under the status
   line, every need side by side, ammo as b(ullets), s(hells), r(ockets), c(ells) (the user: the
-  long form did not fit); changes are logged. Nothing acts on it yet. Marks: health LOW below 50
-  until above 60, CRITICAL below 25 until above 35; armour LOW below 25 until above 40; ammo LOW
-  when no ammo the player has a weapon for is at its low mark (bullets 20, shells 5, rockets 3,
-  cells 40), OK again above 30, 8, 5, 60.
+  long form did not fit); changes are logged. Marks: health LOW below 75 until above 85 (the user:
+  at 50 the bot looked anything but comfy, and below 75 none of a medikit's 25 is wasted),
+  CRITICAL below 25 until above 35; armour LOW below 25 until above 40; ammo LOW when no ammo the
+  player has a weapon for is at its low mark (bullets 20, shells 5, rockets 3, cells 40), OK again
+  above 30, 8, 5, 60.
+- **Items** (7.5, `k_items.c`): every item lying in the level, told by its sprite as
+  `P_TouchSpecialThing` tells it, found by place and sprite each tic, and worth what picking it
+  up would give now: health below the most it may reach, armour better than what is worn (a
+  third of the damage taken off for green, a half for blue), ammo below the most carried (a
+  round of bullets 0.15, shells 0.8, cells 0.2, rockets 2; a quarter for ammo no weapon held
+  fires; half when dropped), a weapon not held (40 to 80), a backpack, power-ups. With no monster
+  left, weapons, ammo and the fighting power-ups are worth nothing. Items within 64 of one
+  another count together (MAP02: three stimpacks side by side were left at 25 health as worth
+  10 each). On the console's map (Items overlay): bright when worth a detour, red-edged when
+  guarded.
+- **Pickups on the way and detours** (`k_brain.c`, GET <item>): the worth, weighted by need,
+  is how far out of its way the player may go, 8 units a point: up to 400 for anything useful,
+  1500 for health when LOW (weighing 3 at 75 health, rising to 6 at 25) and for ammo when LOW
+  (weighing 3), any length for health when CRITICAL (weighing 12; the user: a minute or two back
+  to the start beats dying); armour weighs twice when health is not OK. Once a second, while the
+  player follows a route (not working a door, lift or switch, not jumping, not fighting), the 2
+  most promising (4 when CRITICAL) are routed, there and on to where the route goes; the one with
+  most to spare goes on top of the chain, and when picked up the goal below is planned again.
+  One with no way there or none on is skipped for 10 s. A switch's use is not counted twice for
+  a detour taken before it.
+- **Danger around items**: what the monsters guarding an item would cost in health is taken off,
+  weighed as health (the user, MAP02: four stimpacks guarded drew a fight a lonely medikit would
+  not have). The guards are the live monsters within 1024 that could see the player at the item
+  (in full within 512, less beyond; asleep and facing away, half), each by a rough cost per kind
+  (zombieman 5, imp and demon 8, shotgun guy 10, cacodemon 15, chaingunner 20, revenant 25,
+  baron 30, arch-vile 50, Cyberdemon and Spider Mastermind 100). Nothing is worth more health
+  than is left. Looked at about once a second; an item guarded more than it is worth while the
+  player goes for it is dropped, and skipped for 10 s.
+- **Pickup spots**: an item is picked up when the player's box overlaps its square, within 36 on
+  each axis; where the player cannot stand at it, the nearest spot within 34 (steps of 2) clear of
+  walls and solid things. An item no spot touches (under a tree) is out of reach; under a barrel,
+  until the barrel goes.
+- **Fleeing** (7.4): at CRITICAL, going for health breaks fights off. MAP02: hit down to 24 in a
+  fight while on the way to a medikit, the bot broke off, ran 209 units for it shooting on the
+  way, and was at 49 0.7 s later.
+- **A switch whose mover is busy** (a door closing by itself) is waited at and pressed once the
+  sector stops: `EV_DoDoor` and the others skip a sector that has a mover, so a press then does
+  nothing (MAP02: switch 102, pressed while door 30 closed, counted as having moved it, three
+  times, and was used up). The brain likewise waits for such a sector before it counts what the
+  line did.
+- **Never stuck for good** (follow-up 11, done by time) and **stepping aside when stuck** (3.4).
 - **What the bot sees** (7.2): every monster and projectile each tic, which monsters the player
   can see and which its shots would find; on the console's map (Monsters overlay) and in a Combat
   section of the Bot tab. Hits taken, monsters dying and the player's death are logged (`COMBAT`).
@@ -2655,6 +2723,9 @@ Who controls the player in a fight (the user's model):
   alone: 9.2 s, 77 health, 3 killed, stuck once on a zombieman in the way). MAP02 in 97.3 s, 16
   health, 60 of 70 killed, CRITICAL for its last minute (without battle mode it died at 15 s,
   walking into a group of shotgun guys). MAP03-MAP05 died within 13 s with shooting on the way
-  alone, not tried since. The `-nomonsters` regression is unchanged.
+  alone, not tried since. With pickups, danger and fleeing: MAP02 in 110.7 s, 60 health, 60 of 70
+  killed, health detours at 57 and 24 health. The `-nomonsters` regression finishes all 28 maps;
+  pickups change some routes on purpose (soulspheres on MAP05, MAP08, MAP11, MAP27, MAP29; armour
+  on MAP09, MAP11, MAP17, MAP20, MAP28; medikits on MAP24 and MAP25).
 - Seen, not fixed: a run-up was still slow once while aiming (13.0 units a tic at the edge on
   MAP02, though it landed).

@@ -98,6 +98,17 @@
 #define MAX_NEAR_LINES 256
 #define MAX_NEAR_BLOCKS 64
 
+// Picking up a thing of radius 20 (an item, a key): the engine touches it
+// when the player's box overlaps its square, within 36 on each axis. Where
+// the player cannot stand at it, it goes to the nearest point within
+// PICKUP_REACH on each axis (a little margin) that is STAND_CLEARANCE from
+// anything that stops it, walls and solid things: its radius plus one.
+// Searched in steps of PICKUP_STEP. Beside a lamp or column (radius 16)
+// the player can stand 33 off it at the nearest, so 28 was too short.
+#define PICKUP_REACH 34.0
+#define PICKUP_STEP 2.0
+#define STAND_CLEARANCE 17.0
+
 // A gap inside a cell, between its portals, can be narrower than the
 // player too: a closed block beside a wall, mid-cell (Doom II MAP21's
 // yellow bars leave 32 units). Chords across cells, at most two clearances
@@ -3029,6 +3040,37 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
     }
 
     return clearance;
+}
+
+int K_Graph_PickupSpot(k_vec2_t at, k_vec2_t *spot)
+{
+    int steps = (int) (PICKUP_REACH / PICKUP_STEP);
+    int best_distance = -1;
+    int i, j;
+
+    if (K_Graph_Clearance(at, STAND_CLEARANCE) >= STAND_CLEARANCE)
+    {
+        *spot = at;
+        return 1;
+    }
+
+    for (i = -steps; i <= steps; ++i)
+    {
+        for (j = -steps; j <= steps; ++j)
+        {
+            k_vec2_t point = { at.x + i * PICKUP_STEP, at.y + j * PICKUP_STEP };
+            int distance = i * i + j * j;
+
+            if ((best_distance < 0 || distance < best_distance)
+             && K_Graph_Clearance(point, STAND_CLEARANCE) >= STAND_CLEARANCE)
+            {
+                *spot = point;
+                best_distance = distance;
+            }
+        }
+    }
+
+    return best_distance >= 0;
 }
 
 int K_Graph_MovingSector(void)

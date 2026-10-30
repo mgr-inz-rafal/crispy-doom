@@ -219,6 +219,15 @@ int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found);
 // so a box of radius r overlaps what is nearer than r.
 double K_Graph_Clearance(k_vec2_t at, double reach);
 
+// Where the player can stand to pick up a thing of radius 20 lying at `at`
+// (an item, a key): there, if it can stand there, else the nearest spot
+// that still touches it, clear of walls and solid things. A key can lie on
+// an impassable line, to be picked up from one side only (Doom II MAP05);
+// an item under a barrel or a lamp. Returns 0 if there is none: under a
+// solid thing of radius 20 or more (a tree, a big column), the player's
+// box never reaches it.
+int K_Graph_PickupSpot(k_vec2_t at, k_vec2_t *spot);
+
 // A line near a point that stops the player.
 typedef struct
 {

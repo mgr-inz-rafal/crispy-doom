@@ -34,7 +34,8 @@ const char *K_Brain_Status(void);
 int K_Brain_GoalCount(void);
 void K_Brain_GoalText(int index, char *buf, int buf_len);
 
-// Goals that failed this level, oldest first.
+// Goals that failed this level, oldest first, and when each may go on the
+// stack again.
 int K_Brain_FailedCount(void);
 const char *K_Brain_FailedText(int index);
 

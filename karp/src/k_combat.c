@@ -33,6 +33,14 @@
 //	a time. Nav busy at a door, lift or switch, or running a jump, the
 //	player shoots from where it is, as on the way.
 //
+//	Escaping (plan, 7.4): while the brain goes for health with health
+//	CRITICAL, no fight is started and one going on is broken off; the
+//	player runs for it, shooting on the way at what it sees.
+//
+//	Danger (plan, 7.5): what going to a spot would cost in health - the
+//	monsters that could see the player there, each by what a fight with its
+//	kind takes. A guarded medikit loses to a lonely one.
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -139,38 +147,48 @@
 // A target that moved further than this in a tic teleported.
 #define TARGET_JUMP 64.0
 
+// The monsters guarding a spot: those within DANGER_REACH that can see the
+// player standing there, in full within DANGER_FULL, less and less beyond;
+// asleep and facing away, a share of ASLEEP_AWAY (it may sleep through the
+// visit: P_LookForPlayers looks only ahead).
+#define DANGER_REACH 1024.0
+#define DANGER_FULL 512.0
+#define ASLEEP_AWAY 0.5
+#define PLAYER_HEIGHT 56.0
+
 typedef struct
 {
     mobjtype_t type;
     const char *name;
-    double threat;          // how much to fear it, roughly
+    double threat;          // how much to fear it as a target, roughly
+    double cost;            // the health a fight with it takes, roughly
     boolean hitscan;        // its attack is a bullet
 } kind_t;
 
 static const kind_t kinds[] =
 {
-    { MT_POSSESSED, "zombieman",         3.0, true },
-    { MT_SHOTGUY,   "shotgun guy",       4.0, true },
-    { MT_CHAINGUY,  "chaingunner",       5.0, true },
-    { MT_WOLFSS,    "Wolfenstein SS",    4.0, true },
-    { MT_SPIDER,    "spider mastermind", 6.0, true },
-    { MT_VILE,      "arch-vile",         6.0, false },
-    { MT_PAIN,      "pain elemental",    4.0, false },
-    { MT_UNDEAD,    "revenant",          4.0, false },
-    { MT_FATSO,     "mancubus",          4.0, false },
-    { MT_BABY,      "arachnotron",       4.0, false },
-    { MT_CYBORG,    "cyberdemon",        6.0, false },
-    { MT_BRUISER,   "baron of hell",     3.0, false },
-    { MT_KNIGHT,    "hell knight",       3.0, false },
-    { MT_HEAD,      "cacodemon",         2.5, false },
-    { MT_TROOP,     "imp",               2.0, false },
-    { MT_SERGEANT,  "demon",             2.0, false },
-    { MT_SHADOWS,   "spectre",           2.0, false },
-    { MT_SKULL,     "lost soul",         2.0, false },
-    { MT_KEEN,      "Commander Keen",    0.5, false },
+    { MT_POSSESSED, "zombieman",         3.0,   5.0, true },
+    { MT_SHOTGUY,   "shotgun guy",       4.0,  10.0, true },
+    { MT_CHAINGUY,  "chaingunner",       5.0,  20.0, true },
+    { MT_WOLFSS,    "Wolfenstein SS",    4.0,  10.0, true },
+    { MT_SPIDER,    "spider mastermind", 6.0, 100.0, true },
+    { MT_VILE,      "arch-vile",         6.0,  50.0, false },
+    { MT_PAIN,      "pain elemental",    4.0,  20.0, false },
+    { MT_UNDEAD,    "revenant",          4.0,  25.0, false },
+    { MT_FATSO,     "mancubus",          4.0,  30.0, false },
+    { MT_BABY,      "arachnotron",       4.0,  25.0, false },
+    { MT_CYBORG,    "cyberdemon",        6.0, 100.0, false },
+    { MT_BRUISER,   "baron of hell",     3.0,  30.0, false },
+    { MT_KNIGHT,    "hell knight",       3.0,  20.0, false },
+    { MT_HEAD,      "cacodemon",         2.5,  15.0, false },
+    { MT_TROOP,     "imp",               2.0,   8.0, false },
+    { MT_SERGEANT,  "demon",             2.0,   8.0, false },
+    { MT_SHADOWS,   "spectre",           2.0,  10.0, false },
+    { MT_SKULL,     "lost soul",         2.0,   6.0, false },
+    { MT_KEEN,      "Commander Keen",    0.5,   0.0, false },
 };
 
-static const kind_t other_kind = { NUMMOBJTYPES, "monster", 1.0, false };
+static const kind_t other_kind = { NUMMOBJTYPES, "monster", 1.0, 10.0, false };
 
 typedef struct
 {
@@ -263,6 +281,9 @@ static int calm;                    // tics without a target worth fighting
 static int strafe_dir = 1;          // 1 or -1: to the target's left or right
 static int strafe_tics;             // until it turns the other way
 static k_vec2_t move;               // the velocity wanted
+
+// Fights broken off: the brain goes for health, CRITICAL (K_Combat_Escape).
+static boolean escape;
 
 static double ToMap(fixed_t value)
 {
@@ -1034,8 +1055,19 @@ static void EndBattle(const player_t *player)
     battle = false;
     status.battle = false;
     move.x = move.y = 0.0;
-    K_Log(K_LOG_COMBAT, K_LOG_INFO, "fight over after %.1f s, %d killed - back on the way",
-          (double) (leveltime - battle_since) / TICRATE, player->killcount - battle_kills);
+
+    if (escape)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "breaking off the fight after %.1f s, %d killed - "
+              "health CRITICAL, going for health", (double) (leveltime - battle_since) / TICRATE,
+              player->killcount - battle_kills);
+    }
+    else
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "fight over after %.1f s, %d killed - back on the way",
+              (double) (leveltime - battle_since) / TICRATE, player->killcount - battle_kills);
+    }
+
     K_Nav_Pause(0);
 }
 
@@ -1053,14 +1085,16 @@ static void UpdateBattle(const player_t *player)
         DropTarget();
     }
 
-    fight = WorthFighting();
+    // Going for health, CRITICAL: no fight is started, and one going on is
+    // broken off at once; the player shoots on the way.
+    fight = WorthFighting() && !escape;
     calm = fight ? 0 : calm + 1;
 
     if (!battle && fight && K_Nav_CanPause())
     {
         StartBattle(player);
     }
-    else if (battle && calm >= BATTLE_CALM)
+    else if (battle && (calm >= BATTLE_CALM || escape))
     {
         EndBattle(player);
     }
@@ -1099,6 +1133,7 @@ void K_Combat_Reset(void)
     strafe_dir = 1;
     strafe_tics = 0;
     move.x = move.y = 0.0;
+    escape = false;
 }
 
 void K_Combat_Tick(int driving)
@@ -1157,7 +1192,8 @@ void K_Combat_Tick(int driving)
     if (status.target >= 0)
     {
         M_snprintf(status.text, sizeof(status.text), "%s the %s, %.0f units - %s",
-                   battle ? "fighting" : "shooting on the way at",
+                   battle ? "fighting" : escape ? "escaping, shooting at"
+                                                : "shooting on the way at",
                    monsters[status.target].name, monsters[status.target].distance,
                    status.weapon != NULL ? status.weapon : "no weapon for it");
     }
@@ -1328,6 +1364,46 @@ void K_Combat_Fire(int tic, k_command_t *command)
     {
         ++status.shots;
     }
+}
+
+double K_Combat_Danger(double x, double y, double floor)
+{
+    k_vec2_t at = { x, y };
+    double danger = 0.0;
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+        double cost = Kind(monster->type)->cost;
+        double distance = Distance(monster->at, at);
+        double share;
+
+        if (cost <= 0.0 || distance > DANGER_REACH
+         || !K_Sight_Check(monster->at.x, monster->at.y, monster->z + monster->height * 0.75,
+                           x, y, floor, floor + PLAYER_HEIGHT))
+        {
+            continue;
+        }
+
+        share = distance <= DANGER_FULL
+              ? 1.0 : (DANGER_REACH - distance) / (DANGER_REACH - DANGER_FULL);
+
+        if (!monster->awake && distance > 1e-6
+         && fabs(Wrap(atan2(y - monster->at.y, x - monster->at.x) - monster->angle)) > K_PI / 2.0)
+        {
+            share *= ASLEEP_AWAY;
+        }
+
+        danger += cost * share;
+    }
+
+    return danger;
+}
+
+void K_Combat_Escape(int on)
+{
+    escape = on != 0;
 }
 
 int K_Combat_Move(double *vx, double *vy)
