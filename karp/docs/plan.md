@@ -2804,6 +2804,18 @@ Who controls the player in a fight (the user's model):
   through and to them, battle mode backs away into them, never into a room not yet seen.
   With the guards on the way to an item (above), this also stops the long health trips
   through rooms not cleared.
+- **Detours are sticky** (the user, jotted). Going for a soulsphere far off, through fights,
+  escapes and top-ups, the bot left blue armour very close by its way. One detour at a time
+  (MAP04: an item and its fix re-added every second) means nothing else is looked at while one
+  is on; it is given up only once picked up, worth nothing, or guarded or out of reach - never
+  weighed again against what has come up (but for health at LOW or CRITICAL, and one that goes
+  first giving way to another clearly sooner in hand). Two parts:
+  1. **Stacked detours**: while an item is gone for, the route ends at it, so a candidate's
+     detour is already its extra way to that item; one small enough (a few hundred units) goes
+     on top of it, and the item below is planned again once it is picked up. Two deep at most;
+     fixes counted only above the topmost item, as now.
+  2. **Weighing again**: now and then the detour on is set against the candidates, and one
+     clearly worse, by a margin, is dropped (it may have grown long through fights and escapes).
 - **Seen on MAP10, for later** (the user, jotted): going for a chaingun, the bot lowered the
   lift with two spectres on it, fought them with the shotgun, then escaped and left the
   chaingun. Revenants and arachnotrons need real tactics (cover, dodging, distance); shooting
