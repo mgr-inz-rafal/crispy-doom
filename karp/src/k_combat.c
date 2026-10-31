@@ -11,7 +11,9 @@
 //	left alone (the user: chasing a far hitscanner wastes time and ammo).
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
-//	hand (a switch takes about 0.9 s). Nav faces the target wherever it
+//	hand (a switch takes about 0.9 s). The pistol is the last resort: for
+//	zombiemen and shotgun guys, monsters with little health sniped at from
+//	far off, and when nothing better can hurt the target. Nav faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
 //
@@ -149,6 +151,22 @@
 #define SWITCH_WAIT 105
 #define SWITCH_TICS 35
 
+// The pistol is the tool of last resort (the user, Doom II MAP03: the bot
+// brought it up for imps, and closed in on a chaingunner with it). It rates
+// PISTOL_SHARE of its damage, and is put away after SWITCH_TICS, unless no
+// other weapon but the bare fist can hurt the target, the target is a
+// zombieman or a shotgun guy, or it is SNIPE_REACH off or more (SNIPE_KEEP
+// with the pistol in hand already: MAP03, it came up for an imp 643 off and
+// went again a second later at 581) with no more than SNIPE_HEALTH left,
+// sniped at: a zombieman, shotgun guy, chaingunner, imp, SS or lost soul,
+// or anything worn down that far - never a spider mastermind or a
+// mancubus, which would take too long (the user). Barrels out of a fight
+// are popped with it still (PopWeapon).
+#define PISTOL_SHARE 0.25
+#define SNIPE_REACH 640.0
+#define SNIPE_KEEP 512.0
+#define SNIPE_HEALTH 100
+
 // Rockets: none at anything nearer than ROCKET_MIN (the blast reaches 128
 // from where it hits, the player's box 16 more), unless invulnerable for
 // INVULN_LEFT tics more at least.
@@ -229,6 +247,12 @@
 #define BLOW_REACH 96.0
 #define BLOW_SAFE 160.0
 #define BLOW_HOLD 35
+
+// A spot to step to keeps EDGE_MARGIN from any edge the player could slip
+// off; stepping away from a blast or blows, no less than the player is
+// already (MAP03: on the very edge of a pit, a demon below biting, no spot
+// was far enough from it, and the bot stood and died).
+#define EDGE_MARGIN (PLAYER_RADIUS + 8.0)
 
 // A projectile is incoming when it will pass within the player's radius
 // and PROJECTILE_MARGIN of it, within PROJECTILE_HORIZON tics.
@@ -1126,11 +1150,44 @@ static void CountMisses(const player_t *player)
     }
 }
 
+// Whether the pistol is right for the monster: it is a zombieman or a
+// shotgun guy, far off with little health left, or nothing better can hurt
+// it.
+static boolean PistolRight(const player_t *player, const k_monster_t *monster)
+{
+    weapontype_t in_hand = player->pendingweapon != wp_nochange ? player->pendingweapon
+                                                                : player->readyweapon;
+    int i;
+
+    if (monster->type == MT_POSSESSED || monster->type == MT_SHOTGUY
+     || (monster->distance >= (in_hand == wp_pistol ? SNIPE_KEEP : SNIPE_REACH)
+         && monster->health <= SNIPE_HEALTH))
+    {
+        return true;
+    }
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        const weapon_t *weapon = &weapons[i];
+
+        if (weapon->weapon != wp_pistol
+         && !(weapon->weapon == wp_fist && !player->powers[pw_strength])
+         && Selectable(player, weapon)
+         && ShotDamage(player, weapon, monster->distance, monster->radius) > 0.0)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void ChooseWeapon(const player_t *player)
 {
     const k_monster_t *monster;
     const weapon_t *best = NULL, *current;
     double best_rating = 0.0, current_rating;
+    boolean pistol_right;
     int i;
 
     wanted = -1;
@@ -1143,11 +1200,17 @@ static void ChooseWeapon(const player_t *player)
     }
 
     monster = &monsters[status.target];
+    pistol_right = PistolRight(player, monster);
 
     for (i = 0; i < arrlen(weapons); ++i)
     {
         double rating = Selectable(player, &weapons[i])
                       ? Rating(player, &weapons[i], monster) : 0.0;
+
+        if (weapons[i].weapon == wp_pistol && !pistol_right)
+        {
+            rating *= PISTOL_SHARE;
+        }
 
         if (rating > best_rating)
         {
@@ -1161,10 +1224,17 @@ static void ChooseWeapon(const player_t *player)
     current_rating = current != NULL ? Rating(player, current, monster) : 0.0;
     can_hurt = best_rating > 0.0 || current_rating > 0.0;
 
+    if (current != NULL && current->weapon == wp_pistol && !pistol_right)
+    {
+        current_rating *= PISTOL_SHARE;
+    }
+
     if (best != NULL && best != current
      && ((current_rating <= 0.0 && leveltime - last_switch >= SWITCH_TICS)
          || (best_rating > current_rating * SWITCH_GAIN
-             && leveltime - last_switch >= SWITCH_WAIT)))
+             && leveltime - last_switch
+                >= (current != NULL && current->weapon == wp_pistol && !pistol_right
+                    ? SWITCH_TICS : SWITCH_WAIT))))
     {
         current = best;
     }
@@ -1609,11 +1679,11 @@ static unsigned int Hash(unsigned int x)
     return x;
 }
 
-// Whether the player can step to a point while fighting: floor it can walk
-// onto from the floor it stands on, clear of walls, solid things and
-// monsters, not near an edge it could slip off, and not a floor that hurts
-// unless it stands on one already.
-static boolean Walkable(k_vec2_t at, double floor, boolean hurts)
+// Whether the player can step to a point: floor it can walk onto from the
+// floor it stands on, clear of walls, solid things and monsters, not within
+// `edge` of an edge it could slip off, and not a floor that hurts unless it
+// stands on one already.
+static boolean Steppable(k_vec2_t at, double floor, boolean hurts, double edge)
 {
     const k_map_t *map = K_Map_Get();
     int cell = K_Map_CellAt(at.x, at.y);
@@ -1629,7 +1699,7 @@ static boolean Walkable(k_vec2_t at, double floor, boolean hurts)
 
     if (cell_floor > floor + MAX_CLIMB || cell_floor < floor - MAX_CLIMB
      || K_Graph_Clearance(at, PLAYER_RADIUS + 1.0) < PLAYER_RADIUS + 1.0
-     || K_Graph_DropDistance(at, cell_floor, PLAYER_RADIUS + 8.0) < PLAYER_RADIUS + 8.0
+     || K_Graph_DropDistance(at, cell_floor, edge) < edge
      || (!hurts && K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0))
     {
         return false;
@@ -1644,6 +1714,12 @@ static boolean Walkable(k_vec2_t at, double floor, boolean hurts)
     }
 
     return true;
+}
+
+// While fighting: well away from edges.
+static boolean Walkable(k_vec2_t at, double floor, boolean hurts)
+{
+    return Steppable(at, floor, hurts, EDGE_MARGIN);
 }
 
 // Where to move while fighting: each of MOVE_WAYS directions that can be
@@ -1910,6 +1986,7 @@ static void UpdateDodge(const player_t *player)
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double floor = ToMap(player->mo->floorz);
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    double edge = SDL_min(EDGE_MARGIN, K_Graph_DropDistance(me, floor, EDGE_MARGIN));
     int blast, blow;
     k_vec2_t from, way = { 0.0, 0.0 };
     double best = -1.0;
@@ -1942,7 +2019,8 @@ static void UpdateDodge(const player_t *player)
         k_vec2_t far = { me.x + ux * MOVE_LOOK, me.y + uy * MOVE_LOOK };
         double away = blast >= 0 ? AxisDistance(far, from) : Distance(far, from);
 
-        if (away > best && Walkable(near, floor, hurts) && Walkable(far, floor, hurts))
+        if (away > best && Steppable(near, floor, hurts, edge)
+         && Steppable(far, floor, hurts, edge))
         {
             best = away;
             way.x = ux;

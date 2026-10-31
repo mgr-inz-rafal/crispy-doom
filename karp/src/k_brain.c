@@ -2393,7 +2393,14 @@ void K_Brain_Tick(void)
             }
             else if (goal->type == GOAL_KEY || goal->type == GOAL_ITEM)
             {
-                CandidateFailed(goal, "got there, but did not pick it up");
+                k_pose_t pose;
+
+                // Still falling onto it (Doom II MAP03: a box of shells at
+                // the foot of a drop): it is picked up on landing.
+                if (!K_Map_GetPlayer(&pose) || pose.onground)
+                {
+                    CandidateFailed(goal, "got there, but did not pick it up");
+                }
             }
             else if (goal->type == GOAL_BARREL)
             {

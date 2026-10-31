@@ -2750,7 +2750,10 @@ Who controls the player in a fight (the user's model):
   monster within 96 that the shots cannot find, the player holds the route, even waiting at a
   door or lift (the action begun again after), and steps the walkable way furthest from it until
   it is 160 off, where the autoaim may find it. With no walkable way (a lift going down, the
-  floor around too high) it rides on. Very high lifts stay a risk.
+  floor around too high) it rides on. Very high lifts stay a risk. Stepping away, from blows or a
+  blast, a spot need be no further from an edge than the player already is (MAP03: on the very
+  edge of a pit, a demon below - blocking the drop, things block at any height - bit the bot to
+  death; every spot was within 24 of the edge, so none would do).
 - **Danger around items**: what the monsters guarding an item would cost in health is taken off,
   weighed as health (the user, MAP02: four stimpacks guarded drew a fight a lonely medikit would
   not have). The guards are the live monsters within 1024 that could see the player at the item
@@ -2762,7 +2765,8 @@ Who controls the player in a fight (the user's model):
 - **Pickup spots**: an item is picked up when the player's box overlaps its square, within 36 on
   each axis; where the player cannot stand at it, the nearest spot within 34 (steps of 2) clear of
   walls and solid things. An item no spot touches (under a tree) is out of reach; under a barrel,
-  until the barrel goes.
+  until the barrel goes. Reached while still falling onto it, it is picked up on landing, not
+  failed in the air (MAP03: a box of shells at the foot of a 64-unit drop).
 - **Fleeing** (7.4): at CRITICAL, going for health breaks fights off. MAP02: hit down to 24 in a
   fight while on the way to a medikit, the bot broke off, ran 209 units for it shooting on the
   way, and was at 49 0.7 s later.
@@ -2797,6 +2801,13 @@ Who controls the player in a fight (the user's model):
   shotgun's beyond 300; another weapon is brought up only at twice the rating and 3 s after the
   last switch, unless the one in hand cannot hurt the target (with a gain of 1.3, 24 switches in
   a minute on MAP02). Five shots without a hit and the target is left alone for 2 s (the user).
+  The pistol is the last resort (the user, MAP03: it was brought up for imps, and a chaingunner
+  was closed in on with it): it rates a quarter, and is put away after 1 s, unless the target is
+  a zombieman or a shotgun guy, 640 or more off (512 with the pistol in hand already, or it
+  flips at the edge) with no more than 100 health left (sniped at: a
+  zombieman, shotgun guy, chaingunner, imp, SS or lost soul, or anything worn down that far;
+  never a Spider Mastermind or a mancubus, which would take too long), or nothing but the bare
+  fist can hurt it; barrels out of a fight are popped with it still.
 - **Facing** (7.4): nav takes combat's aim wherever it does not need the facing: not running a
   jump (and coming up to one, it faces the jump: on MAP02 a run-up begun facing a shotgun guy
   left the edge at 13.2 units a tic and fell short), not pressing at a switch, door or lift; on
