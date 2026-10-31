@@ -2732,7 +2732,11 @@ Who controls the player in a fight (the user's model):
      the nearest stimpacks, out of CRITICAL in 4 s); and an item detour on, not for health,
      is dropped with its fixes (MAP10: an armour bonus behind a gun switch, one detour at a
      time, kept every health item from being looked at, and the bot fought on at 20 health
-     until it died, a medikit in reach). Still open: the guards on the way to an item, not
+     until it died, a medikit in reach). One such already gone for gives way to another whose
+     way there is 256 shorter (E2M5: a chaingun behind a walk-over line 2788 off was gone for
+     at the start, and the shotgun a shotgun guy then dropped beside the bot was never looked
+     at, one detour at a time; the bot fought demons with the pistol and died at 30 s; now the
+     shotgun at 3.9 s, dead at 56 s). Still open: the guards on the way to an item, not
      only at it (MAP10: the chaingun's platform out of sight of the crowd below that the
      switch and the lift wait met).
 - **Low ammo is the usual trouble** (the user, jotted, the scheme in nearly all the salted

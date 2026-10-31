@@ -146,8 +146,11 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // chaingun on the way to the key, behind a switch and a lift, was gone for
 // over a shotgun back by the start, a 465-unit run, and the bot fought with
 // the pistol for 20 s; at 23 health, a berserk 5322 units off over a
-// medikit near, and the bot died on the way).
+// medikit near, and the bot died on the way). One already gone for gives way
+// to another only when the other's way there is REPLACE_MARGIN shorter, or
+// the two would flip.
 #define FIRST_SCORE 1.0e6
+#define REPLACE_MARGIN 256.0
 
 // In a fight only items worth breaking it off for are looked for (k_items.h:
 // urgent), and but for those worth leaving it for however far (escape:
@@ -2198,6 +2201,7 @@ static boolean ConsiderItems(goal_t *goal)
     k_vec2_t start, end;
     goal_t *item_goal;
     char name[64], guarded[64] = "";
+    int detour_at = -1;     // the detour on that goes first, which a nearer one may replace
     int i, k;
 
     // Health just went CRITICAL: looked at now, not within the second (Doom
@@ -2226,8 +2230,13 @@ static boolean ConsiderItems(goal_t *goal)
     // and health looked for once the goal below is planned again (MAP10: an
     // armour bonus behind a gun switch kept the bot fighting at 20 health, a
     // medikit in reach, until it died). When LOW, not one that goes first
-    // itself (GoesFirst: a weapon at a pistol start, ammo when LOW).
-    for (i = 0; i < depth; ++i)
+    // itself (GoesFirst: a weapon at a pistol start, ammo when LOW); that
+    // one gives way only to another that goes first, its way there
+    // REPLACE_MARGIN shorter (E2M5: a chaingun behind a walk-over line 2788
+    // off was gone for at the start; a shotgun guy then dropped his shotgun
+    // beside the bot, never looked at, and the bot fought demons with the
+    // pistol).
+    for (i = 0; i < depth && detour_at < 0; ++i)
     {
         const k_item_t *on;
 
@@ -2237,6 +2246,12 @@ static boolean ConsiderItems(goal_t *goal)
         }
 
         on = K_Items_Get(goals[i].param);
+
+        if (i > 0 && GoesFirst(on, critical) && (on->kind == K_ITEM_HEALTH || !critical))
+        {
+            detour_at = i;
+            continue;
+        }
 
         if (i == 0 || on->kind == K_ITEM_HEALTH || (!critical && GoesFirst(on, critical))
          || !HealthToEscapeFor())
@@ -2299,7 +2314,8 @@ static boolean ConsiderItems(goal_t *goal)
 
         if (!item->present || reach <= 0.0 || distance > reach
          || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i)
-         || (fighting && !item->urgent))
+         || (fighting && !item->urgent)
+         || (detour_at >= 0 && (!GoesFirst(item, critical) || i == goals[detour_at].param)))
         {
             continue;
         }
@@ -2357,10 +2373,44 @@ static boolean ConsiderItems(goal_t *goal)
         return false;
     }
 
+    // In place of the detour on, only when clearly sooner in hand; it and
+    // the fixes pushed for it go, the goal below it staying as it was.
+    if (detour_at >= 0)
+    {
+        const k_item_t *on = K_Items_Get(goals[detour_at].param);
+        double on_detour, on_way = 1.0e9;
+        boolean on_fixed;
+
+        ItemDetour(start, player.cell, on->spot, end, nav->remaining, true, &on_detour,
+                   &on_way, &on_fixed);
+
+        if (best_way + REPLACE_MARGIN >= on_way)
+        {
+            return false;
+        }
+
+        GoalName(&goals[detour_at], name, sizeof(name));
+
+        if (on_way < 1.0e9)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - the %s is in hand sooner, %.0f units "
+                  "against %.0f", name, K_Items_Get(best)->name, best_way, on_way);
+        }
+        else
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - the %s is in hand sooner, %.0f units "
+                  "(no way from here to the %s)", name, K_Items_Get(best)->name, best_way,
+                  on->name);
+        }
+        depth = detour_at;
+        K_Nav_Clear();
+    }
+
     // A switch not worked yet: going for it again after the item is not
-    // another use of its line (MAX_TRIGGERS).
-    if (goal->type == GOAL_TRIGGER && line_uses != NULL && goal->chosen.line >= 0
-     && line_uses[goal->chosen.line] > 0)
+    // another use of its line (MAX_TRIGGERS). Already so for one in place
+    // of a detour.
+    else if (goal->type == GOAL_TRIGGER && line_uses != NULL && goal->chosen.line >= 0
+          && line_uses[goal->chosen.line] > 0)
     {
         --line_uses[goal->chosen.line];
     }
