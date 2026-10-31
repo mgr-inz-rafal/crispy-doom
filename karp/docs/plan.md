@@ -2707,6 +2707,30 @@ Who controls the player in a fight (the user's model):
   super shotgun want another look (the user, MAP02): the super shotgun was used far off where
   the plain one would do better; enough against zombiemen, but against a baron far off, with a
   fraction of the pellets landing, it wastes shells.
+- **Seen in salted runs, to look into with logs** (the user, jotted, Doom and Doom II):
+  1. The fist brought up at close range, once even against a baron of hell, with ammo full. A
+     guess: a berserk pack in hand, which makes the fist rate ten times and skips its quarter
+     share - but even then a baron (1000 health) is a long fight in reach of its blows.
+  2. Four shells right by the route left lying with 18 shells (25 is comfortable): worth about 9,
+     allowing about 100 units of detour, so a detour there and back to the route's end may have
+     cost more. Items that close should simply be picked up.
+  3. A health bonus 3400 units out of the way gone for with health left, a shotgun near the
+     route ignored with only the pistol in hand. 3400 is past the 3000 cap, so health counted at
+     CRITICAL (any length), likely bonuses lying together (their worth summed); and the item with
+     most slack wins, which favours the unlimited one. A weapon at a pistol start should come
+     first.
+- **Low ammo is the usual trouble** (the user, jotted, the scheme in nearly all the salted
+  runs). Doom E2M7: low on ammo, the bot fought cacodemons with the pistol and the fist rather
+  than fetch more; ammo on a crate, reachable up steps, was left; later it punched on beside a
+  box of ammo, and picked the box up only when it was too late. Ammo needs a higher priority:
+  near dry, the bot should not start or carry on a fight it cannot win with what is in hand,
+  but break off and run for ammo, even far away (with the fight-or-avoid of 7.3 point 3).
+- **Leave distant non-hitscan monsters be** (the user, jotted; saves ammo, lets it pile up). A
+  cacodemon, baron or the like across a large room (not horizon-far, just the other side of it)
+  is little threat: its missiles can be sidestepped. Do not fight it; carry on through the level,
+  pick up what lies on the way, and fight it later if it comes close or stands in the way. Often
+  seen: the last bullets spent on a caco that was no threat, then death to a shotgun guy.
+  Hitscanners (zombiemen, shotgun guys, chaingunners, SS) still count at any range.
 - **Sniping is dead as it stands** (the user, jotted; the next session starts here). The pistol
   snipes only a monster not hunting the player, but asleep monsters are targets only within 512
   and sniping starts at 640, so whatever is targeted that far off is awake, and an awake monster

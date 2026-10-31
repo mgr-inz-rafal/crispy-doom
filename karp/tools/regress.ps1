@@ -3,11 +3,12 @@
     Karp map regressions: runs the bot on several maps at once and reports how each run ended.
 
 .DESCRIPTION
-    Each map is a visible game (-autoplay -karpconsole -nomonsters -quitonexit -nosound), all
-    started together. crispy keeps karp.log, karp.cfg and crispy-doom.cfg in the exe's folder
-    (its config directory on Windows), so instances sharing one folder would overwrite each
-    other's files: each map runs from its own folder holding a copy of the exe, its DLLs and
-    the cfgs. A map still running after its time limit is killed.
+    Each map is a visible game (-autoplay -karpconsole -nomonsters -quitonexit), all started
+    together, silent (-nosound) when there are several; a single map plays with sound. crispy
+    keeps karp.log, karp.cfg and crispy-doom.cfg in the exe's folder (its config directory on
+    Windows), so instances sharing one folder would overwrite each other's files: each map runs
+    from its own folder holding a copy of the exe, its DLLs and the cfgs. A map still running
+    after its time limit is killed.
 
     Afterwards each run's karp.log is in <Out>\logs\MAPnn.log, and one line per map is printed:
     the time it finished in and the health left, the keys picked up and when, and the first failed
@@ -94,6 +95,11 @@ if ($null -ne $Salt) {
     $play += @('-karpsalt', "$Salt")
 }
 
+# Several games at once would only make noise; one is worth hearing.
+if ($Maps.Count -gt 1) {
+    $play += @('-nosound')
+}
+
 foreach ($map in $Maps) {
     $dir = Join-Path $runs "MAP$map"
 
@@ -111,7 +117,7 @@ foreach ($map in $Maps) {
     }
 
     $started[$map] = Start-Process -FilePath (Join-Path $dir 'crispy-doom.exe') -WorkingDirectory $dir `
-        -PassThru -ArgumentList (@('-iwad', "`"$Iwad`"", '-window', '-nomouse', '-nosound') + $play +
+        -PassThru -ArgumentList (@('-iwad', "`"$Iwad`"", '-window', '-nomouse') + $play +
                                  @('-autoplay', '-karpconsole', '-quitonexit', '-warp', $map))
 }
 
