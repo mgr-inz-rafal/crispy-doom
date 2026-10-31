@@ -42,9 +42,12 @@ typedef struct
     double together;        // with the items beside it, picked up on the same
                             // trip
     double danger;          // what the monsters guarding it would cost in
-                            // health (K_Combat_Danger); it, reachable and
-                            // spot looked at about once a second while it is
-                            // worth anything
+                            // health (K_Combat_Danger), beyond those that see
+                            // the player where it stands (fought anyway); a
+                            // quarter for a weapon not held while nothing
+                            // better than the pistol is. The guards,
+                            // reachable and spot looked at about once a
+                            // second while it is worth anything
     double reach;           // how far out of its way the player may go for
                             // it and those beside it now, the danger taken
                             // off, in map units of detour (0: none, or out

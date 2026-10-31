@@ -137,6 +137,14 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // is broken off once the item is within FIGHT_REACH (UpdateEscape).
 #define FIGHT_REACH 400.0
 
+// Out of a fight, an item behind one fix the brain knows - barrels in the
+// way, a door or bars a switch or walk-over line opens; never a key - is
+// gone for through it: the detour counts the way to the fix's nearest spot,
+// on to the item and on, and FIX_WORK for the work there (the user, Doom II
+// MAP04: the shotguns dropped behind barrels in a doorway, and a super
+// shotgun behind a door a switch opens, were left with the shells gone).
+#define FIX_WORK 300.0
+
 typedef enum
 {
     GOAL_GOTO,              // a point (a click)
@@ -178,6 +186,8 @@ typedef struct
     boolean idle;               // GO TO EXIT: no way for now, waiting
     boolean shooting;           // GOAL_BARREL: at the spot, combat shooting
                                 // (wait counts the tics)
+    boolean fixable;            // GOAL_ITEM: gone for through a fix in its
+                                // way (FIX_WORK), pushed in front of it
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
     // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
@@ -232,6 +242,8 @@ static unsigned char *line_uses;    // per line, as a trigger goal's choice
 static int *line_last;              // per line, when it was last chosen
 static k_path_t scratch;
 static k_path_t probe;              // routes looked at while scratch is in use
+static k_path_t fix_probe;          // routes to and from a fix an item is behind
+static candidate_t fix_candidates[MAX_CANDIDATES];
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
 static char status[K_LOG_LINE_LEN * 2];
@@ -1559,22 +1571,33 @@ static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 // now, the goals above it were pushed for a way that is no longer needed,
 // and are dropped (Doom II MAP14: switch 416 opened the door on the way to
 // the red key, while the goal on top was still a switch for another way
-// round, and from there the bot looped). The lowest such goal wins. Returns
-// true if goals were dropped.
+// round, and from there the bot looped). The lowest such goal wins. An item
+// is a detour, not a fix for the goals below it, which have their way: only
+// the item and the fixes pushed for it count (Doom II MAP04: the switch for
+// the bars before a shotgun was dropped with the shotgun, every second).
+// Returns true if goals were dropped.
 static boolean DropNeedless(void)
 {
     k_pose_t player;
     char name[64];
+    int base = 0;
     int i;
 
-    // An item on top is a detour, not a fix for the goal below: the goal
-    // below has its way.
-    if (depth < 2 || goals[depth - 1].type == GOAL_ITEM || !K_Map_GetPlayer(&player))
+    for (i = depth - 1; i >= 0; --i)
+    {
+        if (goals[i].type == GOAL_ITEM)
+        {
+            base = i;
+            break;
+        }
+    }
+
+    if (depth < 2 || !K_Map_GetPlayer(&player))
     {
         return false;
     }
 
-    for (i = 0; i < depth - 1; ++i)
+    for (i = base; i < depth - 1; ++i)
     {
         if (goals[i].type == GOAL_GOTO || !HasOpenWay(&goals[i], &player))
         {
@@ -1768,9 +1791,11 @@ static void PlanGoal(goal_t *goal)
     {
         Go(goal, &candidates[best_open], open_length, reachable, count);
     }
-    else if (goal->type == GOAL_ITEM)
+    else if (goal->type == GOAL_ITEM
+          && (!goal->fixable || best_blocked < 0 || fix_type == GOAL_KEY))
     {
-        // A detour, not a step on the way: never worth a fix or a wait.
+        // A detour, not a step on the way: never worth a wait, nor a fix
+        // unless it was gone for through one (FIX_WORK), and never a key.
         FailGoal(reason);
     }
     else if (best_blocked >= 0)
@@ -1965,6 +1990,103 @@ static double ItemReach(const k_item_t *item, boolean fighting, boolean critical
     return item->reach;
 }
 
+// A route that is open, or (fixed) blocked where the fix of that type and
+// param opens it: the fix for it (RouteFix) is that one. However many
+// crossings it is: the bars of one sector are a crossing each (Doom II
+// MAP04: twelve, the shotguns behind them left).
+static boolean OpenOrFixed(const k_path_t *path, boolean fixed, goal_type_t type, int param)
+{
+    goal_type_t fix_type;
+    int fix_param, want, portal, from, key_door;
+    boolean later;
+
+    return path->result == K_PATH_FOUND
+        || (fixed && path->result == K_PATH_BLOCKED
+            && RouteFix(path, &fix_type, &fix_param, &want, &portal, &from, &later, &key_door)
+            && fix_type == type && fix_param == param);
+}
+
+// The extra way an item takes: there and on to where the route goes, less
+// the way left. With fixes allowed, a way there blocked by one fix the brain
+// knows (FIX_WORK) is counted through it, and fixed set. Returns false if
+// there is no way there, or none on.
+static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
+                          double remaining, boolean fixes, double *detour, boolean *fixed)
+{
+    goal_type_t type = GOAL_GOTO;
+    int param = -1, want, portal, from, key_door, count, i;
+    boolean later;
+    double there = -1.0;
+    goal_t fix;
+
+    *fixed = false;
+    K_Path_Find(&probe, start, cell, spot);
+
+    if (probe.result == K_PATH_FOUND)
+    {
+        there = probe.length;
+    }
+    else if (fixes && probe.result == K_PATH_BLOCKED
+          && RouteFix(&probe, &type, &param, &want, &portal, &from, &later, &key_door)
+          && (type == GOAL_BARREL || type == GOAL_TRIGGER) && key_door < 0 && !later)
+    {
+        // The fix as PlanGoal would push it, and its nearest spot.
+        memset(&fix, 0, sizeof(fix));
+        fix.type = type;
+        fix.param = param;
+        fix.want = want;
+        fix.portal = portal;
+        fix.from = from;
+        fix.pinch_cell = -1;
+
+        if (type == GOAL_TRIGGER && portal < 0)
+        {
+            fix.pinch_cell = from;
+            fix.pinch_at = probe.blocked_at;
+        }
+
+        count = Candidates(&fix, fix_candidates, MAX_CANDIDATES);
+
+        for (i = 0; i < count; ++i)
+        {
+            double to_fix;
+
+            K_Path_Find(&fix_probe, start, cell, fix_candidates[i].at);
+
+            if (fix_probe.result != K_PATH_FOUND)
+            {
+                continue;
+            }
+
+            to_fix = fix_probe.length;
+            K_Path_Find(&fix_probe, fix_candidates[i].at, -1, spot);
+
+            if (OpenOrFixed(&fix_probe, true, type, param)
+             && (there < 0.0 || to_fix + fix_probe.length + FIX_WORK < there))
+            {
+                there = to_fix + fix_probe.length + FIX_WORK;
+            }
+        }
+
+        *fixed = there >= 0.0;
+    }
+
+    if (there < 0.0)
+    {
+        return false;
+    }
+
+    K_Path_Find(&probe, spot, -1, end);
+
+    if (!OpenOrFixed(&probe, *fixed, type, param))
+    {
+        return false;
+    }
+
+    *detour = SDL_max(0.0, there + probe.length - remaining);
+    return true;
+}
+
 // Pickups (plan, 7.5): an item worth a detour - one whose extra way, there
 // and on to where the route goes, is within how far out of its way the
 // player may go for it now (k_items.h) - goes on top of the chain, and
@@ -1973,9 +2095,10 @@ static double ItemReach(const k_item_t *item, boolean fighting, boolean critical
 // working a door, lift or switch, running a jump, going where a click sent
 // it, or waiting for a switch's sector. In a fight, only what is worth
 // breaking it off for (k_items.h: urgent), within FIGHT_REACH but for
-// health when CRITICAL (UpdateEscape). An item the player could not get on
-// from (down in a pit, past a one-way drop) is not gone for. Returns true
-// if one was added.
+// health when CRITICAL (UpdateEscape). Out of a fight, an item behind one
+// fix is gone for through it (FIX_WORK). An item the player could not get
+// on from (down in a pit, past a one-way drop) is not gone for. Returns
+// true if one was added.
 static boolean ConsiderItems(goal_t *goal)
 {
     const k_navstatus_t *nav = K_Nav_GetStatus();
@@ -1987,6 +2110,7 @@ static boolean ConsiderItems(goal_t *goal)
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
     double best_slack = 0.0, best_detour = 0.0;
+    boolean best_fixed = false;
     const k_item_t *chosen;
     k_pose_t player;
     k_vec2_t start, end;
@@ -2010,8 +2134,19 @@ static boolean ConsiderItems(goal_t *goal)
 
     item_check_tic = leveltime + ITEM_CHECK_TICS;
 
+    // One detour at a time: not while one is on, nor its fix in front of it
+    // (Doom II MAP04: the shotgun behind bars was added again over the
+    // switch pushed for it, every second).
+    for (i = 0; i < depth; ++i)
+    {
+        if (goals[i].type == GOAL_ITEM)
+        {
+            return false;
+        }
+    }
+
     // In a fight nav waits: it was free to when the fight began.
-    if (depth >= MAX_GOALS || !goal->planned || goal->type == GOAL_ITEM
+    if (depth >= MAX_GOALS || !goal->planned
      || goal->type == GOAL_GOTO || (goal->type == GOAL_TRIGGER && (goal->used || goal->moving))
      || nav->state != K_NAV_DRIVING || path == NULL || path->num_points < 1
      || (!fighting && (nav->action != K_ACTION_NONE || !K_Nav_CanPause()))
@@ -2070,34 +2205,23 @@ static boolean ConsiderItems(goal_t *goal)
     for (k = 0; k < found; ++k)
     {
         const k_item_t *item = K_Items_Get(order[k]);
-        k_vec2_t spot = item->spot;
         double reach = ItemReach(item, fighting, critical);
-        double there, detour;
+        double detour;
+        boolean fixed;
 
-        K_Path_Find(&probe, start, player.cell, spot);
-
-        if (probe.result != K_PATH_FOUND)
+        if (!ItemDetour(start, player.cell, item->spot, end, nav->remaining, !fighting,
+                        &detour, &fixed))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
         }
-
-        there = probe.length;
-        K_Path_Find(&probe, spot, -1, end);
-
-        if (probe.result != K_PATH_FOUND)
-        {
-            item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
-            continue;
-        }
-
-        detour = SDL_max(0.0, there + probe.length - nav->remaining);
 
         if (detour <= reach && (best < 0 || reach - detour > best_slack))
         {
             best = order[k];
             best_slack = reach - detour;
             best_detour = detour;
+            best_fixed = fixed;
         }
     }
 
@@ -2115,6 +2239,7 @@ static boolean ConsiderItems(goal_t *goal)
     }
 
     item_goal = Push(GOAL_ITEM, best);
+    item_goal->fixable = best_fixed;
     GoalName(item_goal, name, sizeof(name));
     chosen = K_Items_Get(best);
 
@@ -2123,9 +2248,10 @@ static boolean ConsiderItems(goal_t *goal)
         M_snprintf(guarded, sizeof(guarded), ", guarded: %.0f health at risk", chosen->danger);
     }
 
-    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way, "
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s, "
           "worth %.0f (%.0f with those beside it)%s", name, chosen->at.x, chosen->at.y,
-          best_detour, chosen->worth, chosen->together, guarded);
+          best_detour, best_fixed ? " through what blocks it" : "", chosen->worth,
+          chosen->together, guarded);
     return true;
 }
 

@@ -5,15 +5,17 @@
 //
 //	Each tic the monsters and projectiles are listed from the thinkers,
 //	and Karp's own sight checks tell which monsters the player can see.
-//	The target is the one scoring best: the most dangerous kinds first
-//	(hitscanners), awake ones, attacking ones, near ones, those that drop
-//	what the player wants (a shotgun guy, out of shells); far ones are
-//	left alone (the user: chasing a far hitscanner wastes time and ammo).
+//	The target is the one scoring best: one within reach of its blows or in
+//	the way first, then the most dangerous kinds (hitscanners), awake ones,
+//	attacking ones, near ones, those that drop what the player wants (a
+//	shotgun guy, out of shells); far ones are left alone (the user: chasing
+//	a far hitscanner wastes time and ammo).
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
 //	hand (a switch takes about 0.9 s). The pistol is the last resort: for
 //	zombiemen and shotgun guys, monsters with little health sniped at from
-//	far off, and when nothing better can hurt the target. Nav faces the target wherever it
+//	far off, and when nothing better can hurt the target; the bare fist
+//	comes after it. Nav faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
 //
@@ -94,9 +96,16 @@
 // A monster that drops what the player wants scores a whole time more for
 // each DROP_WORTH its drop is worth (k_items.h), counting no more than
 // DROP_MOST (the user, Doom II MAP03: out of shells, a shotgun guy is four
-// shells for one).
+// shells for one; MAP04: with three times the score at a pistol start, a
+// shotgun guy 445 off was shot at while a zombieman stood in the way).
 #define DROP_WORTH 25.0
-#define DROP_MOST 50.0
+#define DROP_MOST 25.0
+
+// A monster within CLOSE_REACH - in reach of its blows, or in the way -
+// scores CLOSE_FIRST times more (plan 7.3: a monster within melee reach
+// goes first; MAP04: a zombieman in the way held the bot 1.1 s, unshot).
+#define CLOSE_REACH 96.0
+#define CLOSE_FIRST 4.0
 
 // Battle mode: for a target awake within BATTLE_REACH (asleep ones are
 // targets only near anyway), in sight for SIGHTED_TICS in a row (a glimpse
@@ -160,12 +169,22 @@
 // went again a second later at 581) with no more than SNIPE_HEALTH left,
 // sniped at: a zombieman, shotgun guy, chaingunner, imp, SS or lost soul,
 // or anything worn down that far - never a spider mastermind or a
-// mancubus, which would take too long (the user). Barrels out of a fight
-// are popped with it still (PopWeapon).
+// mancubus, which would take too long (the user) - and not hunting the
+// player, so not coming at it (MAP04: the pistol came up for an imp 646
+// off as the imps closed in, the shotgun again 1.4 s later at 238, and the
+// bot died 2 s after; its chase direction was no sign, sideways for a
+// moment as it came). Barrels out of a fight are popped with it still
+// (PopWeapon).
 #define PISTOL_SHARE 0.25
 #define SNIPE_REACH 640.0
 #define SNIPE_KEEP 512.0
 #define SNIPE_HEALTH 100
+
+// The bare fist (no berserk) is the last resort of all: it rates FIST_SHARE
+// of its damage (MAP04: the shotgun ran dry with an imp 53 off, the fist
+// tied with the pistol and came first, and the imps took the bot from 37
+// to 5).
+#define FIST_SHARE 0.25
 
 // Rockets: none at anything nearer than ROCKET_MIN (the blast reaches 128
 // from where it hits, the player's box 16 more), unless invulnerable for
@@ -1034,6 +1053,11 @@ static void ChooseTarget(const player_t *player)
                                         / SDL_max(monster_mobjs[i]->info->spawnhealth, 1));
         score *= 1.0 + SDL_min(K_Items_DropWorth(monster->type), DROP_MOST) / DROP_WORTH;
 
+        if (monster->distance < CLOSE_REACH)
+        {
+            score *= CLOSE_FIRST;
+        }
+
         if (score > best_score)
         {
             best_score = score;
@@ -1151,9 +1175,10 @@ static void CountMisses(const player_t *player)
 }
 
 // Whether the pistol is right for the monster: it is a zombieman or a
-// shotgun guy, far off with little health left, or nothing better can hurt
-// it.
-static boolean PistolRight(const player_t *player, const k_monster_t *monster)
+// shotgun guy, far off with little health left and not hunting the player,
+// or nothing better can hurt it.
+static boolean PistolRight(const player_t *player, const k_monster_t *monster,
+                           const mobj_t *mo)
 {
     weapontype_t in_hand = player->pendingweapon != wp_nochange ? player->pendingweapon
                                                                 : player->readyweapon;
@@ -1161,7 +1186,7 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
 
     if (monster->type == MT_POSSESSED || monster->type == MT_SHOTGUY
      || (monster->distance >= (in_hand == wp_pistol ? SNIPE_KEEP : SNIPE_REACH)
-         && monster->health <= SNIPE_HEALTH))
+         && monster->health <= SNIPE_HEALTH && mo->target != player->mo))
     {
         return true;
     }
@@ -1182,6 +1207,25 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
     return true;
 }
 
+// Rating, less for the last resorts: the pistol where it is not right, the
+// bare fist always.
+static double Preference(const player_t *player, const weapon_t *weapon,
+                         const k_monster_t *monster, boolean pistol_right)
+{
+    double rating = Rating(player, weapon, monster);
+
+    if (weapon->weapon == wp_pistol && !pistol_right)
+    {
+        rating *= PISTOL_SHARE;
+    }
+    else if (weapon->weapon == wp_fist && !player->powers[pw_strength])
+    {
+        rating *= FIST_SHARE;
+    }
+
+    return rating;
+}
+
 static void ChooseWeapon(const player_t *player)
 {
     const k_monster_t *monster;
@@ -1200,17 +1244,12 @@ static void ChooseWeapon(const player_t *player)
     }
 
     monster = &monsters[status.target];
-    pistol_right = PistolRight(player, monster);
+    pistol_right = PistolRight(player, monster, monster_mobjs[status.target]);
 
     for (i = 0; i < arrlen(weapons); ++i)
     {
         double rating = Selectable(player, &weapons[i])
-                      ? Rating(player, &weapons[i], monster) : 0.0;
-
-        if (weapons[i].weapon == wp_pistol && !pistol_right)
-        {
-            rating *= PISTOL_SHARE;
-        }
+                      ? Preference(player, &weapons[i], monster, pistol_right) : 0.0;
 
         if (rating > best_rating)
         {
@@ -1221,13 +1260,9 @@ static void ChooseWeapon(const player_t *player)
 
     current = WeaponOf(player->pendingweapon != wp_nochange ? player->pendingweapon
                                                            : player->readyweapon);
-    current_rating = current != NULL ? Rating(player, current, monster) : 0.0;
+    current_rating = current != NULL ? Preference(player, current, monster, pistol_right)
+                                     : 0.0;
     can_hurt = best_rating > 0.0 || current_rating > 0.0;
-
-    if (current != NULL && current->weapon == wp_pistol && !pistol_right)
-    {
-        current_rating *= PISTOL_SHARE;
-    }
 
     if (best != NULL && best != current
      && ((current_rating <= 0.0 && leveltime - last_switch >= SWITCH_TICS)

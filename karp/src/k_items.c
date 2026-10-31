@@ -32,7 +32,9 @@
 //	a fight a lonely medikit would not have). Nothing is worth more health
 //	than the player has left, unless health is CRITICAL. Only the guards
 //	count, not monsters on the way there (the user: those are met and fought
-//	anyway, and move about).
+//	anyway, and move about), and of the guards only those beyond the
+//	monsters that see the player where it stands, fought anyway too; with
+//	the pistol alone, a weapon's guards count a quarter.
 //
 //	An item no spot the player can stand at touches - under a tree, a big
 //	column - is out of reach; under a barrel, until the barrel goes.
@@ -85,6 +87,17 @@ static const int ammo_comfort[NUMAMMO] = { 80, 25, 100, 10 };   // clip, shell, 
 // Items this close to one another are picked up on one trip.
 #define TOGETHER 64.0
 
+// The danger where the player stands, looked at every HERE_TICS: the
+// monsters that can see it there are fought anyway, so an item's guards
+// count only for the danger beyond that (the user, Doom II MAP04: the
+// shotgun lying in the opening fight was given up as guarded by the
+// shotgun guys being fought). A weapon not held, while nothing better than
+// the pistol is, counts its guards a PISTOL_START_GUARDS share: with the
+// pistol alone, it is what makes those fights cheaper (the user: run for
+// it).
+#define HERE_TICS 8
+#define PISTOL_START_GUARDS 0.25
+
 // An item's guards and pickup spot are looked at every LOOK_TICS, the items
 // spread over the tics.
 #define LOOK_TICS TICRATE
@@ -97,6 +110,7 @@ typedef struct
     fixed_t x, y;
     spritenum_t sprite;
     double z;               // the floor it lies on
+    double guards;          // what its guards would cost, all of them
     int seen;               // the tic it was last found, plus one
     int looked_tic;         // when its guards and spot were last looked at
     int next;               // in its bucket, -1 at the end
@@ -108,6 +122,7 @@ static entry_t *entries;
 static int num_entries;
 static int capacity;
 static int buckets[BUCKETS];
+static double danger_here;
 
 // P_GiveAmmo's clip sizes, and what a round of each is worth: clip,
 // shell, cell, rocket.
@@ -153,6 +168,7 @@ void K_Items_Reset(void)
     int i;
 
     num_entries = 0;
+    danger_here = 0.0;
 
     for (i = 0; i < BUCKETS; ++i)
     {
@@ -595,6 +611,12 @@ void K_Items_Tick(void)
                   ? LOW_WEIGHT + (LOW_WEIGHT_MOST - LOW_WEIGHT)
                                  * SDL_max(0.0, SDL_min(1.0, (75.0 - player->health) / 50.0))
                   : 1.0;
+    if (leveltime % HERE_TICS == 0)
+    {
+        danger_here = K_Combat_Danger(ToMap(player->mo->x), ToMap(player->mo->y),
+                                      ToMap(player->mo->floorz));
+    }
+
     health_reach = condition->health == K_NEED_CRITICAL ? REACH_ANY : REACH_MOST;
     armour_weight = condition->health != K_NEED_OK ? 2.0 : 1.0;
     ammo_weight = condition->ammo == K_NEED_LOW ? 3.0 : 1.0;
@@ -604,6 +626,7 @@ void K_Items_Tick(void)
         entry_t *entry = &entries[i];
         k_item_t *item = &entry->item;
         double weight = 1.0;
+        weapontype_t weapon;
 
         item->present = entry->seen == stamp;
         item->worth = item->present ? Worth(player, entry, fights) : 0.0;
@@ -615,9 +638,18 @@ void K_Items_Tick(void)
         if (item->worth > 0.0
          && ((leveltime + i) % LOOK_TICS == 0 || leveltime - entry->looked_tic > LOOK_TICS))
         {
-            item->danger = K_Combat_Danger(item->at.x, item->at.y, entry->z);
+            entry->guards = K_Combat_Danger(item->at.x, item->at.y, entry->z);
             item->reachable = K_Graph_PickupSpot(item->at, &item->spot);
             entry->looked_tic = leveltime;
+        }
+
+        // What going there adds.
+        item->danger = SDL_max(0.0, entry->guards - danger_here);
+
+        if (WeaponItem(entry->sprite, &weapon) && !player->weaponowned[weapon]
+         && PistolOnly(player))
+        {
+            item->danger *= PISTOL_START_GUARDS;
         }
 
         switch (item->kind)

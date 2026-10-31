@@ -2695,6 +2695,9 @@ Who controls the player in a fight (the user's model):
   nearly always miss (slow rockets, fast demons): the weapon choice should weigh how likely the
   shot is to land, not only its damage. Pistol fights with imps far off are slow but right; left
   as they are (the user).
+- **Monsters that cannot reach the player** (the user, jotted, MAP04): melee-only monsters with
+  no way to the player - the spectres in the pit on the way to the blue key - are not shot at:
+  a waste of ammo. Needs a check that the monster has a walkable way up, or none.
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.
@@ -2733,7 +2736,19 @@ Who controls the player in a fight (the user's model):
   lift or switch, not jumping), the 2 most promising (4 when CRITICAL) are routed, there and on
   to where the route goes; the one with most to spare goes on top of the chain, and when picked
   up the goal below is planned again. One with no way there or none on is skipped for 10 s. A
-  switch's use is not counted twice for a detour taken before it.
+  switch's use is not counted twice for a detour taken before it. One detour at a time; and an
+  item is no fix for the goals below it, so their having a way drops neither it nor the fixes
+  pushed for it.
+- **Items behind a fix** (the user, MAP04: the shotguns dropped behind bars, a box of shells and
+  a super shotgun behind doors switches open, were all skipped as "no way there", over and over,
+  and the bot met the imps with no shells): out of a fight, an item behind one fix the brain
+  knows - barrels in the way, a door or bars a switch or walk-over line opens; never a key, nor a
+  fix that needs another - is gone for through it. The detour counts the way to the fix's
+  nearest spot, on to the item (blocked only where that fix opens it: the bars of one sector are
+  a crossing each, twelve there) and on, and 300 for the work. The item goal then plans as a key
+  does: blocked, it pushes the fix first. MAP04 then finished with every monster killed (116.6
+  s, 100 health): the bars' switch and the shotgun behind them, the box of shells, the super
+  shotgun.
 - **Dashes** (the user, MAP03: the chaingun a chaingunner dropped lay near, and the bot fought on
   with the pistol): in a fight, items worth breaking it off for are looked for too, within 400
   units of detour - a weapon not held, and the ammo running out (the best weapon held below its
@@ -2743,8 +2758,9 @@ Who controls the player in a fight (the user's model):
   10 units off, a dropped shotgun 182 off with shells running out, a dropped chaingun 386 off.
 - **Monsters as ammo** (the user, MAP03: a shotgun guy is four shells for one): the target's
   score counts what it drops, by what that would be worth now: a whole time more for each 25,
-  up to three times (a shotgun guy out of shells about twice, a chaingunner at a pistol start
-  three times, about 1.1 with ammo plenty).
+  up to twice (MAP04: at three times, a shotgun guy 445 off was shot at, missing, while a
+  zombieman stood in the way and held the bot 1.1 s). A monster within 96 - in reach of its
+  blows, or in the way - scores four times more and goes first (7.3 point 4).
 - **Blows that cannot be answered** (the user, MAP03: an imp at the top clawed the bot riding the
   lift up for 25; vanilla's blows reach any height): out of a fight, hurt in the last second by a
   monster within 96 that the shots cannot find, the player holds the route, even waiting at a
@@ -2761,7 +2777,11 @@ Who controls the player in a fight (the user's model):
   (zombieman 5, imp and demon 8, shotgun guy 10, cacodemon 15, chaingunner 20, revenant 25,
   baron 30, arch-vile 50, Cyberdemon and Spider Mastermind 100). Nothing is worth more health
   than is left. Looked at about once a second; an item guarded more than it is worth while the
-  player goes for it is dropped, and skipped for 10 s.
+  player goes for it is dropped, and skipped for 10 s. Only the danger going there adds counts:
+  the monsters that can see the player where it stands are fought anyway (the user, MAP04: the
+  shotgun lying in the opening fight was given up as guarded by the shotgun guys being fought,
+  and the bot fought on with the pistol); and while nothing better than the pistol is held, a
+  weapon's guards count a quarter (the user: with the pistol alone, run for it).
 - **Pickup spots**: an item is picked up when the player's box overlaps its square, within 36 on
   each axis; where the player cannot stand at it, the nearest spot within 34 (steps of 2) clear of
   walls and solid things. An item no spot touches (under a tree) is out of reach; under a barrel,
@@ -2806,8 +2826,13 @@ Who controls the player in a fight (the user's model):
   a zombieman or a shotgun guy, 640 or more off (512 with the pistol in hand already, or it
   flips at the edge) with no more than 100 health left (sniped at: a
   zombieman, shotgun guy, chaingunner, imp, SS or lost soul, or anything worn down that far;
-  never a Spider Mastermind or a mancubus, which would take too long), or nothing but the bare
-  fist can hurt it; barrels out of a fight are popped with it still.
+  never a Spider Mastermind or a mancubus, which would take too long; nor one hunting the
+  player, so coming at it - MAP04: the pistol came up for an imp 646 off as the imps closed in,
+  the shotgun again 1.4 s later, and the bot died 2 s after; the chase direction was no sign,
+  sideways for a moment as it came), or nothing but the bare fist can hurt it; barrels out of a
+  fight are popped with it still. The bare fist (no berserk) comes after it, at a quarter
+  (MAP04: the shotgun ran dry with an imp 53 off, and the fist, tied with the pistol and first in
+  the list, came up).
 - **Facing** (7.4): nav takes combat's aim wherever it does not need the facing: not running a
   jump (and coming up to one, it faces the jump: on MAP02 a run-up begun facing a shotgun guy
   left the edge at 13.2 units a tic and fell short), not pressing at a switch, door or lift; on
