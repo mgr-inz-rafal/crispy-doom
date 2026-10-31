@@ -1,8 +1,12 @@
 //
 // DESCRIPTION:
-//	Karp glue: the -autoplay / -karpconsole switches, lifecycle and the
-//	SDL event filter that gives the console its own events.
+//	Karp glue: the -autoplay / -karpconsole / -quitonexit / -karpsalt
+//	switches, lifecycle and the SDL event filter that gives the console its
+//	own events.
 //
+
+#include <stdlib.h>
+#include <time.h>
 
 #include "SDL.h"
 
@@ -24,6 +28,7 @@
 #include "k_log.h"
 #include "k_map.h"
 #include "k_nav.h"
+#include "k_salt.h"
 #include "k_settings.h"
 #include "k_sight.h"
 #include "k_specials.h"
@@ -82,6 +87,26 @@ void K_EnableQuitOnExit(void)
     quit_on_exit = true;
 
     K_Log(K_LOG_SYS, K_LOG_INFO, "quitting when a level is finished");
+}
+
+void K_EnableSalt(void)
+{
+    int p = M_CheckParmWithArgs("-karpsalt", 1);
+    unsigned int seed;
+
+    InitKarp();
+
+    // A number after it is the seed; else the clock gives one.
+    if (p > 0 && myargv[p + 1][0] >= '0' && myargv[p + 1][0] <= '9')
+    {
+        seed = (unsigned int) strtoul(myargv[p + 1], NULL, 10);
+    }
+    else
+    {
+        seed = (unsigned int) time(NULL) ^ (unsigned int) SDL_GetPerformanceCounter();
+    }
+
+    K_Salt_Enable(seed);
 }
 
 boolean K_AutoplayEnabled(void)
@@ -177,6 +202,11 @@ void K_LevelLoaded(void)
     K_Items_Reset();
     K_Trace_Reset();
     level_completed = false;
+
+    if (K_Salt_Enabled())
+    {
+        K_Log(K_LOG_SYS, K_LOG_INFO, "salt: setting off after %d tics", K_Salt_StartPause());
+    }
 }
 
 boolean K_OwnsControls(void)
@@ -257,6 +287,22 @@ void K_BuildTiccmd(ticcmd_t *cmd, int maketic)
 
     if (!K_OwnsControls())
     {
+        return;
+    }
+
+    // With salt, a moment's pause before setting off (k_salt.h): hands off,
+    // as a human taking in the level.
+    if (leveltime < K_Salt_StartPause())
+    {
+        cmd->forwardmove = 0;
+        cmd->sidemove = 0;
+        cmd->angleturn = 0;
+
+        if (!(cmd->buttons & BT_SPECIAL))
+        {
+            cmd->buttons = 0;
+        }
+
         return;
     }
 

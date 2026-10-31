@@ -21,6 +21,9 @@ void K_EnableConsole(void);
 // -quitonexit: quit as soon as a level is finished (for test runs).
 void K_EnableQuitOnExit(void);
 
+// -karpsalt [seed]: runs differ, from the seed given or the clock.
+void K_EnableSalt(void);
+
 // Right after I_InitGraphics: opens the console.
 void K_PostVideoInit(void);
 

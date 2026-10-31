@@ -2370,6 +2370,13 @@ Each milestone builds and runs; the user reviews and commits between milestones.
        different command changes how every monster moves, so runs diverge from there. Demos
        still record the commands and play back exactly. Also useful for testing with monsters:
        several seeds a map give rates (finished, died, health, time) instead of one run (7.6).
+       Done (`k_salt.c`): `-karpsalt [seed]`, the seed given or else from the clock, logged
+       ("-karpsalt N repeats this run"). With it: a pause of up to half a second before setting
+       off on each level (logged), the strafing's timing in fights, the order of the ways tried
+       when stepping aside, and the aim wandering across a monster, up to 0.4 of its radius
+       either side, a new point every 8 tics (it fires within 0.8). Without it nothing changes.
+       MAP01 with monsters: unsalted 28.3 s, 95 health, as before; seed 1 31.8 s, 100 health,
+       twice; seed 2 26.6 s, 89 health. The regression script passes it with `-Salt N`.
 8. **M7 Priorities tab** - the goal stack shown in the console is done (3.5, 3.7); still to come:
    history, cancel, polish.
 
@@ -2700,6 +2707,16 @@ Who controls the player in a fight (the user's model):
   super shotgun want another look (the user, MAP02): the super shotgun was used far off where
   the plain one would do better; enough against zombiemen, but against a baron far off, with a
   fraction of the pellets landing, it wastes shells.
+- **Sniping is dead as it stands** (the user, jotted; the next session starts here). The pistol
+  snipes only a monster not hunting the player, but asleep monsters are targets only within 512
+  and sniping starts at 640, so whatever is targeted that far off is awake, and an awake monster
+  in single player hunts the player: only an infighting one qualifies, and those are left alone
+  (7.8, infighting). The fix in mind: drop "not hunting" for "not closing in" - its distance has
+  not shrunk over the last second or so - and keep the 3 s of calm (no fight on, no awake
+  monster in sight within 512). That keeps sniping for a quiet area and a distant monster
+  standing off (a zombieman or chaingunner on a far ledge, behind a window), while an
+  approaching one is left to the weapon in hand (MAP02: shotgun guys sniped at 650 to 730 off
+  walked into a fight within a second or two, two switches each).
 - **Monsters that cannot reach the player** (the user, jotted, MAP04): melee-only monsters with
   no way to the player - the spectres in the pit on the way to the blue key - are not shot at:
   a waste of ammo. Needs a check that the monster has a walkable way up, or none.

@@ -75,6 +75,7 @@
 #include "k_graph.h"
 #include "k_items.h"
 #include "k_log.h"
+#include "k_salt.h"
 #include "k_sight.h"
 
 #define K_PI 3.14159265358979323846
@@ -155,6 +156,12 @@
 // centre, seen from the player, or MIN_TOLERANCE radians.
 #define AIM_SHARE 0.8
 #define MIN_TOLERANCE 0.005
+
+// With salt (k_salt.h) the aim wanders across a monster, up to AIM_SALT of
+// its radius either side of its centre - well within AIM_SHARE - to a new
+// point every AIM_SALT_TICS.
+#define AIM_SALT 0.4
+#define AIM_SALT_TICS 8
 
 // Pistol and chaingun shots are tapped beyond this distance.
 #define TAP_DISTANCE 192.0
@@ -1763,7 +1770,8 @@ static void ChooseBarrel(const player_t *player)
 }
 
 // A cheap hash for the strafing's timing: Karp may not draw the game's
-// random numbers (plan, 2.4), and the same game must give the same moves.
+// random numbers (plan, 2.4), and the same game must give the same moves,
+// but for salt (k_salt.h).
 static unsigned int Hash(unsigned int x)
 {
     x ^= x >> 16;
@@ -1849,7 +1857,7 @@ static void ChooseMove(const player_t *player)
     if (--strafe_tics <= 0)
     {
         strafe_dir = -strafe_dir;
-        strafe_tics = STRAFE_MIN + Hash(leveltime) % STRAFE_SPREAD;
+        strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
     }
 
     // To the target's left, or its right.
@@ -1924,7 +1932,7 @@ static void ChooseMove(const player_t *player)
     if (found && move.x * sx + move.y * sy < 0.0)
     {
         strafe_dir = -strafe_dir;
-        strafe_tics = STRAFE_MIN + Hash(leveltime) % STRAFE_SPREAD;
+        strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
     }
 }
 
@@ -1953,7 +1961,7 @@ static void StartBattle(const player_t *player)
     anchor.x = ToMap(player->mo->x);
     anchor.y = ToMap(player->mo->y);
     progress_tic = leveltime;
-    strafe_tics = STRAFE_MIN + Hash(leveltime) % STRAFE_SPREAD;
+    strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
     K_Log(K_LOG_COMBAT, K_LOG_INFO, "fighting the %s, %.0f units off - the route waits",
           monsters[status.target].name, monsters[status.target].distance);
     K_Nav_Pause(1);
@@ -2303,6 +2311,21 @@ int K_Combat_Aim(int tic, double *angle)
     }
 
     at = barrel_target >= 0 ? barrels[barrel_target].at : TargetAt(tic);
+
+    if (barrel_target < 0 && K_Salt_Enabled())
+    {
+        double dx = at.x - pose.x, dy = at.y - pose.y;
+        double length = sqrt(dx * dx + dy * dy);
+        double off = K_Salt_Unit((unsigned int) (tic / AIM_SALT_TICS)) * AIM_SALT
+                   * monsters[status.target].radius;
+
+        if (length > 1.0)
+        {
+            at.x -= dy / length * off;
+            at.y += dx / length * off;
+        }
+    }
+
     *angle = atan2(at.y - pose.y, at.x - pose.x);
     return 1;
 }

@@ -36,6 +36,10 @@
 .PARAMETER Monsters
     Play with monsters, at -skill 3 (Hurt Me Plenty), instead of -nomonsters.
 
+.PARAMETER Salt
+    Pass -karpsalt with this seed, so the bot's runs differ from the unsalted ones and from
+    other seeds (the seed repeats a run). Off when not given.
+
 .PARAMETER Build
     The folder with crispy-doom.exe and its DLLs. Defaults to build\src\Release in this repo.
 
@@ -50,6 +54,9 @@
 
 .EXAMPLE
     .\karp\tools\regress.ps1 -Maps '01' -Monsters
+
+.EXAMPLE
+    .\karp\tools\regress.ps1 -Maps '02' -Monsters -Salt 7
 #>
 param(
     [string]$Iwad = $env:DOOM2_IWAD,
@@ -59,6 +66,7 @@ param(
     [int]$Seconds = 120,
     [hashtable]$Limits = @{ '09' = 150; '13' = 150; '17' = 200; '19' = 150; '29' = 200 },
     [switch]$Monsters,
+    [Nullable[uint32]]$Salt = $null,
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),
     [string]$Out = (Join-Path $PSScriptRoot '..\..\build\karp-regress')
 )
@@ -81,6 +89,10 @@ New-Item -ItemType Directory -Force -Path $runs, $logs | Out-Null
 
 $started = @{}
 $play = if ($Monsters) { @('-skill', '3') } else { @('-nomonsters') }
+
+if ($null -ne $Salt) {
+    $play += @('-karpsalt', "$Salt")
+}
 
 foreach ($map in $Maps) {
     $dir = Join-Path $runs "MAP$map"

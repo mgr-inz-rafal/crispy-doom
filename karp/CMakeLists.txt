@@ -23,6 +23,7 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_map.c"           "${KARP_DIR}/src/k_map.h"
     "${KARP_DIR}/src/k_nav.c"           "${KARP_DIR}/src/k_nav.h"
     "${KARP_DIR}/src/k_path.c"          "${KARP_DIR}/src/k_path.h"
+    "${KARP_DIR}/src/k_salt.c"          "${KARP_DIR}/src/k_salt.h"
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h"
     "${KARP_DIR}/src/k_sight.c"         "${KARP_DIR}/src/k_sight.h"
     "${KARP_DIR}/src/k_specials.c"      "${KARP_DIR}/src/k_specials.h"

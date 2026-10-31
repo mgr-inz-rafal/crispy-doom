@@ -2369,6 +2369,20 @@ void D_DoomMain (void)
         K_EnableQuitOnExit(); // [Karp]
     }
 
+    //!
+    // @arg [<seed>]
+    // @category game
+    //
+    // [Karp] Make the bot's runs differ: small variations in its pauses,
+    // strafing and aim, from the seed given or else the clock (logged, so a
+    // run can be repeated).
+    //
+
+    if (M_CheckParm("-karpsalt"))
+    {
+        K_EnableSalt(); // [Karp]
+    }
+
     // Undocumented:
     // Invoked by setup to test the controls.
 

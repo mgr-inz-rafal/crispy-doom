@@ -52,6 +52,7 @@
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
+#include "k_salt.h"
 #include "k_specials.h"
 
 #define K_PI 3.14159265358979323846
@@ -2133,7 +2134,8 @@ static boolean CellHurts(int cell)
     return K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0;
 }
 
-// A cheap hash for stepping aside: the same game gives the same steps.
+// A cheap hash for stepping aside: the same game gives the same steps, but
+// for salt (k_salt.h).
 static unsigned int Hash(unsigned int x)
 {
     x ^= x >> 16;
@@ -2171,7 +2173,7 @@ static boolean ChooseUnstick(k_vec2_t at, const k_pose_t *pose)
     k_vec2_t to = path.points[SDL_min(status.target, path.num_points - 1)];
     double ahead = atan2(to.y - at.y, to.x - at.x);
     boolean hurts = pose->cell >= 0 && CellHurts(pose->cell);
-    unsigned int first = Hash((unsigned int) leveltime * 31u + status.stuck);
+    unsigned int first = Hash(K_Salt_Mix((unsigned int) leveltime * 31u + status.stuck));
     int i;
 
     for (i = 0; i < arrlen(turns); ++i)
