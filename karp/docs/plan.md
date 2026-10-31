@@ -2731,6 +2731,12 @@ Who controls the player in a fight (the user's model):
   pick up what lies on the way, and fight it later if it comes close or stands in the way. Often
   seen: the last bullets spent on a caco that was no threat, then death to a shotgun guy.
   Hitscanners (zombiemen, shotgun guys, chaingunners, SS) still count at any range.
+- **Room for ammo means pick it up** (the user, jotted). After killing many zombiemen and shotgun
+  guys, their clips and shotguns were left lying; Doom II MAP31: SS killed with the chaingun, and
+  their clips picked up only when the bot happened to run over the bodies, almost never on
+  purpose, even very close. Ammo now counts as worth having only below the comfort marks (80
+  bullets, 25 shells, ...), which is too light: any ammo there is room for is worth grabbing,
+  above all what the monsters just dropped close by once a fight is over.
 - **Sniping is dead as it stands** (the user, jotted; the next session starts here). The pistol
   snipes only a monster not hunting the player, but asleep monsters are targets only within 512
   and sniping starts at 640, so whatever is targeted that far off is awake, and an awake monster
