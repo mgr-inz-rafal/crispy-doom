@@ -90,6 +90,9 @@ int K_Combat_Move(double *vx, double *vy);
 // move about).
 double K_Combat_Danger(double x, double y, double floor);
 
+// How many monsters the player can see within reach of it.
+int K_Combat_MonstersWithin(double reach);
+
 // Set by the brain while it goes for health with health CRITICAL, or dashes
 // for a weapon or ammo close by, with why ("health CRITICAL, going for
 // health"); NULL when not: no fight is started, one going on is broken off,

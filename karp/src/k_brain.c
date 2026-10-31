@@ -134,8 +134,13 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // In a fight only items worth breaking it off for are looked for (k_items.h:
 // urgent), and but for health when CRITICAL, only within FIGHT_REACH of
 // detour: a dash, shooting on the way, not a trip. Going for one, the fight
-// is broken off once the item is within FIGHT_REACH (UpdateEscape).
+// is broken off once the item is within FIGHT_REACH (UpdateEscape) - but
+// only while no monster the player can see is within DASH_CLEAR: through
+// monsters close by, the fight comes first (the user, Doom II MAP02: dashing
+// for a super shotgun, the bot walked into a room of zombiemen and shotgun
+// guys 40 to 90 off, fighting none of them, and died).
 #define FIGHT_REACH 400.0
+#define DASH_CLEAR 128.0
 
 // Out of a fight, an item behind one fix the brain knows - barrels in the
 // way, a door or bars a switch or walk-over line opens; never a key - is
@@ -2258,10 +2263,11 @@ static boolean ConsiderItems(goal_t *goal)
 // Fleeing (plan, 7.4), and dashes: while the goal on top is an item worth
 // breaking a fight off for (k_items.h: urgent) - health when CRITICAL,
 // wherever it is; a weapon the player lacks, or ammo when LOW, from when it
-// comes within FIGHT_REACH until it is picked up - combat starts no fight
-// and breaks off the one going on; the player runs for it, shooting on the
-// way at what it sees. With no health to go for, fights go on as before:
-// running to nowhere is no safer, and cover comes with dodging (C3).
+// comes within FIGHT_REACH until it is picked up, while no monster is within
+// DASH_CLEAR - combat starts no fight and breaks off the one going on; the
+// player runs for it, shooting on the way at what it sees. With no health
+// to go for, fights go on as before: running to nowhere is no safer, and
+// cover comes with dodging (C3).
 static void UpdateEscape(void)
 {
     const goal_t *goal = depth > 0 ? &goals[depth - 1] : NULL;
@@ -2290,7 +2296,7 @@ static void UpdateEscape(void)
         dashing = goal->param;
     }
 
-    if (dashing == goal->param)
+    if (dashing == goal->param && K_Combat_MonstersWithin(DASH_CLEAR) == 0)
     {
         M_snprintf(why, sizeof(why), "going for the %s", item->name);
         K_Combat_Escape(why);

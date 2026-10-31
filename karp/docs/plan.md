@@ -2694,7 +2694,9 @@ Who controls the player in a fight (the user's model):
 - **Weapon use** (the user, jotted, MAP03): a module of its own later. Rockets at demons from afar
   nearly always miss (slow rockets, fast demons): the weapon choice should weigh how likely the
   shot is to land, not only its damage. Pistol fights with imps far off are slow but right; left
-  as they are (the user).
+  as they are (the user). Once the super shotgun is held, the plain shotgun is never used: in
+  vanilla it is key 3 pressed again with the super shotgun up (`G_BuildTiccmd`), and against
+  zombiemen and shotgun guys it wastes less and fires faster.
 - **Monsters that cannot reach the player** (the user, jotted, MAP04): melee-only monsters with
   no way to the player - the spectres in the pit on the way to the blue key - are not shot at:
   a waste of ammo. Needs a check that the monster has a walkable way up, or none.
@@ -2754,8 +2756,11 @@ Who controls the player in a fight (the user's model):
   units of detour - a weapon not held, and the ammo running out (the best weapon held below its
   LOW mark with nothing as good left to fire, or any while ammo is LOW), from ammo, a weapon or a
   backpack; health only when CRITICAL, at any length. Going for one, the fight is broken off once
-  it is within 400 (as fleeing, 7.4), the player shooting on the way. MAP03: the start shotgun
-  10 units off, a dropped shotgun 182 off with shells running out, a dropped chaingun 386 off.
+  it is within 400 (as fleeing, 7.4), the player shooting on the way - but only while no monster
+  it can see is within 128: through monsters close by, the fight comes first (the user, MAP02:
+  dashing for the super shotgun, the bot walked into a room of zombiemen and shotgun guys 40 to
+  90 off, fighting none of them, and died). MAP03: the start shotgun 10 units off, a dropped
+  shotgun 182 off with shells running out, a dropped chaingun 386 off.
 - **Monsters as ammo** (the user, MAP03: a shotgun guy is four shells for one): the target's
   score counts what it drops, by what that would be worth now: a whole time more for each 25,
   up to twice (MAP04: at three times, a shotgun guy 445 off was shot at, missing, while a
@@ -2820,17 +2825,28 @@ Who controls the player in a fight (the user's model):
   counting no more than kills the target; the shotgun's rating falls off beyond 400, the super
   shotgun's beyond 300; another weapon is brought up only at twice the rating and 3 s after the
   last switch, unless the one in hand cannot hurt the target (with a gain of 1.3, 24 switches in
-  a minute on MAP02). Five shots without a hit and the target is left alone for 2 s (the user).
+  a minute on MAP02), or rates three times as much: then 1 s (MAP02: the pistol, up for a
+  shotgun guy 630 off, stayed 2 s more against zombiemen and shotgun guys 40 to 90 off). Five
+  shots without a hit and the target is left alone for 2 s (the user). A target lost and found
+  again within 2 s is no new one: the time unhurt and the misses count on (MAP03: a spectre in a
+  pit, a sliver of it over the rim as it moved, was lost and found 42 times in 30 s, each time
+  anew, never left alone, and the fight never ended).
+  No weapon is brought up while the next shot of the one in hand should kill the target (MAP02:
+  rated no more than kills it, the super shotgun looked slower than the pistol against a wounded
+  shotgun guy 158 off, and was put away for it): in Doom a switch takes time, and mid-fight it is
+  for when it really pays (the user; in Quake switches are instant).
   The pistol is the last resort (the user, MAP03: it was brought up for imps, and a chaingunner
   was closed in on with it): it rates a quarter, and is put away after 1 s, unless the target is
-  a zombieman or a shotgun guy, 640 or more off (512 with the pistol in hand already, or it
-  flips at the edge) with no more than 100 health left (sniped at: a
+  640 or more off (512 with the pistol in hand already, or it flips at the edge) with no more
+  than 100 health left (sniped at: a
   zombieman, shotgun guy, chaingunner, imp, SS or lost soul, or anything worn down that far;
-  never a Spider Mastermind or a mancubus, which would take too long; nor one hunting the
-  player, so coming at it - MAP04: the pistol came up for an imp 646 off as the imps closed in,
-  the shotgun again 1.4 s later, and the bot died 2 s after; the chase direction was no sign,
-  sideways for a moment as it came), or nothing but the bare fist can hurt it; barrels out of a
-  fight are popped with it still. The bare fist (no berserk) comes after it, at a quarter
+  never a Spider Mastermind or a mancubus, which would take too long; one hunting the player
+  only if a hitscanner, which shoots from where it is, the rest coming at it - MAP04: the pistol
+  came up for an imp 646 off as the imps closed in, the shotgun again 1.4 s later, and the bot
+  died 2 s after; the chase direction was no sign, sideways for a moment as it came), or nothing
+  but the bare fist can hurt it; barrels out of a fight are popped with it still. Zombiemen and
+  shotgun guys get no more than that (MAP02: with the pistol theirs at any distance, it stayed up
+  40 s, the super shotgun rating no better against them). The bare fist (no berserk) comes after it, at a quarter
   (MAP04: the shotgun ran dry with an imp 53 off, and the fist, tied with the pistol and first in
   the list, came up).
 - **Facing** (7.4): nav takes combat's aim wherever it does not need the facing: not running a

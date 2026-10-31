@@ -12,10 +12,10 @@
 //	a far hitscanner wastes time and ammo).
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
-//	hand (a switch takes about 0.9 s). The pistol is the last resort: for
-//	zombiemen and shotgun guys, monsters with little health sniped at from
-//	far off, and when nothing better can hurt the target; the bare fist
-//	comes after it. Nav faces the target wherever it
+//	hand (a switch takes about 0.9 s), and never instead of one whose next
+//	shot should kill the target. The pistol is the last resort: for
+//	monsters with little health sniped at from far off, and when nothing
+//	better can hurt the target; the bare fist comes after it. Nav faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
 //
@@ -93,6 +93,12 @@
 #define TARGET_STICK 1.3
 #define WOUNDED 0.5
 
+// A target lost and found again within REGAIN_TICS is no new one: the time
+// it has gone unhurt and the shots that missed it count on (MAP03: a
+// spectre in a pit, a sliver of it showing over the rim as it moved, was
+// lost and found 42 times in 30 s, each time anew, and never left alone).
+#define REGAIN_TICS 70
+
 // A monster that drops what the player wants scores a whole time more for
 // each DROP_WORTH its drop is worth (k_items.h), counting no more than
 // DROP_MOST (the user, Doom II MAP03: out of shells, a shotgun guy is four
@@ -160,21 +166,32 @@
 #define SWITCH_WAIT 105
 #define SWITCH_TICS 35
 
+// One that rates SWITCH_FAST_GAIN times the one in hand is brought up after
+// SWITCH_TICS (MAP02: the pistol, up for a shotgun guy 630 off, stayed 2 s
+// more against zombiemen and shotgun guys 40 to 90 off). And none is, while
+// the next shot of the one in hand should kill the target: rated no more
+// than kills it, a super shotgun looked slower than the pistol against a
+// wounded shotgun guy 158 off (MAP02), and was put away for it. In Doom a
+// switch takes time; mid-fight it is for when it really pays (the user).
+#define SWITCH_FAST_GAIN 3.0
+
 // The pistol is the tool of last resort (the user, Doom II MAP03: the bot
 // brought it up for imps, and closed in on a chaingunner with it). It rates
 // PISTOL_SHARE of its damage, and is put away after SWITCH_TICS, unless no
-// other weapon but the bare fist can hurt the target, the target is a
-// zombieman or a shotgun guy, or it is SNIPE_REACH off or more (SNIPE_KEEP
-// with the pistol in hand already: MAP03, it came up for an imp 643 off and
-// went again a second later at 581) with no more than SNIPE_HEALTH left,
-// sniped at: a zombieman, shotgun guy, chaingunner, imp, SS or lost soul,
-// or anything worn down that far - never a spider mastermind or a
-// mancubus, which would take too long (the user) - and not hunting the
-// player, so not coming at it (MAP04: the pistol came up for an imp 646
-// off as the imps closed in, the shotgun again 1.4 s later at 238, and the
-// bot died 2 s after; its chase direction was no sign, sideways for a
-// moment as it came). Barrels out of a fight are popped with it still
-// (PopWeapon).
+// other weapon but the bare fist can hurt the target, or it is SNIPE_REACH
+// off or more (SNIPE_KEEP with the pistol in hand already: MAP03, it came
+// up for an imp 643 off and went again a second later at 581) with no more
+// than SNIPE_HEALTH left, sniped at: a zombieman, shotgun guy, chaingunner,
+// imp, SS or lost soul, or anything worn down that far - never a spider
+// mastermind or a mancubus, which would take too long (the user). One that
+// hunts the player is sniped at only if a hitscanner, which shoots from
+// where it is; the rest come at it (MAP04: the pistol came up for an imp
+// 646 off as the imps closed in, the shotgun again 1.4 s later at 238, and
+// the bot died 2 s after; the chase direction was no sign, sideways for a
+// moment as it came). Zombiemen and shotgun guys get no more than that
+// (MAP02: with the pistol theirs at any distance, it stayed up 40 s, the
+// super shotgun beside it rating no better against them). Barrels out of
+// a fight are popped with it still (PopWeapon).
 #define PISTOL_SHARE 0.25
 #define SNIPE_REACH 640.0
 #define SNIPE_KEEP 512.0
@@ -379,6 +396,8 @@ static boolean attack_states_marked;
 
 static k_combatstatus_t status;
 static const mobj_t *target_mo;     // the target, last tic
+static const mobj_t *lost_mo;       // the target before, and when it was lost
+static int lost_tic;
 static k_vec2_t target_last;        // where it was then
 static k_vec2_t target_velocity;    // smoothed, units per tic
 static int wanted = -1;             // the weapon wanted, -1 if none
@@ -1090,13 +1109,17 @@ static void ChooseTarget(const player_t *player)
     }
     else if (best >= 0)
     {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "target: the %s at (%.0f,%.0f), %.0f units%s",
-              monsters[best].name, monsters[best].at.x, monsters[best].at.y,
-              monsters[best].distance, monsters[best].awake ? "" : ", asleep");
+        if (monster_mobjs[best] != lost_mo || leveltime - lost_tic > REGAIN_TICS)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "target: the %s at (%.0f,%.0f), %.0f units%s",
+                  monsters[best].name, monsters[best].at.x, monsters[best].at.y,
+                  monsters[best].distance, monsters[best].awake ? "" : ", asleep");
+            progress_tic = leveltime;
+            misses = 0;
+        }
+
         target_velocity.x = target_velocity.y = 0.0;
-        progress_tic = leveltime;
         sighted = 1;
-        misses = 0;
     }
     else
     {
@@ -1106,6 +1129,12 @@ static void ChooseTarget(const player_t *player)
     if (best >= 0)
     {
         target_health = monsters[best].health;
+    }
+
+    if (target_mo != NULL && (best < 0 || monster_mobjs[best] != target_mo))
+    {
+        lost_mo = target_mo;
+        lost_tic = leveltime;
     }
 
     status.target = best;
@@ -1174,9 +1203,9 @@ static void CountMisses(const player_t *player)
     }
 }
 
-// Whether the pistol is right for the monster: it is a zombieman or a
-// shotgun guy, far off with little health left and not hunting the player,
-// or nothing better can hurt it.
+// Whether the pistol is right for the monster: far off with little health
+// left, and a hitscanner or not hunting the player; or nothing better can
+// hurt it.
 static boolean PistolRight(const player_t *player, const k_monster_t *monster,
                            const mobj_t *mo)
 {
@@ -1184,9 +1213,8 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster,
                                                                 : player->readyweapon;
     int i;
 
-    if (monster->type == MT_POSSESSED || monster->type == MT_SHOTGUY
-     || (monster->distance >= (in_hand == wp_pistol ? SNIPE_KEEP : SNIPE_REACH)
-         && monster->health <= SNIPE_HEALTH && mo->target != player->mo))
+    if (monster->distance >= (in_hand == wp_pistol ? SNIPE_KEEP : SNIPE_REACH)
+     && monster->health <= SNIPE_HEALTH && (monster->hitscan || mo->target != player->mo))
     {
         return true;
     }
@@ -1265,10 +1293,13 @@ static void ChooseWeapon(const player_t *player)
     can_hurt = best_rating > 0.0 || current_rating > 0.0;
 
     if (best != NULL && best != current
+     && !(current != NULL && current_rating > 0.0
+          && ShotDamage(player, current, monster->distance, monster->radius) >= monster->health)
      && ((current_rating <= 0.0 && leveltime - last_switch >= SWITCH_TICS)
          || (best_rating > current_rating * SWITCH_GAIN
              && leveltime - last_switch
-                >= (current != NULL && current->weapon == wp_pistol && !pistol_right
+                >= ((current != NULL && current->weapon == wp_pistol && !pistol_right)
+                    || best_rating >= current_rating * SWITCH_FAST_GAIN
                     ? SWITCH_TICS : SWITCH_WAIT))))
     {
         current = best;
@@ -2103,6 +2134,8 @@ void K_Combat_Reset(void)
     memset(ignored, 0, sizeof(ignored));
     status.target = -1;
     target_mo = NULL;
+    lost_mo = NULL;
+    lost_tic = 0;
     wanted = -1;
     can_hurt = false;
     last_switch = -SWITCH_TICS;
@@ -2467,6 +2500,22 @@ double K_Combat_Danger(double x, double y, double floor)
     }
 
     return danger;
+}
+
+int K_Combat_MonstersWithin(double reach)
+{
+    int count = 0;
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (monsters[i].visible && monsters[i].distance < reach)
+        {
+            ++count;
+        }
+    }
+
+    return count;
 }
 
 void K_Combat_Escape(const char *why)
