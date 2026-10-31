@@ -2696,7 +2696,10 @@ Who controls the player in a fight (the user's model):
   shot is to land, not only its damage. Pistol fights with imps far off are slow but right; left
   as they are (the user). Once the super shotgun is held, the plain shotgun is never used: in
   vanilla it is key 3 pressed again with the super shotgun up (`G_BuildTiccmd`), and against
-  zombiemen and shotgun guys it wastes less and fires faster.
+  zombiemen and shotgun guys it wastes less and fires faster. The ranges of the shotgun and the
+  super shotgun want another look (the user, MAP02): the super shotgun was used far off where
+  the plain one would do better; enough against zombiemen, but against a baron far off, with a
+  fraction of the pellets landing, it wastes shells.
 - **Monsters that cannot reach the player** (the user, jotted, MAP04): melee-only monsters with
   no way to the player - the spectres in the pit on the way to the blue key - are not shot at:
   a waste of ammo. Needs a check that the monster has a walkable way up, or none.
@@ -2840,13 +2843,16 @@ Who controls the player in a fight (the user's model):
   640 or more off (512 with the pistol in hand already, or it flips at the edge) with no more
   than 100 health left (sniped at: a
   zombieman, shotgun guy, chaingunner, imp, SS or lost soul, or anything worn down that far;
-  never a Spider Mastermind or a mancubus, which would take too long; one hunting the player
-  only if a hitscanner, which shoots from where it is, the rest coming at it - MAP04: the pistol
-  came up for an imp 646 off as the imps closed in, the shotgun again 1.4 s later, and the bot
-  died 2 s after; the chase direction was no sign, sideways for a moment as it came), or nothing
-  but the bare fist can hurt it; barrels out of a fight are popped with it still. Zombiemen and
-  shotgun guys get no more than that (MAP02: with the pistol theirs at any distance, it stayed up
-  40 s, the super shotgun rating no better against them). The bare fist (no berserk) comes after it, at a quarter
+  never a Spider Mastermind or a mancubus, which would take too long; never one hunting the
+  player, which comes at it and is soon a fight - MAP04: the pistol came up for an imp 646 off as
+  the imps closed in, the shotgun again 1.4 s later, and the bot died 2 s after; MAP02: shotgun
+  guys sniped at 650 to 730 off walked into a fight within a second or two), or nothing but the
+  bare fist can hurt it; barrels out of a fight are popped with it still. Zombiemen and shotgun
+  guys get no more than that (MAP02: with the pistol theirs at any distance, it stayed up 40 s,
+  the super shotgun rating no better against them). Sniping only with the area clear for 3 s:
+  no fight on, no awake monster in sight within 512; mid-fight the player shoots with what it has
+  in hand (the user, MAP02: snipes right after a fight ended, the pistol up and away again within
+  a second or two). The bare fist (no berserk) comes after it, at a quarter
   (MAP04: the shotgun ran dry with an imp 53 off, and the fist, tied with the pistol and first in
   the list, came up).
 - **Facing** (7.4): nav takes combat's aim wherever it does not need the facing: not running a

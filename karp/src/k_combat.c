@@ -14,8 +14,9 @@
 //	than kills it, brought up only when clearly better than the one in
 //	hand (a switch takes about 0.9 s), and never instead of one whose next
 //	shot should kill the target. The pistol is the last resort: for
-//	monsters with little health sniped at from far off, and when nothing
-//	better can hurt the target; the bare fist comes after it. Nav faces the target wherever it
+//	monsters with little health sniped at from far off with the area clear,
+//	and when nothing better can hurt the target; the bare fist comes after
+//	it. Nav faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
 //
@@ -183,19 +184,25 @@
 // up for an imp 643 off and went again a second later at 581) with no more
 // than SNIPE_HEALTH left, sniped at: a zombieman, shotgun guy, chaingunner,
 // imp, SS or lost soul, or anything worn down that far - never a spider
-// mastermind or a mancubus, which would take too long (the user). One that
-// hunts the player is sniped at only if a hitscanner, which shoots from
-// where it is; the rest come at it (MAP04: the pistol came up for an imp
-// 646 off as the imps closed in, the shotgun again 1.4 s later at 238, and
-// the bot died 2 s after; the chase direction was no sign, sideways for a
-// moment as it came). Zombiemen and shotgun guys get no more than that
-// (MAP02: with the pistol theirs at any distance, it stayed up 40 s, the
-// super shotgun beside it rating no better against them). Barrels out of
-// a fight are popped with it still (PopWeapon).
+// mastermind or a mancubus, which would take too long (the user). Never
+// one hunting the player: it comes at it, and soon it is a fight (MAP04:
+// the pistol came up for an imp 646 off as the imps closed in, the shotgun
+// again 1.4 s later at 238, and the bot died 2 s after; MAP02: shotgun
+// guys sniped at 650 to 730 off walked into a fight within a second or
+// two). Zombiemen and shotgun guys get no more than that (MAP02: with the
+// pistol theirs at any distance, it stayed up 40 s, the super shotgun
+// beside it rating no better against them). And only with the area clear
+// for SNIPE_CALM: no fight on, no awake monster in sight within
+// SNIPE_CLEAR; mid-fight the player shoots with what it has in hand (the
+// user, MAP02: snipes right after a fight ended, the pistol up and away
+// again within a second or two). Barrels out of a fight are popped with
+// it still (PopWeapon).
 #define PISTOL_SHARE 0.25
 #define SNIPE_REACH 640.0
 #define SNIPE_KEEP 512.0
 #define SNIPE_HEALTH 100
+#define SNIPE_CLEAR 512.0
+#define SNIPE_CALM (3 * TICRATE)
 
 // The bare fist (no berserk) is the last resort of all: it rates FIST_SHARE
 // of its damage (MAP04: the shotgun ran dry with an imp 53 off, the fist
@@ -403,6 +410,7 @@ static k_vec2_t target_velocity;    // smoothed, units per tic
 static int wanted = -1;             // the weapon wanted, -1 if none
 static boolean can_hurt;            // some weapon in hand can hurt the target
 static int last_switch;             // leveltime of the last switch pressed
+static int unclear_tic;             // the area was last not clear (UpdateClear)
 static int last_health = -1;
 
 // The target's health, and when it last went down (or the target changed);
@@ -1203,9 +1211,29 @@ static void CountMisses(const player_t *player)
     }
 }
 
+// Each tic: when the area was last not clear - a fight on, or an awake
+// monster in sight within SNIPE_CLEAR.
+static void UpdateClear(void)
+{
+    int i;
+
+    for (i = 0; i < num_monsters && !battle; ++i)
+    {
+        if (monsters[i].visible && monsters[i].awake && monsters[i].distance < SNIPE_CLEAR)
+        {
+            break;
+        }
+    }
+
+    if (battle || i < num_monsters)
+    {
+        unclear_tic = leveltime;
+    }
+}
+
 // Whether the pistol is right for the monster: far off with little health
-// left, and a hitscanner or not hunting the player; or nothing better can
-// hurt it.
+// left, not hunting the player, the area clear a while; or nothing better
+// can hurt it.
 static boolean PistolRight(const player_t *player, const k_monster_t *monster,
                            const mobj_t *mo)
 {
@@ -1214,7 +1242,8 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster,
     int i;
 
     if (monster->distance >= (in_hand == wp_pistol ? SNIPE_KEEP : SNIPE_REACH)
-     && monster->health <= SNIPE_HEALTH && (monster->hitscan || mo->target != player->mo))
+     && monster->health <= SNIPE_HEALTH && mo->target != player->mo
+     && leveltime - unclear_tic >= SNIPE_CALM)
     {
         return true;
     }
@@ -2136,6 +2165,7 @@ void K_Combat_Reset(void)
     target_mo = NULL;
     lost_mo = NULL;
     lost_tic = 0;
+    unclear_tic = 0;
     wanted = -1;
     can_hurt = false;
     last_switch = -SWITCH_TICS;
@@ -2208,6 +2238,7 @@ void K_Combat_Tick(int driving)
     // Not driving (a menu, the pause): everything stays as it is.
     if (driving)
     {
+        UpdateClear();
         ChooseTarget(player);
         CountMisses(player);
         ChooseWeapon(player);
