@@ -90,10 +90,11 @@ int K_Combat_Move(double *vx, double *vy);
 // move about).
 double K_Combat_Danger(double x, double y, double floor);
 
-// Set by the brain while it goes for health with health CRITICAL: no fight
-// is started, one going on is broken off, and the player runs, shooting on
-// the way (plan, 7.4: fleeing).
-void K_Combat_Escape(int on);
+// Set by the brain while it goes for health with health CRITICAL, or dashes
+// for a weapon or ammo close by, with why ("health CRITICAL, going for
+// health"); NULL when not: no fight is started, one going on is broken off,
+// and the player runs, shooting on the way (plan, 7.4: fleeing).
+void K_Combat_Escape(const char *why);
 
 // Set by the brain while it wants the barrel at (x, y) out of the way: shot
 // at from where the player is, once no monster is to be shot, with a weapon

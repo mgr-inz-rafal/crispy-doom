@@ -161,3 +161,8 @@ const char *K_Condition_NeedName(k_need_t need)
 {
     return need_names[need];
 }
+
+int K_Condition_AmmoLow(int ammo)
+{
+    return ammo >= 0 && ammo < NUMAMMO ? ammo_low[ammo] : 0;
+}

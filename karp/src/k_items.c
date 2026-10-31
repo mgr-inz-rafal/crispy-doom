@@ -6,18 +6,26 @@
 //	it may reach, the armour that is better than what is worn (a third of
 //	the damage taken off for green, a half for blue), the ammo below the
 //	most the player may carry (bullets cheap, rockets dear; a quarter for
-//	ammo no weapon it holds fires), a weapon it does not have. Nothing it
-//	would not pick up counts. With no monster left alive, weapons, ammo
-//	and the power-ups for fighting are worth nothing.
+//	ammo no weapon it holds fires), a weapon it does not have - twice as
+//	much while it has nothing better than the pistol. Ammo below its
+//	comfortable level is worth more a round, the less there is.
+//	Nothing it would not pick up counts. With no monster left alive,
+//	weapons, ammo and the power-ups for fighting are worth nothing.
 //
 //	The worth, weighted by need, becomes how far out of its way the player
-//	may go for the item (plan, 7.5): a small detour for anything useful, a
-//	long one for health when health is LOW - the lower, the longer - and
-//	any detour at all when CRITICAL (the user: a minute or two back to the
+//	may go for the item (plan, 7.5), and the more an item is worth, the
+//	more each point pays for: a step aside for a clip, a long walk for blue
+//	armour, a soulsphere or a first chaingun (the user, Doom II MAP03).
+//	Health weighs more when LOW - the lower, the more - and pays for any
+//	detour at all when CRITICAL (the user: a minute or two back to the
 //	level's start beats dying). Ammo weighs three times when LOW. Items
 //	lying together are picked up on one trip, so each counts with those
 //	beside it (Doom II MAP02: three stimpacks side by side, 30 health on
 //	one trip, were left at 25 health as worth 10 each).
+//
+//	Some items are worth breaking a fight off for, close by (urgent):
+//	health when CRITICAL, a weapon the player lacks, and the ammo running
+//	out, from ammo, weapons and backpacks.
 //
 //	What the monsters guarding an item would cost in health is taken off,
 //	weighed as health is (the user, MAP02: going for four stimpacks started
@@ -49,13 +57,24 @@
 #include "k_graph.h"
 #include "k_items.h"
 
-// Map units of detour a point of worth pays for, and the most for each
-// need: a small detour whatever the need, more for what is needed, and no
-// limit for health when CRITICAL.
+// Map units of detour a point of worth pays for, and a whole
+// UNITS_PER_POINT more for each BIG_WORTH the item is worth (the user,
+// Doom II MAP03: blue armour at 0% was passed by 1424 units off, any
+// detour then capped at 400). Never more than REACH_MOST, about five
+// seconds' run, but any detour at all for health when CRITICAL.
 #define UNITS_PER_POINT 8.0
-#define REACH_SMALL 400.0
-#define REACH_LOW 1500.0
+#define BIG_WORTH 25.0
+#define REACH_MOST 3000.0
 #define REACH_ANY 1.0e6
+
+// Ammo below its comfortable level is worth more a round, the less there
+// is: up to SCARCE times as much at none, the first rounds the shots that
+// keep the player fighting (the user, Doom II MAP03: with six shells left
+// - not LOW - the bot left the shotguns the shotgun guys dropped, and met
+// the imps with the pistol).
+#define SCARCE 10.0
+
+static const int ammo_comfort[NUMAMMO] = { 80, 25, 100, 10 };   // clip, shell, cell, misl
 
 // Health weighs LOW_WEIGHT at the LOW mark (75), rising to LOW_WEIGHT_MOST
 // at the CRITICAL one (25); CRITICAL_WEIGHT below.
@@ -94,6 +113,21 @@ static int buckets[BUCKETS];
 // shell, cell, rocket.
 static const int clip_ammo[NUMAMMO] = { 10, 4, 20, 1 };
 static const double ammo_worth[NUMAMMO] = { 0.15, 0.8, 0.2, 2.0 };
+
+// How good a weapon is, roughly: the ammo that matters most is the best
+// weapon's.
+static const int weapon_rank[NUMWEAPONS] =
+{
+    0,      // fist
+    1,      // pistol
+    3,      // shotgun
+    3,      // chaingun
+    4,      // rocket launcher
+    5,      // plasma rifle
+    6,      // BFG
+    1,      // chainsaw
+    4,      // super shotgun
+};
 
 // What having a weapon is worth, besides its ammo.
 static const double weapon_worth[NUMWEAPONS] =
@@ -226,11 +260,92 @@ static boolean Usable(const player_t *player, ammotype_t ammo)
     return false;
 }
 
+// An ammo item's ammo and clips of it (P_TouchSpecialThing); false if it
+// is no ammo.
+static boolean AmmoItem(spritenum_t sprite, ammotype_t *ammo, int *clips)
+{
+    switch (sprite)
+    {
+        case SPR_CLIP: *ammo = am_clip;  *clips = 1; return true;
+        case SPR_AMMO: *ammo = am_clip;  *clips = 5; return true;
+        case SPR_SHEL: *ammo = am_shell; *clips = 1; return true;
+        case SPR_SBOX: *ammo = am_shell; *clips = 5; return true;
+        case SPR_ROCK: *ammo = am_misl;  *clips = 1; return true;
+        case SPR_BROK: *ammo = am_misl;  *clips = 5; return true;
+        case SPR_CELL: *ammo = am_cell;  *clips = 1; return true;
+        case SPR_CELP: *ammo = am_cell;  *clips = 5; return true;
+        default:       return false;
+    }
+}
+
+// A weapon item's weapon; false if it is no weapon.
+static boolean WeaponItem(spritenum_t sprite, weapontype_t *weapon)
+{
+    switch (sprite)
+    {
+        case SPR_SHOT: *weapon = wp_shotgun;      return true;
+        case SPR_SGN2: *weapon = wp_supershotgun; return true;
+        case SPR_MGUN: *weapon = wp_chaingun;     return true;
+        case SPR_LAUN: *weapon = wp_missile;      return true;
+        case SPR_PLAS: *weapon = wp_plasma;       return true;
+        case SPR_BFUG: *weapon = wp_bfg;          return true;
+        case SPR_CSAW: *weapon = wp_chainsaw;     return true;
+        default:       return false;
+    }
+}
+
+// Ammo running out that matters: for a weapon held, below its LOW mark
+// (k_condition.h), and no weapon at least as good left with ammo at its LOW
+// mark (the user, Doom II MAP03: out of shells, with bullets left for the
+// pistol - ammo not LOW - the bot walked past the shotguns the shotgun guys
+// dropped, and up a lift to the imps with the pistol).
+static boolean Wanted(const player_t *player, ammotype_t ammo)
+{
+    int best = -1;
+    int w;
+
+    if (ammo == am_noammo || player->ammo[ammo] >= K_Condition_AmmoLow(ammo))
+    {
+        return false;
+    }
+
+    for (w = 0; w < NUMWEAPONS; ++w)
+    {
+        if (player->weaponowned[w] && weaponinfo[w].ammo == ammo)
+        {
+            best = SDL_max(best, weapon_rank[w]);
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    for (w = 0; w < NUMWEAPONS; ++w)
+    {
+        ammotype_t other = weaponinfo[w].ammo;
+
+        if (player->weaponowned[w] && other != ammo && other != am_noammo
+         && player->ammo[other] >= K_Condition_AmmoLow(other) && weapon_rank[w] >= best)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // P_GiveAmmo: clips of ammo (0 for half of one), doubled on the easiest and
 // hardest skills, halved when dropped, up to the most the player carries.
+// Each round below the comfortable level is worth up to SCARCE times as
+// much, the more the fewer there were before it: 1 + (SCARCE - 1) * (1 -
+// before / comfortable), added up over the rounds.
 static double AmmoWorth(const player_t *player, ammotype_t ammo, int clips, boolean dropped)
 {
     int num = clips > 0 ? clips * clip_ammo[ammo] : clip_ammo[ammo] / 2;
+    double comfort = ammo_comfort[ammo], scarce = 0.0;
+    int have = player->ammo[ammo], below;
 
     if (ammo == am_noammo || player->ammo[ammo] >= player->maxammo[ammo])
     {
@@ -248,13 +363,46 @@ static double AmmoWorth(const player_t *player, ammotype_t ammo, int clips, bool
     }
 
     num = SDL_min(num, player->maxammo[ammo] - player->ammo[ammo]);
-    return num * ammo_worth[ammo] * (Usable(player, ammo) ? 1.0 : 0.25);
+
+    if (!Usable(player, ammo))
+    {
+        return num * ammo_worth[ammo] * 0.25;
+    }
+
+    // The rounds from `have` up to `have + below`, below the comfortable
+    // level: sum of (1 - k / comfort) over them.
+    below = SDL_max(0, SDL_min(num, ammo_comfort[ammo] - have));
+
+    if (below > 0)
+    {
+        scarce = below - (2.0 * have + below - 1.0) * below / (2.0 * comfort);
+    }
+
+    return (num + (SCARCE - 1.0) * scarce) * ammo_worth[ammo];
 }
 
+// Nothing better than the pistol: a pistol start, so far (the chainsaw is
+// no better at a distance).
+static boolean PistolOnly(const player_t *player)
+{
+    return !player->weaponowned[wp_shotgun] && !player->weaponowned[wp_chaingun]
+        && !player->weaponowned[wp_missile] && !player->weaponowned[wp_plasma]
+        && !player->weaponowned[wp_bfg] && !player->weaponowned[wp_supershotgun];
+}
+
+// A weapon not held is worth twice as much while the player has nothing
+// better than the pistol (the user, Doom II MAP03: a chaingun lay by, and
+// the bot fought on with the pistol).
 static double WeaponWorth(const player_t *player, weapontype_t weapon, boolean dropped)
 {
-    return (player->weaponowned[weapon] ? 0.0 : weapon_worth[weapon])
-         + AmmoWorth(player, weaponinfo[weapon].ammo, 2, dropped);
+    double worth = player->weaponowned[weapon] ? 0.0 : weapon_worth[weapon];
+
+    if (PistolOnly(player))
+    {
+        worth *= 2.0;
+    }
+
+    return worth + AmmoWorth(player, weaponinfo[weapon].ammo, 2, dropped);
 }
 
 // P_GiveArmor: only armour better than what is worn is taken, and it takes
@@ -276,7 +424,9 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
     int health = player->health;
     boolean dropped = entry->item.dropped;
     double ammo = 0.0;
-    int a;
+    ammotype_t ammo_type;
+    weapontype_t weapon;
+    int a, clips;
 
     switch (entry->sprite)
     {
@@ -325,23 +475,18 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
         return 0.0;
     }
 
+    if (AmmoItem(entry->sprite, &ammo_type, &clips))
+    {
+        return AmmoWorth(player, ammo_type, clips, dropped);
+    }
+
+    if (WeaponItem(entry->sprite, &weapon))
+    {
+        return WeaponWorth(player, weapon, dropped);
+    }
+
     switch (entry->sprite)
     {
-        case SPR_CLIP: return AmmoWorth(player, am_clip, 1, dropped);
-        case SPR_AMMO: return AmmoWorth(player, am_clip, 5, dropped);
-        case SPR_SHEL: return AmmoWorth(player, am_shell, 1, dropped);
-        case SPR_SBOX: return AmmoWorth(player, am_shell, 5, dropped);
-        case SPR_ROCK: return AmmoWorth(player, am_misl, 1, dropped);
-        case SPR_BROK: return AmmoWorth(player, am_misl, 5, dropped);
-        case SPR_CELL: return AmmoWorth(player, am_cell, 1, dropped);
-        case SPR_CELP: return AmmoWorth(player, am_cell, 5, dropped);
-        case SPR_SHOT: return WeaponWorth(player, wp_shotgun, dropped);
-        case SPR_SGN2: return WeaponWorth(player, wp_supershotgun, dropped);
-        case SPR_MGUN: return WeaponWorth(player, wp_chaingun, dropped);
-        case SPR_LAUN: return WeaponWorth(player, wp_missile, dropped);
-        case SPR_PLAS: return WeaponWorth(player, wp_plasma, dropped);
-        case SPR_BFUG: return WeaponWorth(player, wp_bfg, dropped);
-        case SPR_CSAW: return WeaponWorth(player, wp_chainsaw, dropped);
         case SPR_PINV: return 30.0;
         case SPR_PINS: return 10.0;
 
@@ -358,13 +503,68 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
     }
 }
 
+// Worth breaking a fight off for, close by (the user, Doom II MAP03: the
+// chaingun a chaingunner dropped lay near, and the bot fought on with the
+// pistol): health when CRITICAL, a weapon the player lacks, and the ammo
+// that is running out (Wanted; while ammo is LOW, any for a weapon held),
+// from ammo, a weapon or a backpack.
+static boolean Urgent(const player_t *player, const entry_t *entry,
+                      const k_conditionstatus_t *condition)
+{
+    boolean low = condition->ammo == K_NEED_LOW;
+    ammotype_t ammo;
+    weapontype_t weapon;
+    int clips;
+
+    if (entry->item.worth <= 0.0)
+    {
+        return false;
+    }
+
+    switch (entry->item.kind)
+    {
+        case K_ITEM_HEALTH:
+            return condition->health == K_NEED_CRITICAL;
+
+        case K_ITEM_AMMO:
+            return AmmoItem(entry->sprite, &ammo, &clips)
+                && ((low && Usable(player, ammo)) || Wanted(player, ammo));
+
+        case K_ITEM_WEAPON:
+            if (WeaponItem(entry->sprite, &weapon))
+            {
+                return !player->weaponowned[weapon] || low
+                    || Wanted(player, weaponinfo[weapon].ammo);
+            }
+
+            // A backpack.
+            if (low)
+            {
+                return true;
+            }
+
+            for (ammo = 0; ammo < NUMAMMO; ++ammo)
+            {
+                if (Wanted(player, ammo))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+
+        default:
+            return false;
+    }
+}
+
 void K_Items_Tick(void)
 {
     const player_t *player = &players[consoleplayer];
     const k_conditionstatus_t *condition = K_Condition_Get();
     boolean fights = K_Combat_GetStatus()->alive > 0;
     double health_weight, ammo_weight, armour_weight;
-    double health_reach, ammo_reach;
+    double health_reach;
     const thinker_t *thinker;
     int stamp = leveltime + 1;
     int i;
@@ -395,11 +595,9 @@ void K_Items_Tick(void)
                   ? LOW_WEIGHT + (LOW_WEIGHT_MOST - LOW_WEIGHT)
                                  * SDL_max(0.0, SDL_min(1.0, (75.0 - player->health) / 50.0))
                   : 1.0;
-    health_reach = condition->health == K_NEED_CRITICAL ? REACH_ANY
-                 : condition->health == K_NEED_LOW ? REACH_LOW : REACH_SMALL;
+    health_reach = condition->health == K_NEED_CRITICAL ? REACH_ANY : REACH_MOST;
     armour_weight = condition->health != K_NEED_OK ? 2.0 : 1.0;
     ammo_weight = condition->ammo == K_NEED_LOW ? 3.0 : 1.0;
-    ammo_reach = condition->ammo == K_NEED_LOW ? REACH_LOW : REACH_SMALL;
 
     for (i = 0; i < num_entries; ++i)
     {
@@ -409,7 +607,8 @@ void K_Items_Tick(void)
 
         item->present = entry->seen == stamp;
         item->worth = item->present ? Worth(player, entry, fights) : 0.0;
-        entry->most = REACH_SMALL;
+        item->urgent = Urgent(player, entry, condition);
+        entry->most = REACH_MOST;
 
         // Its guards and spot, about once a second; at once when it has been
         // worth nothing for a while.
@@ -435,7 +634,6 @@ void K_Items_Tick(void)
             case K_ITEM_AMMO:
             case K_ITEM_WEAPON:
                 weight = ammo_weight;
-                entry->most = ammo_reach;
                 break;
 
             default:
@@ -450,7 +648,7 @@ void K_Items_Tick(void)
     {
         entry_t *entry = &entries[i];
         k_item_t *item = &entry->item;
-        double weighted = entry->weighted, most = entry->most;
+        double weighted = entry->weighted, most = entry->most, worth;
         int j;
 
         item->together = item->worth;
@@ -479,9 +677,13 @@ void K_Items_Tick(void)
         // worth more health than is left, unless health is CRITICAL: then
         // staying where the fight is costs as much (MAP02: at 9 health every
         // medikit near was guarded by a shotgun guy, and the bot stayed).
+        // The more it is worth, the more each point pays for.
         weighted -= item->danger * health_weight;
+        worth = SDL_max(0.0, item->together - item->danger);
         item->reach = item->danger >= player->health && condition->health != K_NEED_CRITICAL
-                    ? 0.0 : SDL_max(0.0, SDL_min(weighted * UNITS_PER_POINT, most));
+                    ? 0.0
+                    : SDL_max(0.0, SDL_min(weighted * UNITS_PER_POINT * (1.0 + worth / BIG_WORTH),
+                                           most));
     }
 }
 
@@ -493,4 +695,40 @@ int K_Items_Count(void)
 const k_item_t *K_Items_Get(int index)
 {
     return &entries[index].item;
+}
+
+// P_KillMobj's drops.
+double K_Items_DropWorth(int type)
+{
+    const player_t *player = &players[consoleplayer];
+    entry_t drop;
+
+    if (player->mo == NULL)
+    {
+        return 0.0;
+    }
+
+    memset(&drop, 0, sizeof(drop));
+    drop.item.dropped = true;
+
+    switch (type)
+    {
+        case MT_POSSESSED:
+        case MT_WOLFSS:
+            drop.sprite = SPR_CLIP;
+            break;
+
+        case MT_SHOTGUY:
+            drop.sprite = SPR_SHOT;
+            break;
+
+        case MT_CHAINGUY:
+            drop.sprite = SPR_MGUN;
+            break;
+
+        default:
+            return 0.0;
+    }
+
+    return Worth(player, &drop, true);
 }

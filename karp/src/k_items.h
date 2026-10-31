@@ -49,6 +49,11 @@ typedef struct
                             // it and those beside it now, the danger taken
                             // off, in map units of detour (0: none, or out
                             // of reach)
+    int urgent;             // worth breaking a fight off for, close by:
+                            // health when CRITICAL, a weapon the player
+                            // lacks, and the ammo the best weapon held runs
+                            // out of (any, while ammo is LOW), from ammo, a
+                            // weapon or a backpack
 } k_item_t;
 
 // Called by Karp on every level load.
@@ -61,6 +66,11 @@ void K_Items_Tick(void);
 
 int K_Items_Count(void);
 const k_item_t *K_Items_Get(int index);
+
+// What the item a monster of the engine's mobjtype_t drops when it dies
+// would be worth now: a zombieman's or SS's clip, a shotgun guy's shotgun,
+// a chaingunner's chaingun; 0 for the rest.
+double K_Items_DropWorth(int type);
 
 #ifdef __cplusplus
 }

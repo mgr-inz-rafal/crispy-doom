@@ -2765,6 +2765,12 @@ int K_Nav_CanPause(void)
             && jump_phase == JUMP_NONE && !OnJump(status.target));
 }
 
+int K_Nav_Waiting(void)
+{
+    return status.state == K_NAV_DRIVING && action.kind != K_ACTION_NONE
+        && action.phase != PHASE_APPROACH && jump_phase == JUMP_NONE;
+}
+
 void K_Nav_Pause(int pause)
 {
     k_pose_t pose;

@@ -54,6 +54,9 @@ const k_conditionstatus_t *K_Condition_Get(void);
 const char *K_Condition_Name(k_condition_t condition);
 const char *K_Condition_NeedName(k_need_t need);
 
+// The rounds of an ammo type (am_clip...) below which it is low.
+int K_Condition_AmmoLow(int ammo);
+
 #ifdef __cplusplus
 }
 #endif

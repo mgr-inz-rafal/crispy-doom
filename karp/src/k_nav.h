@@ -150,6 +150,10 @@ void K_Nav_BuildCommand(int tic, const double *aim, k_command_t *command);
 // running a jump.
 int K_Nav_CanPause(void);
 
+// Waiting at a door, lift or switch, walked up to it (not running a jump):
+// pausing there gives the action up, to be begun again when resumed.
+int K_Nav_Waiting(void);
+
 // While paused, nav follows no route and notices nothing (stuck, arrival);
 // the goal stays. Resumed, it plans the route again from where the player
 // is: a fight can take it well off the route.

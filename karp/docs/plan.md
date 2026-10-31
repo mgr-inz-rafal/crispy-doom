@@ -2622,9 +2622,10 @@ Who controls the player in a fight (the user's model):
 - **Fleeing** (CRITICAL): a goal pushed for health, or for a spot out of sight. Done for health:
   while health is CRITICAL and the goal on top is health, combat starts no fight and breaks off
   the one going on at once; the player runs for it, shooting on the way at what it sees. At
-  CRITICAL, health is looked for during fights too (only health then). The player outruns every
-  walking monster; hitscanners shoot it in the back, so out of their sight comes with C3. With no
-  health to go for, fights go on as usual.
+  CRITICAL, health is looked for during fights too. The player outruns every walking monster;
+  hitscanners shoot it in the back, so out of their sight comes with C3. With no health to go
+  for, fights go on as usual. A dash is the same for a weapon not held, or the ammo running out,
+  within 400 units (7.9).
 
 ### 7.5 Goals combat adds
 
@@ -2690,6 +2691,10 @@ Who controls the player in a fight (the user's model):
   chain going off nearby: every live barrel of its chain will follow, 12 to 15 tics apart, so
   the bot should step away from the whole chain at once, ahead of the blasts, before the fight
   and the route.
+- **Weapon use** (the user, jotted, MAP03): a module of its own later. Rockets at demons from afar
+  nearly always miss (slow rockets, fast demons): the weapon choice should weigh how likely the
+  shot is to land, not only its damage. Pistol fights with imps far off are slow but right; left
+  as they are (the user).
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.
@@ -2707,22 +2712,45 @@ Who controls the player in a fight (the user's model):
   `P_TouchSpecialThing` tells it, found by place and sprite each tic, and worth what picking it
   up would give now: health below the most it may reach, armour better than what is worn (a
   third of the damage taken off for green, a half for blue), ammo below the most carried (a
-  round of bullets 0.15, shells 0.8, cells 0.2, rockets 2; a quarter for ammo no weapon held
-  fires; half when dropped), a weapon not held (40 to 80), a backpack, power-ups. With no monster
+  round of bullets 0.15, shells 0.8, cells 0.2, rockets 2, about the ratio of their damage; a
+  quarter for ammo no weapon held fires; half when dropped), a weapon not held (40 to 80, twice
+  that while nothing better than the pistol is held: pistol starts), a backpack, power-ups. Ammo
+  below a comfortable level (80 bullets, 25 shells, 100 cells, 10 rockets) is worth more a round
+  the less there is, up to 10 times at none (the user, MAP03: with six shells - not LOW - the bot
+  left the shotguns the shotgun guys dropped, and met the imps with the pistol). With no monster
   left, weapons, ammo and the fighting power-ups are worth nothing. Items within 64 of one
   another count together (MAP02: three stimpacks side by side were left at 25 health as worth
   10 each). On the console's map (Items overlay): bright when worth a detour, red-edged when
   guarded.
 - **Pickups on the way and detours** (`k_brain.c`, GET <item>): the worth, weighted by need,
-  is how far out of its way the player may go, 8 units a point: up to 400 for anything useful,
-  1500 for health when LOW (weighing 3 at 75 health, rising to 6 at 25) and for ammo when LOW
-  (weighing 3), any length for health when CRITICAL (weighing 12; the user: a minute or two back
-  to the start beats dying); armour weighs twice when health is not OK. Once a second, while the
-  player follows a route (not working a door, lift or switch, not jumping, not fighting), the 2
-  most promising (4 when CRITICAL) are routed, there and on to where the route goes; the one with
-  most to spare goes on top of the chain, and when picked up the goal below is planned again.
-  One with no way there or none on is skipped for 10 s. A switch's use is not counted twice for
-  a detour taken before it.
+  is how far out of its way the player may go: 8 units a point, and 8 more for each 25 the item
+  is worth (the user, MAP03: blue armour at 0% was passed by 1424 units off, any detour then
+  capped at 400; a clip gets a step aside, a medikit at 80 health 290, green armour at 0% 620,
+  blue armour, a soulsphere or a first chaingun the most, 3000 units, about five seconds' run).
+  Health weighs 3 at 75 health, rising to 6 at 25, and 12 at CRITICAL, any length then (the
+  user: a minute or two back to the start beats dying); ammo weighs 3 when LOW; armour twice
+  when health is not OK. Once a second, while the player follows a route (not working a door,
+  lift or switch, not jumping), the 2 most promising (4 when CRITICAL) are routed, there and on
+  to where the route goes; the one with most to spare goes on top of the chain, and when picked
+  up the goal below is planned again. One with no way there or none on is skipped for 10 s. A
+  switch's use is not counted twice for a detour taken before it.
+- **Dashes** (the user, MAP03: the chaingun a chaingunner dropped lay near, and the bot fought on
+  with the pistol): in a fight, items worth breaking it off for are looked for too, within 400
+  units of detour - a weapon not held, and the ammo running out (the best weapon held below its
+  LOW mark with nothing as good left to fire, or any while ammo is LOW), from ammo, a weapon or a
+  backpack; health only when CRITICAL, at any length. Going for one, the fight is broken off once
+  it is within 400 (as fleeing, 7.4), the player shooting on the way. MAP03: the start shotgun
+  10 units off, a dropped shotgun 182 off with shells running out, a dropped chaingun 386 off.
+- **Monsters as ammo** (the user, MAP03: a shotgun guy is four shells for one): the target's
+  score counts what it drops, by what that would be worth now: a whole time more for each 25,
+  up to three times (a shotgun guy out of shells about twice, a chaingunner at a pistol start
+  three times, about 1.1 with ammo plenty).
+- **Blows that cannot be answered** (the user, MAP03: an imp at the top clawed the bot riding the
+  lift up for 25; vanilla's blows reach any height): out of a fight, hurt in the last second by a
+  monster within 96 that the shots cannot find, the player holds the route, even waiting at a
+  door or lift (the action begun again after), and steps the walkable way furthest from it until
+  it is 160 off, where the autoaim may find it. With no walkable way (a lift going down, the
+  floor around too high) it rides on. Very high lifts stay a risk.
 - **Danger around items**: what the monsters guarding an item would cost in health is taken off,
   weighed as health (the user, MAP02: four stimpacks guarded drew a fight a lonely medikit would
   not have). The guards are the live monsters within 1024 that could see the player at the item

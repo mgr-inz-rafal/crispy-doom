@@ -6,7 +6,8 @@
 //	Each tic the monsters and projectiles are listed from the thinkers,
 //	and Karp's own sight checks tell which monsters the player can see.
 //	The target is the one scoring best: the most dangerous kinds first
-//	(hitscanners), awake ones, attacking ones, near ones; far ones are
+//	(hitscanners), awake ones, attacking ones, near ones, those that drop
+//	what the player wants (a shotgun guy, out of shells); far ones are
 //	left alone (the user: chasing a far hitscanner wastes time and ammo).
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
@@ -38,11 +39,15 @@
 //	plans its route again from where the player is. A target that has not
 //	lost health for a while (out of reach of the shots) is left alone for
 //	a time. Nav busy at a door, lift or switch, or running a jump, the
-//	player shoots from where it is, as on the way.
+//	player shoots from where it is, as on the way. Hurt there by a monster
+//	in reach of its blows that the shots cannot find (an imp clawing down
+//	at a lift: vanilla's blows reach any height), the player steps away
+//	from it, the route waiting.
 //
 //	Escaping (plan, 7.4): while the brain goes for health with health
-//	CRITICAL, no fight is started and one going on is broken off; the
-//	player runs for it, shooting on the way at what it sees.
+//	CRITICAL, or dashes for a weapon or ammo close by, no fight is started
+//	and one going on is broken off; the player runs for it, shooting on the
+//	way at what it sees.
 //
 //	Danger (plan, 7.5): what going to a spot would cost in health - the
 //	monsters that could see the player there, each by what a fight with its
@@ -63,6 +68,7 @@
 #include "k_combat.h"
 #include "k_condition.h"
 #include "k_graph.h"
+#include "k_items.h"
 #include "k_log.h"
 #include "k_sight.h"
 
@@ -82,6 +88,13 @@
 #define ASLEEP_REACH 512.0
 #define TARGET_STICK 1.3
 #define WOUNDED 0.5
+
+// A monster that drops what the player wants scores a whole time more for
+// each DROP_WORTH its drop is worth (k_items.h), counting no more than
+// DROP_MOST (the user, Doom II MAP03: out of shells, a shotgun guy is four
+// shells for one).
+#define DROP_WORTH 25.0
+#define DROP_MOST 50.0
 
 // Battle mode: for a target awake within BATTLE_REACH (asleep ones are
 // targets only near anyway), in sight for SIGHTED_TICS in a row (a glimpse
@@ -206,6 +219,16 @@
 // (MAP02: the bot shot one from a safe distance, then walked on toward it
 // and its chain hit it).
 #define DODGE_SPEED 16.0
+
+// Out of a fight, hurt in the last BLOW_HOLD tics by a monster within
+// BLOW_REACH that the shots cannot find, the player holds the route - even
+// waiting at a door or lift - and steps away from it until it is BLOW_SAFE
+// off, where the autoaim may find it (the user, Doom II MAP03: an imp at the
+// top clawed the bot riding the lift up for 25, vanilla's blows reaching
+// any height).
+#define BLOW_REACH 96.0
+#define BLOW_SAFE 160.0
+#define BLOW_HOLD 35
 
 // A projectile is incoming when it will pass within the player's radius
 // and PROJECTILE_MARGIN of it, within PROJECTILE_HORIZON tics.
@@ -351,8 +374,10 @@ static int strafe_dir = 1;          // 1 or -1: to the target's left or right
 static int strafe_tics;             // until it turns the other way
 static k_vec2_t move;               // the velocity wanted
 
-// Fights broken off: the brain goes for health, CRITICAL (K_Combat_Escape).
+// Fights broken off: the brain goes for health, CRITICAL, or dashes for a
+// weapon or ammo close by (K_Combat_Escape), and why.
 static boolean escape;
+static char escape_why[64];
 
 // Barrels in the level, live ones and those about to blow up. Barrels that
 // would set each other off share a chain; a chain with a barrel within
@@ -389,8 +414,13 @@ static char barrel_reason[64];
 static boolean blocking_wanted;
 static k_vec2_t blocking_at;
 
-// Stepping away from a blast about to go off (DODGE_SPEED).
+// Stepping away from a blast about to go off, or from a monster's blows
+// (dodging_blow), at DODGE_SPEED.
 static boolean dodging;
+static boolean dodging_blow;
+
+// When a monster or its shot last hurt the player.
+static int hurt_tic;
 
 static double ToMap(fixed_t value)
 {
@@ -798,6 +828,11 @@ static void LogHits(const player_t *player)
         AttackerName(player, name, sizeof(name));
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "hit for %d by %s - %d health left",
               last_health - player->health, name, player->health);
+
+        if (player->attacker != player->mo)
+        {
+            hurt_tic = leveltime;
+        }
     }
 
     last_health = player->health;
@@ -973,6 +1008,7 @@ static void ChooseTarget(const player_t *player)
 
         score *= 1.0 + WOUNDED * (1.0 - (double) monster->health
                                         / SDL_max(monster_mobjs[i]->info->spawnhealth, 1));
+        score *= 1.0 + SDL_min(K_Items_DropWorth(monster->type), DROP_MOST) / DROP_WORTH;
 
         if (score > best_score)
         {
@@ -1760,9 +1796,9 @@ static void EndBattle(const player_t *player)
 
     if (escape)
     {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "breaking off the fight after %.1f s, %d killed - "
-              "health CRITICAL, going for health", (double) (leveltime - battle_since) / TICRATE,
-              player->killcount - battle_kills);
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "breaking off the fight after %.1f s, %d killed - %s",
+              (double) (leveltime - battle_since) / TICRATE, player->killcount - battle_kills,
+              escape_why);
     }
     else
     {
@@ -1787,8 +1823,9 @@ static void UpdateBattle(const player_t *player)
         DropTarget();
     }
 
-    // Going for health, CRITICAL: no fight is started, and one going on is
-    // broken off at once; the player shoots on the way.
+    // Going for health, CRITICAL, or dashing for a weapon or ammo: no fight
+    // is started, and one going on is broken off at once; the player shoots
+    // on the way.
     fight = WorthFighting() && !escape;
     calm = fight ? 0 : calm + 1;
 
@@ -1833,45 +1870,69 @@ static int PendingBlast(const player_t *player)
     return best;
 }
 
-// Out of a fight, away from a blast about to go off: the route waits while
-// the player steps the walkable way that gets furthest from it. In battle
-// the strafing keeps away from it (ChooseMove).
+// The monster that hurt the player in the last BLOW_HOLD tics from within
+// BLOW_REACH (BLOW_SAFE once stepping away from it) where the shots cannot
+// find it, or -1.
+static int BlowFrom(const player_t *player)
+{
+    int i;
+
+    if (leveltime - hurt_tic > BLOW_HOLD)
+    {
+        return -1;
+    }
+
+    i = IndexOf(player->attacker);
+
+    return i >= 0 && !monsters[i].shootable
+        && monsters[i].distance < (dodging_blow ? BLOW_SAFE : BLOW_REACH) ? i : -1;
+}
+
+static void StopDodge(void)
+{
+    if (dodging)
+    {
+        dodging = false;
+        dodging_blow = false;
+        move.x = move.y = 0.0;
+        K_Nav_Pause(0);
+    }
+}
+
+// Out of a fight, away from a blast about to go off, or from blows the
+// shots cannot answer: the route waits while the player steps the walkable
+// way that gets furthest from it. A blow is stepped away from even at a door
+// or lift (the action is begun again after), but only if some way is
+// walkable: a lift going down rides on. In battle the strafing keeps away
+// from barrels (ChooseMove).
 static void UpdateDodge(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double floor = ToMap(player->mo->floorz);
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
-    int blast = battle ? -1 : PendingBlast(player);
+    int blast, blow;
+    k_vec2_t from, way = { 0.0, 0.0 };
     double best = -1.0;
     int k;
 
     if (battle)
     {
         dodging = false;
+        dodging_blow = false;
         return;
     }
 
-    if (blast < 0 || (!dodging && !K_Nav_CanPause()))
-    {
-        if (dodging)
-        {
-            dodging = false;
-            move.x = move.y = 0.0;
-            K_Nav_Pause(0);
-        }
+    blast = PendingBlast(player);
+    blow = blast < 0 ? BlowFrom(player) : -1;
 
+    if ((blast < 0 && blow < 0)
+     || (!dodging && !K_Nav_CanPause() && !(blow >= 0 && K_Nav_Waiting())))
+    {
+        StopDodge();
         return;
     }
 
-    if (!dodging)
-    {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the barrel at (%.0f,%.0f) about "
-              "to go off - the route waits", barrels[blast].at.x, barrels[blast].at.y);
-        dodging = true;
-        K_Nav_Pause(1);
-    }
-
-    move.x = move.y = 0.0;
+    from = blast >= 0 ? barrels[blast].at : monsters[blow].at;
 
     for (k = 0; k < MOVE_WAYS; ++k)
     {
@@ -1879,15 +1940,44 @@ static void UpdateDodge(const player_t *player)
         double ux = cos(angle), uy = sin(angle);
         k_vec2_t near = { me.x + ux * MOVE_LOOK * 0.5, me.y + uy * MOVE_LOOK * 0.5 };
         k_vec2_t far = { me.x + ux * MOVE_LOOK, me.y + uy * MOVE_LOOK };
-        double away = AxisDistance(far, barrels[blast].at);
+        double away = blast >= 0 ? AxisDistance(far, from) : Distance(far, from);
 
         if (away > best && Walkable(near, floor, hurts) && Walkable(far, floor, hurts))
         {
             best = away;
-            move.x = ux * DODGE_SPEED;
-            move.y = uy * DODGE_SPEED;
+            way.x = ux;
+            way.y = uy;
         }
     }
+
+    if (blast < 0 && best < 0.0)
+    {
+        StopDodge();
+        return;
+    }
+
+    if (!dodging || dodging_blow != (blast < 0))
+    {
+        if (blast >= 0)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the barrel at (%.0f,%.0f) "
+                  "about to go off - the route waits", from.x, from.y);
+        }
+        else
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the %s at (%.0f,%.0f), "
+                  "%.0f units off - it hurts the player where the shots cannot find it; "
+                  "the route waits", monsters[blow].name, from.x, from.y,
+                  monsters[blow].distance);
+        }
+
+        dodging = true;
+        dodging_blow = blast < 0;
+        K_Nav_Pause(1);
+    }
+
+    move.x = way.x * DODGE_SPEED;
+    move.y = way.y * DODGE_SPEED;
 }
 
 void K_Combat_Reset(void)
@@ -1919,6 +2009,8 @@ void K_Combat_Reset(void)
     DropBarrel();
     blocking_wanted = false;
     dodging = false;
+    dodging_blow = false;
+    hurt_tic = -BLOW_HOLD - 1;
 }
 
 void K_Combat_Tick(int driving)
@@ -1991,9 +2083,9 @@ void K_Combat_Tick(int driving)
     }
     else if (status.target >= 0)
     {
-        M_snprintf(status.text, sizeof(status.text), "%s the %s, %.0f units - %s",
-                   battle ? "fighting" : escape ? "escaping, shooting at"
-                                                : "shooting on the way at",
+        M_snprintf(status.text, sizeof(status.text), "%s%s the %s, %.0f units - %s",
+                   battle ? "fighting" : escape ? escape_why : "shooting on the way at",
+                   escape && !battle ? ", shooting at" : "",
                    monsters[status.target].name, monsters[status.target].distance,
                    status.weapon != NULL ? status.weapon : "no weapon for it");
     }
@@ -2264,9 +2356,14 @@ double K_Combat_Danger(double x, double y, double floor)
     return danger;
 }
 
-void K_Combat_Escape(int on)
+void K_Combat_Escape(const char *why)
 {
-    escape = on != 0;
+    escape = why != NULL;
+
+    if (escape)
+    {
+        M_StringCopy(escape_why, why, sizeof(escape_why));
+    }
 }
 
 void K_Combat_ShootBarrel(int on, double x, double y)
