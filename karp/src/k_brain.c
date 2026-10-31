@@ -135,15 +135,23 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define ITEM_SKIP_TICS (10 * TICRATE)
 #define ROUTE_AHEAD 1024.0
 
-// A weapon at a pistol start (k_items.h: first) is looked at by route before
-// any other item, and goes before them when in reach, but for health when
-// CRITICAL (the user: a health bonus far off was gone for, a shotgun by the
-// route left, with only the pistol in hand). FIRST_SCORE puts it ahead of
-// any score by worth and distance.
+// Some items go first (GoesFirst): a weapon at a pistol start (k_items.h:
+// first; the user: a health bonus far off was gone for, a shotgun by the
+// route left, with only the pistol in hand), and health when CRITICAL. They
+// are looked at by route before any other item, the nearest first
+// (FIRST_SCORE puts them ahead of any score by worth and distance), and go
+// before the others when in reach. Of two such, the one in hand soonest -
+// the shorter way there, the work at a fix counted - not the smaller detour
+// nor the most to spare (the user: time to acquire; Doom II MAP10: a
+// chaingun on the way to the key, behind a switch and a lift, was gone for
+// over a shotgun back by the start, a 465-unit run, and the bot fought with
+// the pistol for 20 s; at 23 health, a berserk 5322 units off over a
+// medikit near, and the bot died on the way).
 #define FIRST_SCORE 1.0e6
 
 // In a fight only items worth breaking it off for are looked for (k_items.h:
-// urgent), and but for health when CRITICAL, only within FIGHT_REACH of
+// urgent), and but for those worth leaving it for however far (escape:
+// health when LOW or CRITICAL, ammo when LOW), only within FIGHT_REACH of
 // detour: a dash, shooting on the way, not a trip. Going for one, the fight
 // is broken off once the item is within FIGHT_REACH (UpdateEscape) - but
 // only while no monster the player can see is within DASH_CLEAR: through
@@ -1994,11 +2002,38 @@ static boolean UpdateTrigger(goal_t *goal)
     return true;
 }
 
-// How far out of its way the player may go for an item now: in a fight, a
-// dash at most, but for health when CRITICAL.
-static double ItemReach(const k_item_t *item, boolean fighting, boolean critical)
+// Whether the item goes before the others (FIRST_SCORE): one worth leaving a
+// fight for however far (k_items.h: escape), and but when CRITICAL a weapon
+// at a pistol start.
+static boolean GoesFirst(const k_item_t *item, boolean critical)
 {
-    if (fighting && !(item->kind == K_ITEM_HEALTH && critical))
+    return item->escape || (item->first && !critical);
+}
+
+// Whether some health worth leaving a fight for (k_items.h: escape) lies in
+// reach: health is LOW or CRITICAL.
+static boolean HealthToEscapeFor(void)
+{
+    int i;
+
+    for (i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+
+        if (item->escape && item->kind == K_ITEM_HEALTH && item->present && item->reach > 0.0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// How far out of its way the player may go for an item now: in a fight, a
+// dash at most, but for one worth leaving the fight for (escape).
+static double ItemReach(const k_item_t *item, boolean fighting)
+{
+    if (fighting && !item->escape)
     {
         return SDL_min(item->reach, FIGHT_REACH);
     }
@@ -2051,11 +2086,13 @@ static boolean OpenOrFixed(const k_path_t *path, boolean fixed, goal_type_t type
 }
 
 // The extra way an item takes: there and on to where the route goes, less
-// the way left. With fixes allowed, a way there blocked by one fix the brain
-// knows (FIX_WORK) is counted through it, and fixed set. Returns false if
-// there is no way there, or none on.
+// the way left; and the way there (the work at a fix counted). With fixes
+// allowed, a way there blocked by one fix the brain knows (FIX_WORK) is
+// counted through it, and fixed set. Returns false if there is no way there,
+// or none on.
 static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
-                          double remaining, boolean fixes, double *detour, boolean *fixed)
+                          double remaining, boolean fixes, double *detour, double *way,
+                          boolean *fixed)
 {
     goal_type_t type = GOAL_GOTO;
     int param = -1, want, portal, from, key_door, count, i;
@@ -2128,6 +2165,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
     }
 
     *detour = SDL_max(0.0, there + probe.length - remaining);
+    *way = there;
     return true;
 }
 
@@ -2153,7 +2191,7 @@ static boolean ConsiderItems(goal_t *goal)
     int order[MAX_ITEM_ROUTES];
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
-    double best_slack = 0.0, best_detour = 0.0;
+    double best_slack = 0.0, best_detour = 0.0, best_way = 0.0;
     boolean best_fixed = false, best_first = false;
     const k_item_t *chosen;
     k_pose_t player;
@@ -2182,13 +2220,44 @@ static boolean ConsiderItems(goal_t *goal)
 
     // One detour at a time: not while one is on, nor its fix in front of it
     // (Doom II MAP04: the shotgun behind bars was added again over the
-    // switch pushed for it, every second).
+    // switch pushed for it, every second). But health LOW or CRITICAL goes
+    // before any other, while some health worth leaving a fight for is there
+    // (k_items.h: escape): that one is dropped, with the fixes pushed for it,
+    // and health looked for once the goal below is planned again (MAP10: an
+    // armour bonus behind a gun switch kept the bot fighting at 20 health, a
+    // medikit in reach, until it died). When LOW, not one that goes first
+    // itself (GoesFirst: a weapon at a pistol start, ammo when LOW).
     for (i = 0; i < depth; ++i)
     {
-        if (goals[i].type == GOAL_ITEM)
+        const k_item_t *on;
+
+        if (goals[i].type != GOAL_ITEM)
+        {
+            continue;
+        }
+
+        on = K_Items_Get(goals[i].param);
+
+        if (i == 0 || on->kind == K_ITEM_HEALTH || (!critical && GoesFirst(on, critical))
+         || !HealthToEscapeFor())
         {
             return false;
         }
+
+        GoalName(&goals[i], name, sizeof(name));
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - health %s, health goes first", name,
+              critical ? "CRITICAL" : "LOW");
+
+        if (goals[i].param < item_skip_size)
+        {
+            item_skip[goals[i].param] = leveltime + ITEM_SKIP_TICS;
+        }
+
+        depth = i;
+        goals[depth - 1].planned = false;
+        K_Nav_Clear();
+        item_check_tic = 0;
+        return true;
     }
 
     // In a fight nav waits: it was free to when the fight began.
@@ -2220,7 +2289,7 @@ static boolean ConsiderItems(goal_t *goal)
         const k_item_t *item = K_Items_Get(i);
         double distance = sqrt((item->at.x - start.x) * (item->at.x - start.x)
                              + (item->at.y - start.y) * (item->at.y - start.y));
-        double reach = ItemReach(item, fighting, critical);
+        double reach = ItemReach(item, fighting);
         double score;
 
         if (item->present && reach > 0.0 && distance > reach)
@@ -2235,7 +2304,7 @@ static boolean ConsiderItems(goal_t *goal)
             continue;
         }
 
-        score = reach / (distance + 64.0) + (item->first && !critical ? FIRST_SCORE : 0.0);
+        score = GoesFirst(item, critical) ? FIRST_SCORE - distance : reach / (distance + 64.0);
 
         // Kept best first.
         if (found == routes && score <= order_score[routes - 1])
@@ -2257,13 +2326,13 @@ static boolean ConsiderItems(goal_t *goal)
     for (k = 0; k < found; ++k)
     {
         const k_item_t *item = K_Items_Get(order[k]);
-        double reach = ItemReach(item, fighting, critical);
-        boolean first = item->first && !critical;
-        double detour;
+        double reach = ItemReach(item, fighting);
+        boolean first = GoesFirst(item, critical);
+        double detour, way;
         boolean fixed;
 
         if (!ItemDetour(start, player.cell, item->spot, end, nav->remaining, !fighting,
-                        &detour, &fixed))
+                        &detour, &way, &fixed))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
@@ -2271,11 +2340,13 @@ static boolean ConsiderItems(goal_t *goal)
 
         if (detour <= reach
          && (best < 0 || (first && !best_first)
-             || (first == best_first && reach - detour > best_slack)))
+             || (first && best_first && way < best_way)
+             || (!first && !best_first && reach - detour > best_slack)))
         {
             best = order[k];
             best_slack = reach - detour;
             best_detour = detour;
+            best_way = way;
             best_fixed = fixed;
             best_first = first;
         }
@@ -2312,20 +2383,32 @@ static boolean ConsiderItems(goal_t *goal)
 }
 
 // Fleeing (plan, 7.4), and dashes: while the goal on top is an item worth
-// breaking a fight off for (k_items.h: urgent) - health when CRITICAL,
-// wherever it is; a weapon the player lacks, or ammo when LOW, from when it
-// comes within FIGHT_REACH until it is picked up, while no monster is within
-// DASH_CLEAR - combat starts no fight and breaks off the one going on; the
-// player runs for it, shooting on the way at what it sees. With no health
-// to go for, fights go on as before: running to nowhere is no safer, and
-// cover comes with dodging (C3).
+// breaking a fight off for (k_items.h: urgent) - health when LOW or
+// CRITICAL, and ammo when ammo is LOW, wherever it is (escape); a weapon the
+// player lacks, or the ammo running out, from when it comes within
+// FIGHT_REACH until it is picked up, while no monster is within DASH_CLEAR -
+// combat starts no fight and breaks off the one going on; the player runs
+// for it, shooting on the way at what it sees. The item may have fixes on
+// top of it: working them is part of the run for it (MAP10: going for a
+// medikit at LOW health, the bot fought an arachnotron by the walk-over line
+// pushed for it, and died). With nothing to go for, fights go on as before:
+// running to nowhere is no safer, and cover comes with dodging (C3).
 static void UpdateEscape(void)
 {
-    const goal_t *goal = depth > 0 ? &goals[depth - 1] : NULL;
-    const k_item_t *item = goal != NULL && goal->type == GOAL_ITEM
-                         ? K_Items_Get(goal->param) : NULL;
+    const goal_t *goal = NULL;
+    const k_item_t *item = NULL;
     char why[64];
     k_pose_t player;
+    int i;
+
+    for (i = depth - 1; i >= 0 && goal == NULL; --i)
+    {
+        if (goals[i].type == GOAL_ITEM)
+        {
+            goal = &goals[i];
+            item = K_Items_Get(goal->param);
+        }
+    }
 
     if (item == NULL || !item->urgent)
     {
@@ -2334,9 +2417,13 @@ static void UpdateEscape(void)
         return;
     }
 
-    if (item->kind == K_ITEM_HEALTH)
+    if (item->escape)
     {
-        K_Combat_Escape("health CRITICAL, going for health");
+        M_snprintf(why, sizeof(why), "%s, going for the %s",
+                   item->kind != K_ITEM_HEALTH ? "ammo LOW"
+                   : K_Condition_Get()->health == K_NEED_CRITICAL ? "health CRITICAL"
+                   : "health LOW", item->name);
+        K_Combat_Escape(why);
         return;
     }
 

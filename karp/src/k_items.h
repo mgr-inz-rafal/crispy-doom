@@ -53,11 +53,14 @@ typedef struct
                             // off, in map units of detour (0: none, or out
                             // of reach)
     int urgent;             // worth breaking a fight off for, close by:
-                            // health when CRITICAL (a stimpack's worth at
-                            // least, with those beside it), a weapon the
+                            // health when LOW or CRITICAL (a stimpack's worth
+                            // at least, with those beside it), a weapon the
                             // player lacks, and the ammo the best weapon held
                             // runs out of (any, while ammo is LOW), from
                             // ammo, a weapon or a backpack
+    int escape;             // urgent, and worth leaving a fight for however
+                            // far: the health, when LOW or CRITICAL, and the
+                            // ammo when ammo is LOW
     int first;              // a weapon better than the pistol while nothing
                             // better is held (a pistol start): goes before
                             // other items, but for health when CRITICAL

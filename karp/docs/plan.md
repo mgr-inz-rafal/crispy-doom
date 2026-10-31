@@ -2723,15 +2723,27 @@ Who controls the player in a fight (the user's model):
      first. Done: a weapon better than the pistol, at a pistol start, is looked at by route
      before any other item and goes before them when in reach, but for health when CRITICAL;
      and health is worth breaking a fight off for at CRITICAL only if it gives 10 at least,
-     with what lies beside it (not a lone health bonus).
+     with what lies beside it (not a lone health bonus). Of two such weapons, the one in hand
+     soonest - the shorter way there, a fix's work counted - not the smaller detour (the user,
+     time to acquire; Doom II MAP10: a chaingun on the way to the key, behind a switch and a
+     lift, over a shotgun back by the start, a 465-unit run, and 20 s of pistol fighting; now
+     the shotgun at 2.7 s). At CRITICAL health goes first the same way, the nearest (MAP10:
+     at 23 health a berserk 5322 units off over a medikit near, the bot died on the way; now
+     the nearest stimpacks, out of CRITICAL in 4 s); and an item detour on, not for health,
+     is dropped with its fixes (MAP10: an armour bonus behind a gun switch, one detour at a
+     time, kept every health item from being looked at, and the bot fought on at 20 health
+     until it died, a medikit in reach). Still open: the guards on the way to an item, not
+     only at it (MAP10: the chaingun's platform out of sight of the crowd below that the
+     switch and the lift wait met).
 - **Low ammo is the usual trouble** (the user, jotted, the scheme in nearly all the salted
   runs). Doom E2M7: low on ammo, the bot fought cacodemons with the pistol and the fist rather
   than fetch more; ammo on a crate, reachable up steps, was left; later it punched on beside a
   box of ammo, and picked the box up only when it was too late. Ammo needs a higher priority:
   near dry, the bot should not start or carry on a fight it cannot win with what is in hand,
   but break off and run for ammo, even far away (with the fight-or-avoid of 7.3 point 3).
-  Partly done (below, room for ammo): out of a fight, the ammo running out is gone for at any
-  length; in a fight still only within 400 (a dash), and fights are not yet avoided.
+  Partly done (below, room for ammo, and play safe): out of a fight, the ammo running out is
+  gone for at any length; in a fight, when ammo is LOW, too (escape); fights are not yet
+  avoided.
 - **Leave distant non-hitscan monsters be** (the user, jotted; saves ammo, lets it pile up). A
   cacodemon, baron or the like across a large room (not horizon-far, just the other side of it)
   is little threat: its missiles can be sidestepped. Do not fight it; carry on through the level,
@@ -2764,7 +2776,36 @@ Who controls the player in a fight (the user's model):
   the route ahead (1024 along it), whichever is less (MAP31: the clips of two SS just killed
   lay on the route 340 off, past the 256 then allowed as the crow flies, and were run past;
   now both are picked up, 0 units out of the way).
-- **Sniping is dead as it stands** (the user, jotted; the next session starts here). The pistol
+- **Play safe: top up health and ammo** (the user, Doom II MAP10). The bot cannot tell a fight
+  it will win from one it will not - a human fights on at 10 health against slow imps, and
+  leaves at 50 when a dozen hitscanners show - so it plays safe. Done: while monsters are left,
+  health below 100, health worth a stimpack or more (with what lies beside it) pays for 1024
+  units of detour, fading with danger as ammo does; when LOW or CRITICAL any detour at all,
+  unguarded. And health when LOW or CRITICAL, and the ammo when ammo is LOW, are worth leaving
+  a fight for however far (escape), the nearest first, the fixes pushed for them part of the
+  run (MAP10: going for a medikit, the bot fought an arachnotron at the walk-over line pushed
+  for it); another item detour on is dropped for health then, but for a weapon at a pistol
+  start or ammo when LOW. MAP10 then: 99 s and 82 s alive (38 s before), 55 and 57 kills, the
+  yellow key once; at LOW the bot broke off fights for stimpacks, and once toured the map for
+  ten of them (10 each, LOW until above 85), trips up to 5000 units through rooms not cleared,
+  where new monsters met it. Not done: the guards on the way to an item (above); a vanilla
+  weapon pickup switches to the new weapon (the user, MAP10: stepping on a chaingun mid-fight
+  put the shotgun away as a chaingunner fired).
+- **Safe areas: escape into rooms already cleared** (the user, jotted, Doom II MAP10; the next
+  session starts here). Escaping for health or ammo, and backing away in a fight, the bot
+  pushes itself into new fights. The big hitscanner fight on MAP10 began so: the bot opened a
+  door and shot from a distance, a zombieman came from behind, the bot turned to kill it and,
+  backing away, walked into the room full of hitscanners. The bot needs a map of the safe
+  areas - cleared, no monster awake in sight - and leans toward them in a pinch: escapes run
+  through and to them, battle mode backs away into them, never into a room not yet seen.
+  With the guards on the way to an item (above), this also stops the long health trips
+  through rooms not cleared.
+- **Seen on MAP10, for later** (the user, jotted): going for a chaingun, the bot lowered the
+  lift with two spectres on it, fought them with the shotgun, then escaped and left the
+  chaingun. Revenants and arachnotrons need real tactics (cover, dodging, distance); shooting
+  alone mostly loses. On the good side: the bot killed every hitscanner in the big fight and
+  then swept the room of clips and shotguns.
+- **Sniping was dead** (the user, jotted; done, see the end of this point). The pistol
   snipes only a monster not hunting the player, but asleep monsters are targets only within 512
   and sniping starts at 640, so whatever is targeted that far off is awake, and an awake monster
   in single player hunts the player: only an infighting one qualifies, and those are left alone

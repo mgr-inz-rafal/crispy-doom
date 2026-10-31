@@ -19,15 +19,18 @@
 //	armour, a soulsphere or a first chaingun (the user, Doom II MAP03).
 //	Health weighs more when LOW - the lower, the more - and pays for any
 //	detour at all when CRITICAL (the user: a minute or two back to the
-//	level's start beats dying). Ammo weighs three times when LOW, and the
+//	level's start beats dying), and between fights, to keep near 100, a
+//	long detour, any when LOW. Ammo weighs three times when LOW, and the
 //	ammo running out pays for any detour at all, unguarded. Items
 //	lying together are picked up on one trip, so each counts with those
 //	beside it (Doom II MAP02: three stimpacks side by side, 30 health on
 //	one trip, were left at 25 health as worth 10 each).
 //
 //	Some items are worth breaking a fight off for, close by (urgent):
-//	health when CRITICAL (not a lone health bonus), a weapon the player
-//	lacks, and the ammo running out, from ammo, weapons and backpacks. A
+//	health when LOW or CRITICAL (not a lone health bonus), a weapon the
+//	player lacks, and the ammo running out, from ammo, weapons and
+//	backpacks; the health, and the ammo when ammo is LOW, however far
+//	(escape). A
 //	weapon better than the pistol, at a pistol start, goes before other
 //	items (first).
 //
@@ -91,6 +94,14 @@
 #define ROOM_REACH 512.0
 #define DROP_REACH 1024.0
 #define ROOM_DANGER 20.0
+
+// The same for health, to keep near 100 between fights (the user, Doom II
+// MAP10: at 40 health the bot went on into fights with hitscanners, stimpacks
+// lying unguarded in rooms cleared before): while monsters are left, health
+// below 100, an item giving URGENT_HEALTH at least with those beside it pays
+// for HEALTH_REACH of detour at least, less the more it is guarded; when LOW
+// or CRITICAL, any detour at all, unguarded.
+#define HEALTH_REACH 1024.0
 
 // Health is worth breaking a fight off for when CRITICAL only if it gives
 // URGENT_HEALTH at least, with what lies beside it: running from a fight for
@@ -606,8 +617,14 @@ static boolean RunningOut(const player_t *player, const entry_t *entry, boolean 
 
 // Worth breaking a fight off for, close by (the user, Doom II MAP03: the
 // chaingun a chaingunner dropped lay near, and the bot fought on with the
-// pistol): health when CRITICAL, a weapon the player lacks, and the ammo
-// that is running out, from ammo, a weapon or a backpack.
+// pistol): health when LOW or CRITICAL, a weapon the player lacks, and the
+// ammo that is running out, from ammo, a weapon or a backpack. Health LOW or
+// CRITICAL, and the ammo when ammo is LOW, are worth leaving a fight for
+// however far (escape): the bot cannot tell a fight it will win from one it
+// will not - imps at 10 health, a dozen hitscanners at 50 - so it plays safe,
+// and tops up (the user, Doom II MAP10: at 43 health it fought on in a room
+// of hitscanners, more coming, stimpacks lying in rooms cleared before, and
+// died).
 static boolean Urgent(const player_t *player, const entry_t *entry,
                       const k_conditionstatus_t *condition)
 {
@@ -621,7 +638,7 @@ static boolean Urgent(const player_t *player, const entry_t *entry,
     switch (entry->item.kind)
     {
         case K_ITEM_HEALTH:
-            return condition->health == K_NEED_CRITICAL;
+            return condition->health != K_NEED_OK;
 
         case K_ITEM_AMMO:
         case K_ITEM_WEAPON:
@@ -692,6 +709,7 @@ void K_Items_Tick(void)
         entry->running_out = item->worth > 0.0
                           && RunningOut(player, entry, condition->ammo == K_NEED_LOW);
         item->urgent = Urgent(player, entry, condition);
+        item->escape = false;
         item->first = item->worth > 0.0 && WeaponItem(entry->sprite, &weapon)
                    && weapon != wp_chainsaw && !player->weaponowned[weapon] && PistolOnly(player);
         entry->most = REACH_MOST;
@@ -789,11 +807,23 @@ void K_Items_Tick(void)
             item->reach = SDL_max(item->reach, (item->dropped ? DROP_REACH : ROOM_REACH)
                                                * (1.0 - item->danger / ROOM_DANGER));
         }
+        else if (item->danger < ROOM_DANGER && item->kind == K_ITEM_HEALTH && fights
+              && player->health < 100 && item->together >= URGENT_HEALTH)
+        {
+            item->reach = condition->health != K_NEED_OK
+                        ? REACH_ANY
+                        : SDL_max(item->reach,
+                                  HEALTH_REACH * (1.0 - item->danger / ROOM_DANGER));
+        }
 
         if (item->kind == K_ITEM_HEALTH && item->together < URGENT_HEALTH)
         {
             item->urgent = false;
         }
+
+        item->escape = item->urgent
+                    && (item->kind == K_ITEM_HEALTH
+                        || (entry->running_out && condition->ammo == K_NEED_LOW));
     }
 }
 
