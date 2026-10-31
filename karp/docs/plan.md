@@ -2710,33 +2710,60 @@ Who controls the player in a fight (the user's model):
 - **Seen in salted runs, to look into with logs** (the user, jotted, Doom and Doom II):
   1. The fist brought up at close range, once even against a baron of hell, with ammo full. A
      guess: a berserk pack in hand, which makes the fist rate ten times and skips its quarter
-     share - but even then a baron (1000 health) is a long fight in reach of its blows.
+     share - but even then a baron (1000 health) is a long fight in reach of its blows. Done:
+     any melee, the berserk fist and the chainsaw too, rates a quarter against a monster with
+     more than 200 health left.
   2. Four shells right by the route left lying with 18 shells (25 is comfortable): worth about 9,
      allowing about 100 units of detour, so a detour there and back to the route's end may have
-     cost more. Items that close should simply be picked up.
+     cost more. Items that close should simply be picked up. Done with "room for ammo" below.
   3. A health bonus 3400 units out of the way gone for with health left, a shotgun near the
      route ignored with only the pistol in hand. 3400 is past the 3000 cap, so health counted at
      CRITICAL (any length), likely bonuses lying together (their worth summed); and the item with
      most slack wins, which favours the unlimited one. A weapon at a pistol start should come
-     first.
+     first. Done: a weapon better than the pistol, at a pistol start, is looked at by route
+     before any other item and goes before them when in reach, but for health when CRITICAL;
+     and health is worth breaking a fight off for at CRITICAL only if it gives 10 at least,
+     with what lies beside it (not a lone health bonus).
 - **Low ammo is the usual trouble** (the user, jotted, the scheme in nearly all the salted
   runs). Doom E2M7: low on ammo, the bot fought cacodemons with the pistol and the fist rather
   than fetch more; ammo on a crate, reachable up steps, was left; later it punched on beside a
   box of ammo, and picked the box up only when it was too late. Ammo needs a higher priority:
   near dry, the bot should not start or carry on a fight it cannot win with what is in hand,
   but break off and run for ammo, even far away (with the fight-or-avoid of 7.3 point 3).
+  Partly done (below, room for ammo): out of a fight, the ammo running out is gone for at any
+  length; in a fight still only within 400 (a dash), and fights are not yet avoided.
 - **Leave distant non-hitscan monsters be** (the user, jotted; saves ammo, lets it pile up). A
   cacodemon, baron or the like across a large room (not horizon-far, just the other side of it)
   is little threat: its missiles can be sidestepped. Do not fight it; carry on through the level,
   pick up what lies on the way, and fight it later if it comes close or stands in the way. Often
   seen: the last bullets spent on a caco that was no threat, then death to a shotgun guy.
-  Hitscanners (zombiemen, shotgun guys, chaingunners, SS) still count at any range.
+  Hitscanners (zombiemen, shotgun guys, chaingunners, SS) still count at any range. Done: a
+  monster with no bullets and more than 100 health left is no target beyond 512 (640 for the
+  target already); not the arch-vile (no sidestep escapes its flame) nor the pain elemental
+  (its lost souls keep coming).
 - **Room for ammo means pick it up** (the user, jotted). After killing many zombiemen and shotgun
   guys, their clips and shotguns were left lying; Doom II MAP31: SS killed with the chaingun, and
   their clips picked up only when the bot happened to run over the bodies, almost never on
   purpose, even very close. Ammo now counts as worth having only below the comfort marks (80
   bullets, 25 shells, ...), which is too light: any ammo there is room for is worth grabbing,
-  above all what the monsters just dropped close by once a fight is over.
+  above all what the monsters just dropped close by once a fight is over. Done: ammo for a
+  weapon held, a weapon or a backpack pays for 512 units of detour at least, whatever the ammo
+  held, and 1024 when a monster dropped it (the user: killing monsters is an investment their
+  ammo pays back; MAP31, where the SS are most of the ammo, their clips lay 500 to 800 off to
+  the sides of the route and were left while ammo ran LOW at 26 s); less the more it is
+  guarded, none from 20 health at risk (it was none from 1, and clips with 1.5 at risk were
+  left; then 10, one SS that could see them, and the clips of a room just cleared were left).
+  The ammo running out (the best weapon's below its LOW mark with nothing as good left, or any
+  while ammo is LOW) pays for any detour at all, nearest first, back into rooms cleared before
+  too, until ammo is OK again (the user, MAP31: ammo LOW from 44 s to 1:52, clips left lying,
+  a moment at 1 health; finished in 114.7 s, 58 health). MAP31 then: 96.5 s, 73 health, 40
+  clips picked up for 45 kills, ammo LOW three times for 3 to 8 s each, ended by going for
+  clips. Once an item is picked up, the next is looked for as soon as
+  the goal below is planned again (the look used to be spent on the unplanned goal, and came a second
+  later); and the items routed are picked by the distance as the crow flies or twice that from
+  the route ahead (1024 along it), whichever is less (MAP31: the clips of two SS just killed
+  lay on the route 340 off, past the 256 then allowed as the crow flies, and were run past;
+  now both are picked up, 0 units out of the way).
 - **Sniping is dead as it stands** (the user, jotted; the next session starts here). The pistol
   snipes only a monster not hunting the player, but asleep monsters are targets only within 512
   and sniping starts at 640, so whatever is targeted that far off is awake, and an awake monster
@@ -2746,7 +2773,9 @@ Who controls the player in a fight (the user's model):
   monster in sight within 512). That keeps sniping for a quiet area and a distant monster
   standing off (a zombieman or chaingunner on a far ledge, behind a window), while an
   approaching one is left to the weapon in hand (MAP02: shotgun guys sniped at 650 to 730 off
-  walked into a fight within a second or two, two switches each).
+  walked into a fight within a second or two, two switches each). Done: closing in is coming 32
+  units nearer or more in the last second of itself (the player's own moves aside), or not yet
+  watched for a second.
 - **Monsters that cannot reach the player** (the user, jotted, MAP04): melee-only monsters with
   no way to the player - the spectres in the pit on the way to the blue key - are not shot at:
   a waste of ammo. Needs a check that the monster has a walkable way up, or none.
@@ -2890,8 +2919,10 @@ Who controls the player in a fight (the user's model):
   640 or more off (512 with the pistol in hand already, or it flips at the edge) with no more
   than 100 health left (sniped at: a
   zombieman, shotgun guy, chaingunner, imp, SS or lost soul, or anything worn down that far;
-  never a Spider Mastermind or a mancubus, which would take too long; never one hunting the
-  player, which comes at it and is soon a fight - MAP04: the pistol came up for an imp 646 off as
+  never a Spider Mastermind or a mancubus, which would take too long; never one closing in -
+  32 units nearer in the last second, of itself - which is soon a fight (at first: never one
+  hunting the player, but every awake monster does, so sniping never happened) - MAP04: the
+  pistol came up for an imp 646 off as
   the imps closed in, the shotgun again 1.4 s later, and the bot died 2 s after; MAP02: shotgun
   guys sniped at 650 to 730 off walked into a fight within a second or two), or nothing but the
   bare fist can hurt it; barrels out of a fight are popped with it still. Zombiemen and shotgun

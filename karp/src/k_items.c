@@ -8,8 +8,9 @@
 //	most the player may carry (bullets cheap, rockets dear; a quarter for
 //	ammo no weapon it holds fires), a weapon it does not have - twice as
 //	much while it has nothing better than the pistol. Ammo below its
-//	comfortable level is worth more a round, the less there is.
-//	Nothing it would not pick up counts. With no monster left alive,
+//	comfortable level is worth more a round, the less there is, and any
+//	ammo there is room for is worth a short detour, however much the player
+//	has. Nothing it would not pick up counts. With no monster left alive,
 //	weapons, ammo and the power-ups for fighting are worth nothing.
 //
 //	The worth, weighted by need, becomes how far out of its way the player
@@ -18,14 +19,17 @@
 //	armour, a soulsphere or a first chaingun (the user, Doom II MAP03).
 //	Health weighs more when LOW - the lower, the more - and pays for any
 //	detour at all when CRITICAL (the user: a minute or two back to the
-//	level's start beats dying). Ammo weighs three times when LOW. Items
+//	level's start beats dying). Ammo weighs three times when LOW, and the
+//	ammo running out pays for any detour at all, unguarded. Items
 //	lying together are picked up on one trip, so each counts with those
 //	beside it (Doom II MAP02: three stimpacks side by side, 30 health on
 //	one trip, were left at 25 health as worth 10 each).
 //
 //	Some items are worth breaking a fight off for, close by (urgent):
-//	health when CRITICAL, a weapon the player lacks, and the ammo running
-//	out, from ammo, weapons and backpacks.
+//	health when CRITICAL (not a lone health bonus), a weapon the player
+//	lacks, and the ammo running out, from ammo, weapons and backpacks. A
+//	weapon better than the pistol, at a pistol start, goes before other
+//	items (first).
 //
 //	What the monsters guarding an item would cost in health is taken off,
 //	weighed as health is (the user, MAP02: going for four stimpacks started
@@ -68,6 +72,30 @@
 #define BIG_WORTH 25.0
 #define REACH_MOST 3000.0
 #define REACH_ANY 1.0e6
+
+// Ammo there is room for is worth having, however much the player has (the
+// user: the clips and shotguns of the zombiemen and shotgun guys just killed
+// were left lying; Doom II MAP31, the SS's clips were picked up only when run
+// over by chance): ammo for a weapon held, a weapon, a backpack pays for
+// ROOM_REACH of detour at least, DROP_REACH when a monster dropped it (the
+// user: killing monsters is an investment their ammo pays back; MAP31, where
+// the SS are most of the ammo, their clips lay 500 to 800 off to the sides of
+// the route, a detour of about 1000, and were left while ammo ran LOW). Less
+// the more it is guarded, none from ROOM_DANGER health at risk (MAP31: clips
+// with 1.5 at risk were left as guarded, then at 10 - one SS that could see
+// them - the clips of a room just cleared). The ammo running out (Wanted;
+// while ammo is LOW, any for a weapon held) pays for any detour at all, as
+// health does when CRITICAL, unguarded as above (the user, MAP31: ammo LOW for
+// most of the level, clips left lying in rooms cleared before; near dry, go
+// and get them all).
+#define ROOM_REACH 512.0
+#define DROP_REACH 1024.0
+#define ROOM_DANGER 20.0
+
+// Health is worth breaking a fight off for when CRITICAL only if it gives
+// URGENT_HEALTH at least, with what lies beside it: running from a fight for
+// a health bonus gains nothing.
+#define URGENT_HEALTH 10.0
 
 // Ammo below its comfortable level is worth more a round, the less there
 // is: up to SCARCE times as much at none, the first rounds the shots that
@@ -116,6 +144,7 @@ typedef struct
     int next;               // in its bucket, -1 at the end
     double weighted;        // its worth, weighted by need
     double most;            // the longest detour its need allows
+    boolean running_out;    // it gives the ammo running out (RunningOut)
 } entry_t;
 
 static entry_t *entries;
@@ -421,6 +450,23 @@ static double WeaponWorth(const player_t *player, weapontype_t weapon, boolean d
     return worth + AmmoWorth(player, weaponinfo[weapon].ammo, 2, dropped);
 }
 
+// Whether the item gives ammo the player can fire: ammo for a weapon held, a
+// weapon, a backpack.
+static boolean GivesAmmo(const player_t *player, const entry_t *entry)
+{
+    ammotype_t ammo;
+    weapontype_t weapon;
+    int clips;
+
+    if (AmmoItem(entry->sprite, &ammo, &clips))
+    {
+        return Usable(player, ammo);
+    }
+
+    return (WeaponItem(entry->sprite, &weapon) && weapon != wp_chainsaw)
+        || entry->sprite == SPR_BPAK;
+}
+
 // P_GiveArmor: only armour better than what is worn is taken, and it takes
 // a third (green) or a half (blue) of the damage.
 static double ArmourWorth(const player_t *player, int armour_class)
@@ -519,18 +565,53 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
     }
 }
 
-// Worth breaking a fight off for, close by (the user, Doom II MAP03: the
-// chaingun a chaingunner dropped lay near, and the bot fought on with the
-// pistol): health when CRITICAL, a weapon the player lacks, and the ammo
-// that is running out (Wanted; while ammo is LOW, any for a weapon held),
-// from ammo, a weapon or a backpack.
-static boolean Urgent(const player_t *player, const entry_t *entry,
-                      const k_conditionstatus_t *condition)
+// Whether the item gives the ammo that is running out (Wanted; while ammo is
+// LOW, any for a weapon held): ammo, a weapon, a backpack.
+static boolean RunningOut(const player_t *player, const entry_t *entry, boolean low)
 {
-    boolean low = condition->ammo == K_NEED_LOW;
     ammotype_t ammo;
     weapontype_t weapon;
     int clips;
+
+    if (AmmoItem(entry->sprite, &ammo, &clips))
+    {
+        return (low && Usable(player, ammo)) || Wanted(player, ammo);
+    }
+
+    if (WeaponItem(entry->sprite, &weapon))
+    {
+        return weapon != wp_chainsaw && (low || Wanted(player, weaponinfo[weapon].ammo));
+    }
+
+    if (entry->sprite != SPR_BPAK)
+    {
+        return false;
+    }
+
+    if (low)
+    {
+        return true;
+    }
+
+    for (ammo = 0; ammo < NUMAMMO; ++ammo)
+    {
+        if (Wanted(player, ammo))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Worth breaking a fight off for, close by (the user, Doom II MAP03: the
+// chaingun a chaingunner dropped lay near, and the bot fought on with the
+// pistol): health when CRITICAL, a weapon the player lacks, and the ammo
+// that is running out, from ammo, a weapon or a backpack.
+static boolean Urgent(const player_t *player, const entry_t *entry,
+                      const k_conditionstatus_t *condition)
+{
+    weapontype_t weapon;
 
     if (entry->item.worth <= 0.0)
     {
@@ -543,31 +624,9 @@ static boolean Urgent(const player_t *player, const entry_t *entry,
             return condition->health == K_NEED_CRITICAL;
 
         case K_ITEM_AMMO:
-            return AmmoItem(entry->sprite, &ammo, &clips)
-                && ((low && Usable(player, ammo)) || Wanted(player, ammo));
-
         case K_ITEM_WEAPON:
-            if (WeaponItem(entry->sprite, &weapon))
-            {
-                return !player->weaponowned[weapon] || low
-                    || Wanted(player, weaponinfo[weapon].ammo);
-            }
-
-            // A backpack.
-            if (low)
-            {
-                return true;
-            }
-
-            for (ammo = 0; ammo < NUMAMMO; ++ammo)
-            {
-                if (Wanted(player, ammo))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return (WeaponItem(entry->sprite, &weapon) && !player->weaponowned[weapon])
+                || entry->running_out;
 
         default:
             return false;
@@ -630,7 +689,11 @@ void K_Items_Tick(void)
 
         item->present = entry->seen == stamp;
         item->worth = item->present ? Worth(player, entry, fights) : 0.0;
+        entry->running_out = item->worth > 0.0
+                          && RunningOut(player, entry, condition->ammo == K_NEED_LOW);
         item->urgent = Urgent(player, entry, condition);
+        item->first = item->worth > 0.0 && WeaponItem(entry->sprite, &weapon)
+                   && weapon != wp_chainsaw && !player->weaponowned[weapon] && PistolOnly(player);
         entry->most = REACH_MOST;
 
         // Its guards and spot, about once a second; at once when it has been
@@ -716,6 +779,21 @@ void K_Items_Tick(void)
                     ? 0.0
                     : SDL_max(0.0, SDL_min(weighted * UNITS_PER_POINT * (1.0 + worth / BIG_WORTH),
                                            most));
+
+        if (item->danger < ROOM_DANGER && entry->running_out)
+        {
+            item->reach = REACH_ANY;
+        }
+        else if (item->danger < ROOM_DANGER && GivesAmmo(player, entry))
+        {
+            item->reach = SDL_max(item->reach, (item->dropped ? DROP_REACH : ROOM_REACH)
+                                               * (1.0 - item->danger / ROOM_DANGER));
+        }
+
+        if (item->kind == K_ITEM_HEALTH && item->together < URGENT_HEALTH)
+        {
+            item->urgent = false;
+        }
     }
 }
 

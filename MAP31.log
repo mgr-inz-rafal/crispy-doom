@@ -1,0 +1,42 @@
+00:00.0 SYS    autoplay enabled
+00:00.0 SYS    console enabled
+00:00.0 SYS    quitting when a level is finished
+00:00.0 MAP    MAP31: 686 lines, 80 sectors, 229 subsectors (0 without area, 0 behind walls, 20 split, 0 with other-sector floor) in 364 cells, 34 solid things (5 barrels) - 0 unreached, 0 centroid mismatches, 4.3 
+00:00.0 MAP    jump from (1936,-774) cell 85 to (1865,-845) cell 90: 12 units off the edge at 12.0 units a tic after a long run-up
+00:00.0 MAP    jump from (1804,-788) cell 84 to (1888,-844) cell 90: 12 units off the edge at 12.0 units a tic after a long run-up
+00:00.0 MAP    jump from (1902,-831) cell 87 to (1846,-944) cell 104: 13 units off the edge at 12.9 units a tic after a long run-up
+00:00.0 MAP    jump from (1914,-918) cell 90 to (1895,-1043) cell 107: 13 units off the edge at 12.9 units a tic after a long run-up
+00:00.0 MAP    jump from (2073,-1095) cell 113 to (2185,-1079) cell 117: 12 units off the edge at 12.5 units a tic after a long run-up
+00:00.0 MAP    jump from (2069,-1142) cell 113 to (2274,-940) cell 109: 149 units off the edge at 13.5 units a tic
+00:00.0 MAP    jump from (2026,-1047) cell 107 to (2074,-1149) cell 115: 12 units off the edge at 12.5 units a tic after a long run-up
+00:00.0 MAP    jump from (1956,-1004) cell 104 to (1989,-1112) cell 113: 12 units off the edge at 12.5 units a tic after a long run-up
+00:00.0 MAP    jump from (2088,-1186) cell 115 to (2122,-1208) cell 117: 4 units off the edge at 4.8 units a tic
+00:00.0 MAP    MAP31: 9 jumps off 15 edges, and 0 more once one of 0 sectors has moved, 3.4 ms
+00:00.0 MAP    MAP31 graph: 604 portals, 9 jumps, 0 teleporters, 62 chords, 0 holes (0 units), 0 isolated, 1 components (largest 364 of 364 cells), 5.4 ms
+00:00.0 SYS    console opened at (2339,782) 1440x1080 - remembered placement
+00:00.0 BRAIN  condition COMFY - ammo OK, health OK (100), armour LOW (0)
+00:00.0 BRAIN  added GO TO EXIT
+00:00.0 BRAIN  GO TO EXIT: going for the exit switch at line 549, 14781 units (2 of 2 reachable)
+00:00.0 NAV    path found: 61 cells, 14781 units, 61 waypoints - 1.38 ms, 810 nodes searched
+00:00.5 NAV    opening the door at line 211 (-1416,-1984)
+00:01.5 NAV    door at line 211 open after 1.0 s
+00:02.0 BRAIN  added GET CHAINGUN at (-1152,-2496) - 1164 units out of the way, worth 90 (90 with those beside it), guarded: 6 health at risk
+00:02.0 BRAIN  GET CHAINGUN: going for the chaingun at (-1152,-2496), 687 units (1 of 1 reachable)
+00:02.0 NAV    path found: 2 cells, 687 units, 2 waypoints - 0.02 ms, 4 nodes searched
+00:03.1 COMBAT target: the Wolfenstein SS at (-1946,-2586), 857 units
+00:03.6 BRAIN  GET CHAINGUN done - picked it up
+00:03.6 BRAIN  GO TO EXIT: going for the exit switch at line 549, 14879 units (2 of 2 reachable)
+00:03.6 NAV    path found: 56 cells, 14879 units, 56 waypoints - 1.26 ms, 805 nodes searched
+00:04.3 COMBAT target: the Wolfenstein SS at (-1808,-2576), 700 units
+00:06.4 NAV    opening the door at line 242 (-1152,-1096)
+00:07.2 COMBAT target: the Wolfenstein SS at (-1143,-503), 617 units
+00:07.4 NAV    door at line 242 open after 1.0 s
+00:07.8 COMBAT the Wolfenstein SS is dead (1 kills of 74)
+00:07.8 COMBAT target: the Wolfenstein SS at (-1112,-456), 577 units
+00:08.0 COMBAT fighting the Wolfenstein SS, 489 units off - the route waits
+00:08.3 COMBAT the Wolfenstein SS is dead (2 kills of 74)
+00:09.3 COMBAT fight over after 1.3 s, 1 killed - back on the way
+00:09.3 NAV    back on the way after the fight - replanned: 52 cells, 13304 units
+00:11.7 NAV    opening the door at line 250 (-1152,440)
+00:12.7 NAV    door at line 250 open after 1.0 s
+00:12.9 COMBAT target: the Wolfenstein SS at (-614,1050), 811 units

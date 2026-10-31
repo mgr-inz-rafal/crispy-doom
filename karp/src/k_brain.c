@@ -122,14 +122,25 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 
 // Items worth a detour (k_items.h, plan 7.5) are looked for every
 // ITEM_CHECK_TICS while the player follows a route, the ITEM_ROUTES most
-// promising by worth and distance as the crow flies looked at by route
-// (MAX_ITEM_ROUTES when health is CRITICAL, any detour then being worth
-// it); one with no open way there, or none on from it, is not looked at
-// again for ITEM_SKIP_TICS.
+// promising by worth and distance looked at by route (MAX_ITEM_ROUTES when
+// health is CRITICAL, any detour then being worth it); one with no open way
+// there, or none on from it, is not looked at again for ITEM_SKIP_TICS. The
+// distance is as the crow flies, or twice that from the route within
+// ROUTE_AHEAD ahead if less: an item by the route ahead costs a step aside,
+// however far off it is (Doom II MAP31: the clips of two SS just killed lay
+// by the route 340 off, past the 256 they were worth, and were run past).
 #define ITEM_CHECK_TICS TICRATE
 #define ITEM_ROUTES 2
 #define MAX_ITEM_ROUTES 4
 #define ITEM_SKIP_TICS (10 * TICRATE)
+#define ROUTE_AHEAD 1024.0
+
+// A weapon at a pistol start (k_items.h: first) is looked at by route before
+// any other item, and goes before them when in reach, but for health when
+// CRITICAL (the user: a health bonus far off was gone for, a shotgun by the
+// route left, with only the pistol in hand). FIRST_SCORE puts it ahead of
+// any score by worth and distance.
+#define FIRST_SCORE 1.0e6
 
 // In a fight only items worth breaking it off for are looked for (k_items.h:
 // urgent), and but for health when CRITICAL, only within FIGHT_REACH of
@@ -1995,6 +2006,34 @@ static double ItemReach(const k_item_t *item, boolean fighting, boolean critical
     return item->reach;
 }
 
+// How far a point lies from the route ahead, within ROUTE_AHEAD along it
+// from the player (start), the next waypoint `from`.
+static double RouteDistance(const k_path_t *path, int from, k_vec2_t start, k_vec2_t at)
+{
+    double best = 1.0e9, left = ROUTE_AHEAD;
+    k_vec2_t a = start;
+    int k;
+
+    for (k = SDL_max(from, 0); k < path->num_points && left > 0.0; ++k)
+    {
+        k_vec2_t b = path->points[k];
+        double dx = b.x - a.x, dy = b.y - a.y;
+        double length = sqrt(dx * dx + dy * dy);
+        double t = length > 0.0 ? ((at.x - a.x) * dx + (at.y - a.y) * dy) / (length * length)
+                                : 0.0;
+        double ox, oy;
+
+        t = SDL_max(0.0, SDL_min(1.0, t));
+        ox = a.x + dx * t - at.x;
+        oy = a.y + dy * t - at.y;
+        best = SDL_min(best, sqrt(ox * ox + oy * oy));
+        left -= length;
+        a = b;
+    }
+
+    return best;
+}
+
 // A route that is open, or (fixed) blocked where the fix of that type and
 // param opens it: the fix for it (RouteFix) is that one. However many
 // crossings it is: the bars of one sector are a crossing each (Doom II
@@ -2115,7 +2154,7 @@ static boolean ConsiderItems(goal_t *goal)
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
     double best_slack = 0.0, best_detour = 0.0;
-    boolean best_fixed = false;
+    boolean best_fixed = false, best_first = false;
     const k_item_t *chosen;
     k_pose_t player;
     k_vec2_t start, end;
@@ -2132,7 +2171,9 @@ static boolean ConsiderItems(goal_t *goal)
 
     was_critical = critical;
 
-    if (leveltime < item_check_tic)
+    // A goal not planned yet (the one below an item just picked up) does not
+    // use the look up: it comes once it is.
+    if (leveltime < item_check_tic || !goal->planned)
     {
         return false;
     }
@@ -2172,7 +2213,8 @@ static boolean ConsiderItems(goal_t *goal)
         item_skip_size = K_Items_Count() * 2;
     }
 
-    // The most promising few, by worth and distance as the crow flies.
+    // The most promising few, by worth and distance: as the crow flies, or
+    // twice that from the route ahead.
     for (i = 0; i < K_Items_Count(); ++i)
     {
         const k_item_t *item = K_Items_Get(i);
@@ -2181,6 +2223,11 @@ static boolean ConsiderItems(goal_t *goal)
         double reach = ItemReach(item, fighting, critical);
         double score;
 
+        if (item->present && reach > 0.0 && distance > reach)
+        {
+            distance = SDL_min(distance, 2.0 * RouteDistance(path, nav->target, start, item->at));
+        }
+
         if (!item->present || reach <= 0.0 || distance > reach
          || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i)
          || (fighting && !item->urgent))
@@ -2188,7 +2235,7 @@ static boolean ConsiderItems(goal_t *goal)
             continue;
         }
 
-        score = reach / (distance + 64.0);
+        score = reach / (distance + 64.0) + (item->first && !critical ? FIRST_SCORE : 0.0);
 
         // Kept best first.
         if (found == routes && score <= order_score[routes - 1])
@@ -2211,6 +2258,7 @@ static boolean ConsiderItems(goal_t *goal)
     {
         const k_item_t *item = K_Items_Get(order[k]);
         double reach = ItemReach(item, fighting, critical);
+        boolean first = item->first && !critical;
         double detour;
         boolean fixed;
 
@@ -2221,12 +2269,15 @@ static boolean ConsiderItems(goal_t *goal)
             continue;
         }
 
-        if (detour <= reach && (best < 0 || reach - detour > best_slack))
+        if (detour <= reach
+         && (best < 0 || (first && !best_first)
+             || (first == best_first && reach - detour > best_slack)))
         {
             best = order[k];
             best_slack = reach - detour;
             best_detour = detour;
             best_fixed = fixed;
+            best_first = first;
         }
     }
 
@@ -2421,6 +2472,12 @@ void K_Brain_Tick(void)
     if ((goal->type == GOAL_KEY && K_Specials_HasKey(goal->param))
      || (goal->type == GOAL_ITEM && !K_Items_Get(goal->param)->present))
     {
+        // The next item looked for at once: drops lie together after a fight.
+        if (goal->type == GOAL_ITEM)
+        {
+            item_check_tic = 0;
+        }
+
         DoneGoal("picked it up");
         return;
     }

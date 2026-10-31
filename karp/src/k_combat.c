@@ -9,14 +9,16 @@
 //	the way first, then the most dangerous kinds (hitscanners), awake ones,
 //	attacking ones, near ones, those that drop what the player wants (a
 //	shotgun guy, out of shells); far ones are left alone (the user: chasing
-//	a far hitscanner wastes time and ammo).
+//	a far hitscanner wastes time and ammo), and so are tough ones whose
+//	shots can be sidestepped across a large room (a cacodemon, a baron).
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
 //	hand (a switch takes about 0.9 s), and never instead of one whose next
 //	shot should kill the target. The pistol is the last resort: for
-//	monsters with little health sniped at from far off with the area clear,
-//	and when nothing better can hurt the target; the bare fist comes after
-//	it. Nav faces the target wherever it
+//	monsters with little health sniped at from far off, not closing in,
+//	with the area clear, and when nothing better can hurt the target; the
+//	bare fist comes after it, and melee is for weak monsters only. Nav
+//	faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
 //
@@ -94,6 +96,18 @@
 #define ASLEEP_REACH 512.0
 #define TARGET_STICK 1.3
 #define WOUNDED 0.5
+
+// Monsters with no bullets - their shots can be sidestepped - and more than
+// LEAVE_HEALTH left are left alone beyond LEAVE_REACH (LEAVE_KEEP for the
+// target already, or it flips at the edge): a cacodemon or a baron across a
+// large room is little threat, and fighting it there spends the ammo the
+// hitscanners further on need (the user: the last bullets spent on a
+// cacodemon that was no threat, then death to a shotgun guy). It is fought
+// once it comes close, or stands in the way. Not the arch-vile, whose flame
+// no sidestep escapes, nor the pain elemental, whose lost souls keep coming.
+#define LEAVE_REACH 512.0
+#define LEAVE_KEEP 640.0
+#define LEAVE_HEALTH 100
 
 // A target lost and found again within REGAIN_TICS is no new one: the time
 // it has gone unhurt and the shots that missed it count on (MAP03: a
@@ -192,11 +206,16 @@
 // than SNIPE_HEALTH left, sniped at: a zombieman, shotgun guy, chaingunner,
 // imp, SS or lost soul, or anything worn down that far - never a spider
 // mastermind or a mancubus, which would take too long (the user). Never
-// one hunting the player: it comes at it, and soon it is a fight (MAP04:
-// the pistol came up for an imp 646 off as the imps closed in, the shotgun
-// again 1.4 s later at 238, and the bot died 2 s after; MAP02: shotgun
-// guys sniped at 650 to 730 off walked into a fight within a second or
-// two). Zombiemen and shotgun guys get no more than that (MAP02: with the
+// one closing in - over the last CLOSING_TICS it came CLOSING_MOST nearer
+// the player or more, of itself (the player's own moves aside), or it has
+// not been watched that long: it comes at the player, and soon it is a
+// fight (MAP04: the pistol came up for an imp 646 off as the imps closed
+// in, the shotgun again 1.4 s later at 238, and the bot died 2 s after;
+// MAP02: shotgun guys sniped at 650 to 730 off walked into a fight within
+// a second or two). Every awake monster hunts the player, so that is no
+// test (the user: sniping never happened). One standing off - on a far
+// ledge, behind a window - is sniped at. Zombiemen and shotgun guys get no
+// more than that (MAP02: with the
 // pistol theirs at any distance, it stayed up 40 s, the super shotgun
 // beside it rating no better against them). And only with the area clear
 // for SNIPE_CALM: no fight on, no awake monster in sight within
@@ -210,12 +229,18 @@
 #define SNIPE_HEALTH 100
 #define SNIPE_CLEAR 512.0
 #define SNIPE_CALM (3 * TICRATE)
+#define CLOSING_TICS TICRATE
+#define CLOSING_MOST 32.0
 
 // The bare fist (no berserk) is the last resort of all: it rates FIST_SHARE
 // of its damage (MAP04: the shotgun ran dry with an imp 53 off, the fist
 // tied with the pistol and came first, and the imps took the bot from 37
-// to 5).
+// to 5). So is any melee - the berserk fist, the chainsaw - against a
+// monster with more than MELEE_HEALTH left: a baron or a cacodemon takes
+// many blows, the player standing in reach of its own (the user: the fist
+// brought up against a baron of hell, ammo full).
 #define FIST_SHARE 0.25
+#define MELEE_HEALTH 200
 
 // Rockets: none at anything nearer than ROCKET_MIN (the blast reaches 128
 // from where it hits, the player's box 16 more), unless invulnerable for
@@ -425,6 +450,12 @@ static int last_health = -1;
 static int target_health;
 static int progress_tic;
 static int sighted;
+
+// Where the target was over the last CLOSING_TICS, and whether it is
+// closing in (PistolRight).
+static k_vec2_t target_track[CLOSING_TICS];
+static int tracked;
+static boolean closing;
 
 // Shots fired since the target was last hurt, told by the ammo the weapon in
 // hand uses going down.
@@ -1050,11 +1081,48 @@ static int IndexOf(const mobj_t *mo)
     return -1;
 }
 
+// A tough monster with no bullets across a large room (LEAVE_REACH).
+static boolean FarAndDodgeable(const k_monster_t *monster, const mobj_t *mo)
+{
+    return !monster->hitscan && monster->type != MT_VILE && monster->type != MT_PAIN
+        && monster->health > LEAVE_HEALTH
+        && monster->distance > (mo == target_mo ? LEAVE_KEEP : LEAVE_REACH);
+}
+
+// Whether the target closes in on the player: over the last CLOSING_TICS it
+// came CLOSING_MOST nearer or more of itself, the player's own moves aside.
+// One not watched that long yet (same: the target last tic too) counts as
+// closing in.
+static void Track(k_vec2_t me, const k_monster_t *monster, boolean same)
+{
+    if (!same)
+    {
+        tracked = 0;
+    }
+
+    if (tracked >= CLOSING_TICS)
+    {
+        k_vec2_t then = target_track[tracked % CLOSING_TICS];
+
+        // Its own move, toward where the player is now.
+        closing = ((monster->at.x - then.x) * (me.x - monster->at.x)
+                 + (monster->at.y - then.y) * (me.y - monster->at.y))
+                / SDL_max(monster->distance, 1.0) >= CLOSING_MOST;
+    }
+    else
+    {
+        closing = true;
+    }
+
+    target_track[tracked++ % CLOSING_TICS] = monster->at;
+}
+
 static void ChooseTarget(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double facing = player->mo->angle * (2.0 * K_PI / 4294967296.0);
     double best_score = 0.0;
+    boolean same;
     int best = -1;
     int i;
 
@@ -1065,7 +1133,7 @@ static void ChooseTarget(const player_t *player)
 
         if (!monster->shootable || monster->distance > TARGET_REACH
          || (!monster->awake && monster->distance > ASLEEP_REACH)
-         || Ignored(monster_mobjs[i]))
+         || FarAndDodgeable(monster, monster_mobjs[i]) || Ignored(monster_mobjs[i]))
         {
             continue;
         }
@@ -1099,7 +1167,9 @@ static void ChooseTarget(const player_t *player)
         }
     }
 
-    if (best >= 0 && monster_mobjs[best] == target_mo)
+    same = best >= 0 && monster_mobjs[best] == target_mo;
+
+    if (same)
     {
         k_vec2_t moved = { monsters[best].at.x - target_last.x,
                            monsters[best].at.y - target_last.y };
@@ -1158,6 +1228,7 @@ static void ChooseTarget(const player_t *player)
     if (best >= 0)
     {
         target_last = monsters[best].at;
+        Track(me, &monsters[best], same);
     }
 }
 
@@ -1238,18 +1309,17 @@ static void UpdateClear(void)
     }
 }
 
-// Whether the pistol is right for the monster: far off with little health
-// left, not hunting the player, the area clear a while; or nothing better
-// can hurt it.
-static boolean PistolRight(const player_t *player, const k_monster_t *monster,
-                           const mobj_t *mo)
+// Whether the pistol is right for the target: far off with little health
+// left, not closing in, the area clear a while; or nothing better can hurt
+// it.
+static boolean PistolRight(const player_t *player, const k_monster_t *monster)
 {
     weapontype_t in_hand = player->pendingweapon != wp_nochange ? player->pendingweapon
                                                                 : player->readyweapon;
     int i;
 
     if (monster->distance >= (in_hand == wp_pistol ? SNIPE_KEEP : SNIPE_REACH)
-     && monster->health <= SNIPE_HEALTH && mo->target != player->mo
+     && monster->health <= SNIPE_HEALTH && !closing
      && leveltime - unclear_tic >= SNIPE_CALM)
     {
         return true;
@@ -1272,7 +1342,7 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster,
 }
 
 // Rating, less for the last resorts: the pistol where it is not right, the
-// bare fist always.
+// bare fist always, any melee against a tough monster.
 static double Preference(const player_t *player, const weapon_t *weapon,
                          const k_monster_t *monster, boolean pistol_right)
 {
@@ -1282,7 +1352,9 @@ static double Preference(const player_t *player, const weapon_t *weapon,
     {
         rating *= PISTOL_SHARE;
     }
-    else if (weapon->weapon == wp_fist && !player->powers[pw_strength])
+    else if (weapon->reach > 0.0
+          && ((weapon->weapon == wp_fist && !player->powers[pw_strength])
+              || monster->health > MELEE_HEALTH))
     {
         rating *= FIST_SHARE;
     }
@@ -1308,7 +1380,7 @@ static void ChooseWeapon(const player_t *player)
     }
 
     monster = &monsters[status.target];
-    pistol_right = PistolRight(player, monster, monster_mobjs[status.target]);
+    pistol_right = PistolRight(player, monster);
 
     for (i = 0; i < arrlen(weapons); ++i)
     {

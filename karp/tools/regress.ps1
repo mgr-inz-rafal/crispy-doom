@@ -89,7 +89,9 @@ $logs = Join-Path $Out 'logs'
 New-Item -ItemType Directory -Force -Path $runs, $logs | Out-Null
 
 $started = @{}
-$play = if ($Monsters) { @('-skill', '3') } else { @('-nomonsters') }
+# Kept an array: a lone '-nomonsters' would come out a string, and += would
+# glue the next argument onto it.
+$play = @(if ($Monsters) { '-skill', '3' } else { '-nomonsters' })
 
 if ($null -ne $Salt) {
     $play += @('-karpsalt', "$Salt")
