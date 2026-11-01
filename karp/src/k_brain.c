@@ -11,7 +11,8 @@
 //	candidate whose route is blocked by the most fixable crossings wins,
 //	and the fix for the first of them goes on the stack, in front: GET KEY
 //	for a locked door, USE TRIGGER for a sector a switch or walk-over line
-//	moves. When that is done it comes off, and the goal below is planned
+//	moves, KILL EVERY <kind> for one a boss's death moves (E1M8's barons).
+//	When that is done it comes off, and the goal below is planned
 //	again from wherever the player is: the world has changed.
 //
 //	A goal is done when its condition holds, however that came about. A
@@ -225,6 +226,7 @@ typedef enum
     GOAL_TRIGGER,           // any line that moves a sector
     GOAL_ITEM,              // an item worth a detour, on top of the chain
     GOAL_BARREL,            // a barrel in the way, shot from a safe spot
+    GOAL_KILL,              // every monster of a kind dead: a map's bosses
 } goal_type_t;
 
 // A place a goal can be met, and what to do there.
@@ -242,7 +244,8 @@ typedef struct
     goal_type_t type;
     int param;              // GOAL_KEY: the key; GOAL_TRIGGER: the sector;
                             // GOAL_ITEM: the item (K_Items_Get); GOAL_BARREL:
-                            // the barrel's block (k_block_t)
+                            // the barrel's block (k_block_t); GOAL_KILL: the
+                            // kind (mobjtype_t)
     k_vec2_t point;         // GOAL_GOTO
 
     // Not planned until a candidate is chosen; planned again when it
@@ -256,6 +259,8 @@ typedef struct
     int num_tried;
     int shut;                   // times its way shut on the way (MAX_SHUT)
     boolean idle;               // GO TO EXIT: no way for now, waiting
+    boolean staying;            // GO TO EXIT: on the exit floor, waiting for
+                                // it to end the level
     boolean shooting;           // GOAL_BARREL: at the spot, combat shooting
                                 // (wait counts the tics)
     boolean fixable;            // GOAL_ITEM: gone for through a fix in its
@@ -353,6 +358,11 @@ static void GoalName(const goal_t *goal, char *buf, int len)
             M_snprintf(buf, len, "SHOOT BARREL at (%.0f,%.0f)",
                        K_Map_Get()->blocks[goal->param].at.x,
                        K_Map_Get()->blocks[goal->param].at.y);
+            break;
+
+        case GOAL_KILL:
+            M_snprintf(buf, len, "KILL EVERY %s", K_Combat_KindName(goal->param));
+            M_ForceUppercase(buf);
             break;
 
         // The line's tag: a stair builder's steps after the first are not
@@ -866,6 +876,27 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                     ++count;
                 }
             }
+
+            // A floor that ends the level (E1M8): any of its cells, the
+            // route picks one it reaches (E1M8's is a box teleported into,
+            // the floor round it void).
+            for (i = 0; i < map->num_cells && count < max; ++i)
+            {
+                const k_cell_t *cell = &map->cells[i];
+                int sector = map->subsectors[cell->subsector].sector;
+
+                if (K_Specials_ExitSector(sector)
+                 && K_Graph_Clearance(cell->centroid, PLAYER_RADIUS + 1.0) > PLAYER_RADIUS)
+                {
+                    out[count].at = cell->centroid;
+                    out[count].kind = K_GOAL_POINT;
+                    out[count].line = -1;
+                    M_snprintf(out[count].what, sizeof(out[count].what),
+                               "exit floor in sector %d at (%.0f,%.0f)", sector,
+                               cell->centroid.x, cell->centroid.y);
+                    ++count;
+                }
+            }
             break;
 
         case GOAL_KEY:
@@ -916,6 +947,24 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 
         case GOAL_BARREL:
             count = BarrelSpots(goal->param, out, max);
+            break;
+
+        // Where each one is now: once in sight, combat fights it.
+        case GOAL_KILL:
+            {
+                k_vec2_t at[MAX_CANDIDATES];
+
+                count = SDL_min(K_Specials_FindMonsters(goal->param, at, max), max);
+
+                for (i = 0; i < count; ++i)
+                {
+                    out[i].at = at[i];
+                    out[i].kind = K_GOAL_POINT;
+                    out[i].line = -1;
+                    M_snprintf(out[i].what, sizeof(out[i].what), "%s at (%.0f,%.0f)",
+                               K_Combat_KindName(goal->param), at[i].x, at[i].y);
+                }
+            }
             break;
 
         case GOAL_TRIGGER:
@@ -1099,6 +1148,32 @@ static boolean FixForPinch(int cell, k_vec2_t at, goal_type_t *type, int *param,
     return true;
 }
 
+// The kind of boss whose death moves the sector one of the ways wanted
+// (k_specials.h: A_BossDeath; E1M8: the barons lower the star-shaped wall
+// before the teleporter to the exit floor), with some still alive and the
+// goal allowed; -1 if none. With tag 0 (sector -1): one whose death ends
+// the level (E2M8, E3M8).
+static int BossFor(int sector, int want)
+{
+    k_boss_t bosses[4];
+    int count = K_Specials_Bosses(bosses, arrlen(bosses));
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if ((sector < 0 ? bosses[i].tag == 0
+                        : bosses[i].tag != 0 && bosses[i].tag == sectors[sector].tag
+                          && (bosses[i].moves & want))
+         && K_Specials_FindMonsters(bosses[i].type, NULL, 0) > 0
+         && Allowed(GOAL_KILL, bosses[i].type))
+        {
+            return bosses[i].type;
+        }
+    }
+
+    return -1;
+}
+
 // What would get the player past a blocked crossing, if anything: the key
 // for a locked door; for a step too high, a line that lowers the floor
 // beyond or raises the one the player is on, never one that lowers it (Doom
@@ -1112,8 +1187,9 @@ static boolean FixForPinch(int cell, k_vec2_t at, goal_type_t *type, int *param,
 // headroom, Doom II MAP05). One sector at a time: if the gap is still too
 // narrow once it moved, the next one is pushed (Doom II MAP19: three key
 // bars, two of which must be open). For a jump that does not work now, a
-// line that raises its takeoff floor back, or lowers its landing. want gets
-// the moves that would help.
+// line that raises its takeoff floor back, or lowers its landing. Where no
+// line does it, the map's bosses whose death does (BossFor). want gets the
+// moves that would help.
 static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *type,
                       int *param, int *want)
 {
@@ -1261,6 +1337,18 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
             *type = GOAL_TRIGGER;
             *param = sectors_[i];
             *want = wants[i];
+            return true;
+        }
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        int boss = sectors_[i] >= 0 ? BossFor(sectors_[i], wants[i]) : -1;
+
+        if (boss >= 0)
+        {
+            *type = GOAL_KILL;
+            *param = boss;
             return true;
         }
     }
@@ -1711,7 +1799,7 @@ static void PlanGoal(goal_t *goal)
     int count = Candidates(goal, candidates, MAX_CANDIDATES);
     int best_open = -1, best_blocked = -1, reachable = 0;
     int waitable = 0;   // candidates with no way now, which a move may open
-    int moving;
+    int moving, boss;
     double open_length = 0.0, blocked_score = 0.0;
     goal_type_t fix_type = GOAL_GOTO;
     int fix_param = 0, fix_want = 0, fix_portal = -1, fix_from = -1;
@@ -1734,7 +1822,7 @@ static void PlanGoal(goal_t *goal)
     num_reasons = 0;
 
     M_snprintf(reason, sizeof(reason), "%s",
-               goal->type == GOAL_EXIT ? "the map has no exit line"
+               goal->type == GOAL_EXIT ? "the map has no exit line or floor"
              : goal->type == GOAL_KEY ? "no such key lies in the level"
              : goal->type == GOAL_TRIGGER ? "no line moves the sector any more"
              : goal->type == GOAL_ITEM ? "it is gone, or no spot touches it"
@@ -1911,6 +1999,19 @@ static void PlanGoal(goal_t *goal)
         GoalName(fix, fix_name, sizeof(fix_name));
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: %s - added %s", name, blocker, fix_name);
     }
+    else if (goal->type == GOAL_EXIT && (boss = BossFor(-1, 0)) >= 0)
+    {
+        // The level ends when the last of the map's bosses dies (E2M8,
+        // E3M8: no exit line).
+        goal_t *fix;
+        char fix_name[64];
+
+        M_snprintf(goal->note, sizeof(goal->note), "the level ends when the last %s dies",
+                   K_Combat_KindName(boss));
+        fix = Push(GOAL_KILL, boss);
+        GoalName(fix, fix_name, sizeof(fix_name));
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: %s - added %s", name, goal->note, fix_name);
+    }
     else if (waitable > 0 && (moving = K_Graph_MovingSector()) >= 0
           && goal->waited < MAX_WAIT_TICS)
     {
@@ -2064,6 +2165,90 @@ static boolean UpdateTrigger(goal_t *goal)
         DoneGoal(how);
     }
 
+    return true;
+}
+
+static boolean OnExitFloor(void)
+{
+    const mobj_t *mo = players[consoleplayer].mo;
+
+    return mo != NULL && K_Specials_ExitSector((int) (mo->subsector->sector - sectors));
+}
+
+// Gone for the floor that ends the level (E1M8): once on it, the player
+// stays put, whatever its health (no detour: ConsiderItems), until the
+// floor has taken it down to 10 and the level ends; pushed off, it goes back.
+// Returns true while it handles the goal.
+static boolean UpdateExitFloor(goal_t *goal)
+{
+    if (goal->chosen.line >= 0)
+    {
+        return false;
+    }
+
+    if (!OnExitFloor())
+    {
+        if (goal->staying)
+        {
+            goal->staying = false;
+            goal->planned = false;
+            K_Nav_Clear();
+            return true;
+        }
+
+        return false;
+    }
+
+    if (!goal->staying)
+    {
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: on the exit floor - staying while it takes "
+              "the health down to 10, which ends the level");
+        M_StringCopy(goal->note, "on the exit floor, waiting for it to end the level",
+                     sizeof(goal->note));
+        goal->staying = true;
+        K_Nav_Clear();
+    }
+
+    return true;
+}
+
+// The monster of the kind gone for has moved KILL_DRIFT from where it stood
+// then (looked at every KILL_LOOK_TICS, not in a fight): planned again.
+// Returns true if it was.
+#define KILL_DRIFT 256.0
+#define KILL_LOOK_TICS TICRATE
+
+static boolean UpdateKill(goal_t *goal)
+{
+    k_vec2_t at[MAX_CANDIDATES];
+    double nearest = -1.0;
+    int count, i;
+
+    if (++goal->wait < KILL_LOOK_TICS || K_Combat_GetStatus()->battle)
+    {
+        return false;
+    }
+
+    goal->wait = 0;
+    count = SDL_min(K_Specials_FindMonsters(goal->param, at, MAX_CANDIDATES), MAX_CANDIDATES);
+
+    for (i = 0; i < count; ++i)
+    {
+        double distance = hypot(at[i].x - goal->chosen.at.x, at[i].y - goal->chosen.at.y);
+
+        if (nearest < 0.0 || distance < nearest)
+        {
+            nearest = distance;
+        }
+    }
+
+    if (nearest >= 0.0 && nearest < KILL_DRIFT)
+    {
+        return false;
+    }
+
+    goal->planned = false;
+    K_Nav_Clear();
     return true;
 }
 
@@ -2322,8 +2507,9 @@ static boolean ConsiderItems(goal_t *goal)
     was_critical = critical;
 
     // A goal not planned yet (the one below an item just picked up) does not
-    // use the look up: it comes once it is.
-    if (leveltime < item_check_tic || !goal->planned)
+    // use the look up: it comes once it is. Nothing takes the player off the
+    // exit floor (E1M8: health is what it takes).
+    if (leveltime < item_check_tic || !goal->planned || goal->staying)
     {
         return false;
     }
@@ -2862,6 +3048,14 @@ void K_Brain_Tick(void)
         return;
     }
 
+    // What their death moves is on its way (A_BossDeath runs as the last
+    // one dies).
+    if (goal->type == GOAL_KILL && K_Specials_FindMonsters(goal->param, NULL, 0) == 0)
+    {
+        DoneGoal("every one is dead");
+        return;
+    }
+
     // Gone, and the chain over: a blast pushes a barrel off its square
     // before it goes off itself (MAP23: the bot set off for the way on, and
     // the barrel in it hit it for 48).
@@ -2936,6 +3130,12 @@ void K_Brain_Tick(void)
         return;
     }
 
+    if ((goal->type == GOAL_EXIT && UpdateExitFloor(goal))
+     || (goal->type == GOAL_KILL && UpdateKill(goal)))
+    {
+        return;
+    }
+
     // At the spot, combat shoots; a fight comes first, and does not count.
     if (goal->type == GOAL_BARREL && goal->shooting)
     {
@@ -2976,6 +3176,13 @@ void K_Brain_Tick(void)
                 goal->shooting = true;
                 goal->wait = 0;
                 M_StringCopy(goal->note, "shooting it", sizeof(goal->note));
+            }
+            else if (goal->type == GOAL_KILL)
+            {
+                // It has moved on: where to now, in a moment.
+                goal->planned = false;
+                goal->retry_tic = leveltime + TICRATE;
+                K_Nav_Clear();
             }
             else
             {

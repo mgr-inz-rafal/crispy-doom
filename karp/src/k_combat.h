@@ -115,6 +115,9 @@ int K_Combat_BlastsPending(double x, double y, double reach);
 // command in which nav uses, fires or changes weapons itself.
 void K_Combat_Fire(int tic, k_command_t *command);
 
+// What a kind of monster (a mobjtype_t) is called: "baron of hell".
+const char *K_Combat_KindName(int type);
+
 int K_Combat_MonsterCount(void);
 const k_monster_t *K_Combat_Monster(int index);
 int K_Combat_ProjectileCount(void);

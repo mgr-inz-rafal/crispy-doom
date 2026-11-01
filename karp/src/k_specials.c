@@ -551,3 +551,93 @@ int K_Specials_FindKeys(k_key_t key, k_keything_t *keys, int max)
 
     return count;
 }
+
+int K_Specials_ExitSector(int sector)
+{
+    return sectors[sector].special == 11;
+}
+
+static int AddBoss(k_boss_t *bosses, int count, int max, int type, int tag, int moves)
+{
+    if (count < max)
+    {
+        bosses[count].type = type;
+        bosses[count].tag = tag;
+        bosses[count].moves = moves;
+    }
+
+    return count + 1;
+}
+
+// A_BossDeath's victory: a floor lowered to the lowest beside it, a door
+// opened fast (E4M6), a floor raised to its texture (MAP07's arachnotrons),
+// or G_ExitLevel. Registered Doom's older rules (any boss on map 8) differ
+// only for bosses on episodes they do not belong to.
+int K_Specials_Bosses(k_boss_t *bosses, int max)
+{
+    int count = 0;
+
+    if (gamemode == commercial)
+    {
+        if (P_CheckMapTag666())
+        {
+            count = AddBoss(bosses, count, max, MT_FATSO, 666, K_MOVE_FLOOR_DOWN);
+            count = AddBoss(bosses, count, max, MT_BABY, 667, K_MOVE_FLOOR_UP);
+        }
+    }
+    else if (gameepisode == 1 && gamemap == 8)
+    {
+        count = AddBoss(bosses, count, max, MT_BRUISER, 666, K_MOVE_FLOOR_DOWN);
+    }
+    else if (gameepisode == 2 && gamemap == 8)
+    {
+        count = AddBoss(bosses, count, max, MT_CYBORG, 0, 0);
+    }
+    else if (gameepisode == 3 && gamemap == 8)
+    {
+        count = AddBoss(bosses, count, max, MT_SPIDER, 0, 0);
+    }
+    else if (gameepisode == 4 && gamemap == 6)
+    {
+        count = AddBoss(bosses, count, max, MT_CYBORG, 666, K_MOVE_CEILING_UP);
+    }
+    else if (gameepisode == 4 && gamemap == 8)
+    {
+        count = AddBoss(bosses, count, max, MT_SPIDER, 666, K_MOVE_FLOOR_DOWN);
+    }
+
+    return SDL_min(count, max);
+}
+
+int K_Specials_FindMonsters(int type, k_vec2_t *at, int max)
+{
+    const thinker_t *thinker;
+    int count = 0;
+
+    for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
+    {
+        const mobj_t *mo;
+
+        if (thinker->function.acp1 != (actionf_p1) P_MobjThinker)
+        {
+            continue;
+        }
+
+        mo = (const mobj_t *) thinker;
+
+        if (mo->type != (mobjtype_t) type || mo->health <= 0)
+        {
+            continue;
+        }
+
+        if (at != NULL && count < max)
+        {
+            at[count].x = (double) mo->x / FRACUNIT;
+            at[count].y = (double) mo->y / FRACUNIT;
+        }
+
+        ++count;
+    }
+
+    return count;
+}

@@ -73,6 +73,7 @@
 
 #include "SDL.h"
 
+#include "d_main.h"
 #include "doomdef.h"
 #include "doomstat.h"
 #include "m_misc.h"
@@ -2720,7 +2721,8 @@ void K_Combat_Tick(int driving)
         battle = false;
         status.battle = false;
 
-        if (!status.died)
+        // Not when the death ended the level (E1M8's exit floor).
+        if (!status.died && gameaction != ga_completed)
         {
             AttackerName(player, name, sizeof(name));
             K_Log(K_LOG_COMBAT, K_LOG_WARN, "died at (%.0f,%.0f), %.1f s into the level - "
@@ -3258,6 +3260,11 @@ int K_Combat_Move(double *vx, double *vy)
     *vx = move.x;
     *vy = move.y;
     return 1;
+}
+
+const char *K_Combat_KindName(int type)
+{
+    return Kind(type)->name;
 }
 
 int K_Combat_MonsterCount(void)

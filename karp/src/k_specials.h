@@ -1,7 +1,8 @@
 //
 // DESCRIPTION:
 //	Karp's knowledge of what lines and things do: exit lines, lines that
-//	move other sectors (switches and walk-over lines), and keys
+//	move other sectors (switches and walk-over lines), keys, the floor that
+//	ends E1M8, and the bosses whose death moves sectors or ends the level
 //	(karp/docs/plan.md, 3.5).
 //
 //	Plain C types only.
@@ -48,6 +49,16 @@ typedef struct
     k_vec2_t at;
     int skull;              // a skull key rather than a keycard
 } k_keything_t;
+
+// A boss of the map (A_BossDeath): when the last monster of its kind dies,
+// the sectors with the tag move one of the ways in moves (k_move_t); with
+// tag 0, the level ends.
+typedef struct
+{
+    int type;               // mobjtype_t
+    int tag;
+    int moves;
+} k_boss_t;
 
 // Called on every level load, after the map.
 void K_Specials_Build(void);
@@ -101,6 +112,20 @@ int K_Specials_HasKey(k_key_t key);
 // Keys of a colour lying in the level, cards and skulls; up to max.
 // Returns how many there are.
 int K_Specials_FindKeys(k_key_t key, k_keything_t *keys, int max);
+
+// Whether the sector's floor ends the level once it has taken the player's
+// health down to 10 (special 11, E1M8's: 20 damage a second, god mode
+// off). The player then often dies, and the level ends all the same.
+int K_Specials_ExitSector(int sector);
+
+// The map's bosses, as A_BossDeath has them (Ultimate Doom's rules: each
+// episode's own boss on its map 8, and E4M6; Doom II MAP07), up to max.
+// Returns how many.
+int K_Specials_Bosses(k_boss_t *bosses, int max);
+
+// Live monsters of a kind (a mobjtype_t), up to max of them by place (at
+// may be NULL). Returns how many there are.
+int K_Specials_FindMonsters(int type, k_vec2_t *at, int max);
 
 #ifdef __cplusplus
 }

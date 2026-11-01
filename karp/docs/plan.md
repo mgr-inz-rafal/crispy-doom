@@ -2644,7 +2644,8 @@ Who controls the player in a fight (the user's model):
   medikit loses to a lonely one further away). Danger counts the monsters at the item only, not
   those on the way there (the user: they are met and fought anyway, and move about); added later
   if runs show the bot walking into big fights on its way to an item that looked safe.
-- **KILL ALL <kind>** (follow-up 10): Doom II MAP07 and MAP32, Doom's E1M8, E4M6, E4M8.
+- **KILL ALL <kind>** (follow-up 10): Doom II MAP07 and MAP32, Doom's E1M8, E4M6, E4M8. Done as
+  KILL EVERY <kind> (7.8, "Boss levels"), but for MAP32's Keens.
 - **Barrels** that block the way are removed by shooting them (follow-up 3.2), with the same
   sight, aiming and firing. MAP23 needs nothing of its own (the user).
 
@@ -2928,6 +2929,23 @@ Who controls the player in a fight (the user's model):
   "blocked by a door that needs the red key", and the red key is gone for. E1M7 then: finished
   in 211 s, 79 of 84 killed, 100 health. Items still have only the spot where they lie (a detour
   missed, never a stall).
+- **Boss levels** (the user, E1M8: "the map has no exit line", and the bot stood at the start).
+  E1M8 ends on a floor (sector special 11: god mode off, 20 damage a second, the level ends once
+  health is down to 10, the player often dying in that tic). That floor, sector 66, is a box
+  reached by a teleporter, and the way there runs through sector 30, a star-shaped wall that
+  lowers only when both barons are dead (A_BossDeath, tag 666). Done: a floor that ends the
+  level is an exit candidate (any of its cells, the route picks); once on it the player stays,
+  no detours, until the level ends, and a death that ends the level counts as finishing it.
+  A_BossDeath's rules (Ultimate Doom's: E1M8 barons lower tag 666, E4M6's cyberdemon opens it,
+  E4M8's spider lowers it, E2M8 and E3M8 end the level; Doom II MAP07, mancubi lower 666 and
+  arachnotrons raise 667) give a new goal, KILL EVERY <kind>: a fix for a crossing those sectors
+  block where no line moves them, and the exit itself on maps that end with the boss. Its
+  candidates are where each of the kind stands now, planned again when the one gone for has
+  moved 256 off; once in sight, combat fights it. E1M8 then: the barons' door opened at 41.5 s,
+  both dead at 1:04.6, the lift and the teleporter, on the exit floor at 1:27.9, finished in
+  90.5 s. MAP07 plans right (arachnotrons, behind walls the mancubi lower; mancubi first) and
+  dies at 9.3 s in the open among four mancubi: a fight, not a plan. Left: MAP32's Keens (tag
+  666 opens when they all die, any map, A_KeenDie), which combat never shoots (no cost).
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.

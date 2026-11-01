@@ -248,16 +248,9 @@ void K_Ticker(void)
         K_Items_Tick();
     }
 
-    // On death the bot stops (the user): there is nothing more to learn
-    // from the run.
-    if (autoplay_enabled && quit_on_exit && gamestate == GS_LEVEL
-     && K_Combat_GetStatus()->died)
-    {
-        K_Log(K_LOG_SYS, K_LOG_INFO, "the player died - quitting (-quitonexit)");
-        I_Quit();
-    }
-
     // An exit sets this during the tic; the intermission starts next tic.
+    // First: E1M8's exit floor often kills the player in the tic it ends
+    // the level.
     if ((autoplay_enabled || console_enabled || quit_on_exit)
      && gameaction == ga_completed && !level_completed)
     {
@@ -269,6 +262,15 @@ void K_Ticker(void)
             K_Log(K_LOG_SYS, K_LOG_INFO, "level finished - quitting (-quitonexit)");
             I_Quit();
         }
+    }
+
+    // On death the bot stops (the user): there is nothing more to learn
+    // from the run.
+    if (autoplay_enabled && quit_on_exit && gamestate == GS_LEVEL
+     && K_Combat_GetStatus()->died && !level_completed)
+    {
+        K_Log(K_LOG_SYS, K_LOG_INFO, "the player died - quitting (-quitonexit)");
+        I_Quit();
     }
 
     if (K_OwnsControls())
