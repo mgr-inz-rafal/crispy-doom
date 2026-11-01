@@ -75,7 +75,8 @@ void K_Combat_Tick(int driving);
 
 // For the command that will run as game tic `tic`, built while the bot
 // drives: the way to face to shoot the target, from where the player will
-// be then (K_Nav_Predict). Returns 0 when there is nothing to aim at.
+// be then (K_Nav_Predict); until a shot pressed for leaves the weapon, what
+// it was fired at. Returns 0 when there is nothing to aim at.
 int K_Combat_Aim(int tic, double *angle);
 
 // In battle mode: the velocity to move at (map units per tic), nav holding
@@ -109,7 +110,8 @@ void K_Combat_ShootBarrel(int on, double x, double y);
 int K_Combat_BlastsPending(double x, double y, double reach);
 
 // After nav built the command: brings up the weapon wanted, and fires if,
-// after the command's turn, the player faces the target. Leaves alone a
+// after the command's turn, the player faces the target, and the shot is
+// safe both from there and from where it leaves the weapon. Leaves alone a
 // command in which nav uses, fires or changes weapons itself.
 void K_Combat_Fire(int tic, k_command_t *command);
 

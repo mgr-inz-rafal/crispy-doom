@@ -771,7 +771,11 @@ static int BarrelSpots(int block, candidate_t *out, int max)
 }
 
 // Where to go to pick up a key lying at `at` (K_Graph_PickupSpot); with no
-// spot to stand at, the key itself: the route finds the way or not.
+// spot to stand at, the key itself: the route finds the way or not. A key
+// on a ledge is also a candidate from the floors around it that reach it,
+// MAX_KEY_FLOORS at the most (K_Graph_PickupSpotsOff): the route picks.
+#define MAX_KEY_FLOORS 4
+
 static k_vec2_t KeySpot(k_vec2_t at)
 {
     k_vec2_t spot;
@@ -869,16 +873,27 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                 k_keything_t keys[MAX_CANDIDATES];
                 int found = SDL_min(K_Specials_FindKeys(goal->param, keys, max), max);
 
-                for (i = 0; i < found; ++i)
+                // From where it lies, or from a floor below (KeySpot).
+                for (i = 0; i < found && count < max; ++i)
                 {
-                    out[count].at = KeySpot(keys[i].at);
-                    out[count].kind = K_GOAL_POINT;
-                    out[count].line = -1;
-                    M_snprintf(out[count].what, sizeof(out[count].what), "%s %s at "
-                               "(%.0f,%.0f)", K_Specials_KeyName(goal->param),
-                               keys[i].skull ? "skull key" : "keycard",
-                               keys[i].at.x, keys[i].at.y);
-                    ++count;
+                    k_vec2_t spots[1 + MAX_KEY_FLOORS];
+                    int num_spots, k;
+
+                    spots[0] = KeySpot(keys[i].at);
+                    num_spots = 1 + K_Graph_PickupSpotsOff(keys[i].at, spots + 1,
+                                                           MAX_KEY_FLOORS);
+
+                    for (k = 0; k < num_spots && count < max; ++k)
+                    {
+                        out[count].at = spots[k];
+                        out[count].kind = K_GOAL_POINT;
+                        out[count].line = -1;
+                        M_snprintf(out[count].what, sizeof(out[count].what), "%s %s at "
+                                   "(%.0f,%.0f)", K_Specials_KeyName(goal->param),
+                                   keys[i].skull ? "skull key" : "keycard",
+                                   keys[i].at.x, keys[i].at.y);
+                        ++count;
+                    }
                 }
             }
             break;

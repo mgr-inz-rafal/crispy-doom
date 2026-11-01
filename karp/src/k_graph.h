@@ -237,6 +237,14 @@ double K_Graph_Clearance(k_vec2_t at, double reach);
 // box never reaches it.
 int K_Graph_PickupSpot(k_vec2_t at, k_vec2_t *spot);
 
+// Where else the player can stand to pick it up: on each sector other than
+// the one it lies on whose floor the engine reaches it from (from 8 below
+// the player's feet to the player's height above them), the nearest spot
+// that touches it; up to max (4 at the most). A key can lie on a ledge too
+// high to step onto, picked up by walking along its foot (E1M7: the blue
+// key on a rim 32 high, between a walkway and nukage). Returns how many.
+int K_Graph_PickupSpotsOff(k_vec2_t at, k_vec2_t *spots, int max);
+
 // A line near a point that stops the player.
 typedef struct
 {

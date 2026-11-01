@@ -448,6 +448,8 @@ typedef struct
     int shot;               // ammo a shot takes
     double damage;          // a shot's average damage, all of it on target
     double tics;            // between shots, firing on
+    int lead;               // from the press to the shot leaving: the attack
+                            // states before the one that fires
     double spread;          // degrees a shot strays either way
     boolean taps;           // no spread when tapped
     boolean flies;          // a projectile: a moving target can dodge it
@@ -461,15 +463,15 @@ typedef struct
 // shotgun's the super shotgun.
 static const weapon_t weapons[] =
 {
-    { wp_fist,         wp_fist,     "fist",            0,  11.0, 22.0,  0.0, false, false, 64.0,   0.0 },
-    { wp_chainsaw,     wp_fist,     "chainsaw",        0,  11.0,  4.0,  0.0, false, false, 64.0,   0.0 },
-    { wp_pistol,       wp_pistol,   "pistol",          1,  10.0, 20.0,  5.6, true,  false,  0.0,   0.0 },
-    { wp_shotgun,      wp_shotgun,  "shotgun",         1,  70.0, 37.0,  5.6, false, false,  0.0, 400.0 },
-    { wp_supershotgun, wp_shotgun,  "super shotgun",   2, 200.0, 57.0, 11.2, false, false,  0.0, 300.0 },
-    { wp_chaingun,     wp_chaingun, "chaingun",        1,  10.0,  4.5,  5.6, true,  false,  0.0,   0.0 },
-    { wp_missile,      wp_missile,  "rocket launcher", 1, 120.0, 20.0,  0.0, false, true,   0.0,   0.0 },
-    { wp_plasma,       wp_plasma,   "plasma rifle",    1,  22.5,  3.0,  0.0, false, true,   0.0,   0.0 },
-    { wp_bfg,          wp_bfg,      "BFG",            40, 500.0, 60.0,  0.0, false, true,   0.0,   0.0 },
+    { wp_fist,         wp_fist,     "fist",            0,  11.0, 22.0,  4,  0.0, false, false, 64.0,   0.0 },
+    { wp_chainsaw,     wp_fist,     "chainsaw",        0,  11.0,  4.0,  0,  0.0, false, false, 64.0,   0.0 },
+    { wp_pistol,       wp_pistol,   "pistol",          1,  10.0, 20.0,  4,  5.6, true,  false,  0.0,   0.0 },
+    { wp_shotgun,      wp_shotgun,  "shotgun",         1,  70.0, 37.0,  3,  5.6, false, false,  0.0, 400.0 },
+    { wp_supershotgun, wp_shotgun,  "super shotgun",   2, 200.0, 57.0,  3, 11.2, false, false,  0.0, 300.0 },
+    { wp_chaingun,     wp_chaingun, "chaingun",        1,  10.0,  4.5,  0,  5.6, true,  false,  0.0,   0.0 },
+    { wp_missile,      wp_missile,  "rocket launcher", 1, 120.0, 20.0,  8,  0.0, false, true,   0.0,   0.0 },
+    { wp_plasma,       wp_plasma,   "plasma rifle",    1,  22.5,  3.0,  0,  0.0, false, true,   0.0,   0.0 },
+    { wp_bfg,          wp_bfg,      "BFG",            40, 500.0, 60.0, 30,  0.0, false, true,   0.0,   0.0 },
 };
 
 static k_monster_t *monsters;
@@ -501,6 +503,8 @@ static k_vec2_t target_velocity;    // smoothed, units per tic
 static int wanted = -1;             // the weapon wanted, -1 if none
 static boolean can_hurt;            // some weapon in hand can hurt the target
 static int last_switch;             // leveltime of the last switch pressed
+static const mobj_t *shot_mo;       // what the last press read was fired at
+static int shot_tic = -1;           // and the tic its shot leaves (lead)
 static int unclear_tic;             // the area was last not clear (UpdateClear)
 static int last_health = -1;
 
@@ -852,11 +856,15 @@ static int ChainOf(int i)
 // Which live barrels would set each other off, when the list changed
 // (live barrels stand still); and which chains are near the player: have a
 // barrel within BLAST_SAFE whose blast could see it (a dead barrel is a
-// quarter of its height, BLAST_HEIGHT).
+// quarter of its height, BLAST_HEIGHT), or that the gun could hit (the user,
+// E1M7: through a door going up, the gun could hit a barrel 104 off that the
+// blast could not see yet, and the bot shot at it; a door is open by the time
+// the barrel goes off).
 static void UpdateChains(boolean changed, const mobj_t *player_mo)
 {
     k_vec2_t me = { ToMap(player_mo->x), ToMap(player_mo->y) };
     double eye = ToMap(player_mo->z) + ToMap(player_mo->height) * 0.75;
+    double gun = GunHeight(player_mo);
     int i, j;
 
     if (changed)
@@ -894,8 +902,10 @@ static void UpdateChains(boolean changed, const mobj_t *player_mo)
     {
         if (barrels[i].live && !chain_near[barrels[i].chain]
          && AxisDistance(me, barrels[i].at) < BLAST_SAFE
-         && K_Sight_Check(me.x, me.y, eye, barrels[i].at.x, barrels[i].at.y, barrels[i].z,
-                          barrels[i].z + BLAST_HEIGHT))
+         && (K_Sight_Check(me.x, me.y, eye, barrels[i].at.x, barrels[i].at.y, barrels[i].z,
+                           barrels[i].z + BLAST_HEIGHT)
+             || K_Sight_Aim(me.x, me.y, gun, barrels[i].at.x, barrels[i].at.y, barrels[i].z,
+                            barrels[i].z + BARREL_HEIGHT)))
         {
             chain_near[barrels[i].chain] = true;
         }
@@ -2679,6 +2689,8 @@ void K_Combat_Reset(void)
     dodging_primed = false;
     primed_mo = NULL;
     primed_tics = 0;
+    shot_mo = NULL;
+    shot_tic = -1;
 }
 
 void K_Combat_Tick(int driving)
@@ -2785,19 +2797,57 @@ static k_vec2_t TargetAt(int tic)
     return at;
 }
 
+// A press read whose shot has not left yet, at what is no longer aimed at:
+// the aim holds on it until the shot leaves (the user, E1M7: the bot
+// pressed fire at a barrel and dropped it the next tic, and the shotgun's
+// pellets left three tics later along the route).
+static boolean HeldAim(int tic, k_vec2_t *at)
+{
+    int i;
+
+    if (shot_mo == NULL || tic > shot_tic
+     || (barrel_target >= 0 ? barrels[barrel_target].mo == shot_mo : shot_mo == target_mo))
+    {
+        return false;
+    }
+
+    i = IndexOf(shot_mo);
+
+    if (i >= 0)
+    {
+        *at = monsters[i].at;
+        return true;
+    }
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        if (barrels[i].mo == shot_mo && barrels[i].live)
+        {
+            *at = barrels[i].at;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int K_Combat_Aim(int tic, double *angle)
 {
     k_pose_t pose;
     k_vec2_t at;
+    boolean held = HeldAim(tic, &at);
 
-    if ((status.target < 0 && barrel_target < 0) || !K_Nav_Predict(tic, &pose))
+    if ((!held && status.target < 0 && barrel_target < 0) || !K_Nav_Predict(tic, &pose))
     {
         return 0;
     }
 
-    at = barrel_target >= 0 ? barrels[barrel_target].at : TargetAt(tic);
+    if (!held)
+    {
+        at = barrel_target >= 0 ? barrels[barrel_target].at : TargetAt(tic);
+    }
 
-    if (barrel_target < 0 && K_Salt_Enabled())
+    if (!held && barrel_target < 0 && K_Salt_Enabled())
     {
         double dx = at.x - pose.x, dy = at.y - pose.y;
         double length = sqrt(dx * dx + dy * dy);
@@ -2939,16 +2989,62 @@ static boolean BarrelAtRisk(const player_t *player, k_vec2_t from, double facing
     return false;
 }
 
+// Where a shot pressed for now leaves from, and which way: the weapon's lead
+// tics later (A_FireShotgun three tics after the press), the player running
+// on as fast, the aim on what it is fired at, there by then (the user, E1M7:
+// running past a barrel 40 units off, the bot pressed fire at a zombieman
+// with the barrel clear of the shotgun's spread; three tics and 20 units on
+// the pellets left with the barrel in it, and its blast took 76).
+static void ShotLeaves(const k_pose_t *pose, const weapon_t *weapon, k_vec2_t at,
+                       k_vec2_t *from, double *facing)
+{
+    from->x = pose->x + pose->momx * weapon->lead;
+    from->y = pose->y + pose->momy * weapon->lead;
+    *facing = atan2(at.y - from->y, at.x - from->x);
+}
+
+// Whether a barrel of the chain stands within BLAST_SAFE of the spot.
+static boolean ChainNearAt(int chain, k_vec2_t at)
+{
+    int i;
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        if (barrels[i].live && barrels[i].chain == chain
+         && AxisDistance(at, barrels[i].at) < BLAST_SAFE)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The press is read (the weapon is ready for it): the aim holds on what it
+// is fired at until the shot leaves (HeldAim).
+static void Pressed(const player_t *player, const weapon_t *weapon, const mobj_t *mo, int tic)
+{
+    if (WeaponReady(player))
+    {
+        ++status.shots;
+        shot_mo = mo;
+        shot_tic = tic + weapon->lead;
+    }
+}
+
 // Firing at the barrel shot at: with the weapon in hand, or, at one in the
 // way, one that pops it. Pistol and chaingun only from the ready state, so
-// the bullet goes straight.
-static void FireAtBarrel(const player_t *player, const k_pose_t *pose, k_command_t *command)
+// the bullet goes straight. Not where the shot leaves from (ShotLeaves)
+// near its chain.
+static void FireAtBarrel(const player_t *player, const k_pose_t *pose, int tic,
+                         k_command_t *command)
 {
     const barrel_t *barrel = &barrels[barrel_target];
     const weapon_t *weapon = WeaponOf(player->readyweapon);
     k_vec2_t from = { pose->x, pose->y };
     double distance = SDL_max(Distance(from, barrel->at), 1.0);
-    double facing, tolerance;
+    k_vec2_t leaves;
+    double facing, tolerance, leaves_facing;
 
     if (barrel_why == BARREL_BLOCKING && !CanPop(player, weapon, distance))
     {
@@ -2974,10 +3070,13 @@ static void FireAtBarrel(const player_t *player, const k_pose_t *pose, k_command
 
     facing = pose->angle + command->turn / ANGLETURN_PER_RADIAN;
     tolerance = SDL_max(atan2(BARREL_RADIUS * AIM_SHARE, distance), MIN_TOLERANCE);
+    ShotLeaves(pose, weapon, barrel->at, &leaves, &leaves_facing);
 
     if (fabs(Wrap(atan2(barrel->at.y - from.y, barrel->at.x - from.x) - facing)) > tolerance
      || (weapon->taps && !WeaponReady(player))
+     || ChainNearAt(barrel->chain, leaves)
      || BarrelAtRisk(player, from, facing, weapon, barrel->at, weapon->taps)
+     || BarrelAtRisk(player, leaves, leaves_facing, weapon, barrel->at, weapon->taps)
      || !K_Sight_Aim(from.x, from.y, GunHeight(player->mo),
                      from.x + cos(facing) * (distance - BARREL_RADIUS),
                      from.y + sin(facing) * (distance - BARREL_RADIUS), barrel->z,
@@ -2987,11 +3086,7 @@ static void FireAtBarrel(const player_t *player, const k_pose_t *pose, k_command
     }
 
     command->attack = 1;
-
-    if (WeaponReady(player))
-    {
-        ++status.shots;
-    }
+    Pressed(player, weapon, barrel->mo, tic);
 }
 
 void K_Combat_Fire(int tic, k_command_t *command)
@@ -3000,8 +3095,9 @@ void K_Combat_Fire(int tic, k_command_t *command)
     const k_monster_t *monster;
     const weapon_t *weapon;
     k_pose_t pose;
-    k_vec2_t from, at;
-    double distance, facing, tolerance;
+    k_vec2_t from, at, leaves, leaves_at;
+    double distance, facing, tolerance, leaves_facing;
+    boolean accurate;
 
     // At a gun switch nav has the weapon it needs up; not while fighting,
     // when nav waits.
@@ -3014,7 +3110,7 @@ void K_Combat_Fire(int tic, k_command_t *command)
 
     if (barrel_target >= 0)
     {
-        FireAtBarrel(player, &pose, command);
+        FireAtBarrel(player, &pose, tic, command);
         return;
     }
 
@@ -3048,12 +3144,19 @@ void K_Combat_Fire(int tic, k_command_t *command)
     distance = Distance(from, at);
     facing = pose.angle + command->turn / ANGLETURN_PER_RADIAN;
     tolerance = SDL_max(atan2(monster->radius * AIM_SHARE, distance), MIN_TOLERANCE);
+    leaves_at = TargetAt(tic + weapon->lead);
+    ShotLeaves(&pose, weapon, leaves_at, &leaves, &leaves_facing);
+    accurate = weapon->taps && player->refire == 0;
 
+    // Checked where the press is read and where the shot leaves.
     if (fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - facing)) > tolerance
      || (weapon->reach > 0.0 && distance - monster->radius > weapon->reach)
      || (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
-         && !RocketSafe(player, from, facing, monster, distance))
-     || BarrelAtRisk(player, from, facing, weapon, at, weapon->taps && player->refire == 0)
+         && (!RocketSafe(player, from, facing, monster, distance)
+             || !RocketSafe(player, leaves, leaves_facing, monster,
+                            Distance(leaves, leaves_at))))
+     || BarrelAtRisk(player, from, facing, weapon, at, accurate)
+     || BarrelAtRisk(player, leaves, leaves_facing, weapon, leaves_at, accurate)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))
      || !LineOfFire(player, from, facing, monster))
     {
@@ -3061,11 +3164,7 @@ void K_Combat_Fire(int tic, k_command_t *command)
     }
 
     command->attack = 1;
-
-    if (WeaponReady(player))
-    {
-        ++status.shots;
-    }
+    Pressed(player, weapon, target_mo, tic);
 }
 
 double K_Combat_Danger(double x, double y, double floor)

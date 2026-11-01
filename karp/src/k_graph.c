@@ -109,6 +109,14 @@
 #define PICKUP_STEP 2.0
 #define STAND_CLEARANCE 17.0
 
+// From another floor, the engine touches it from TOUCH_BELOW under the
+// player's feet to TOUCH_ABOVE over them, the player's height
+// (P_TouchSpecialThing). The nearest spot on each of MAX_TOUCH_FLOORS
+// sectors at the most.
+#define TOUCH_BELOW 8.0
+#define TOUCH_ABOVE 56.0
+#define MAX_TOUCH_FLOORS 4
+
 // A gap inside a cell, between its portals, can be narrower than the
 // player too: a closed block beside a wall, mid-cell (Doom II MAP21's
 // yellow bars leave 32 units). Chords across cells, at most two clearances
@@ -3183,6 +3191,67 @@ int K_Graph_PickupSpot(k_vec2_t at, k_vec2_t *spot)
     }
 
     return best_distance >= 0;
+}
+
+int K_Graph_PickupSpotsOff(k_vec2_t at, k_vec2_t *spots, int max)
+{
+    const k_map_t *map = K_Map_Get();
+    int steps = (int) (PICKUP_REACH / PICKUP_STEP);
+    int cell = K_Map_CellAt(at.x, at.y);
+    int sectors_[MAX_TOUCH_FLOORS], distances[MAX_TOUCH_FLOORS];
+    int count = 0;
+    double floor;
+    int i, j, k;
+
+    if (cell < 0)
+    {
+        return 0;
+    }
+
+    floor = K_Map_CellFloor(cell);
+    max = SDL_min(max, MAX_TOUCH_FLOORS);
+
+    for (i = -steps; i <= steps; ++i)
+    {
+        for (j = -steps; j <= steps; ++j)
+        {
+            k_vec2_t point = { at.x + i * PICKUP_STEP, at.y + j * PICKUP_STEP };
+            int distance = i * i + j * j;
+            int under = K_Map_CellAt(point.x, point.y);
+            double height;
+            int sector;
+
+            if (under < 0)
+            {
+                continue;
+            }
+
+            height = floor - K_Map_CellFloor(under);
+            sector = map->subsectors[map->cells[under].subsector].sector;
+
+            for (k = 0; k < count && sectors_[k] != sector; ++k)
+            {
+            }
+
+            if (height == 0.0 || height > TOUCH_ABOVE || height < -TOUCH_BELOW
+             || (k < count && distance >= distances[k]) || k == max
+             || K_Graph_Clearance(point, STAND_CLEARANCE) < STAND_CLEARANCE)
+            {
+                continue;
+            }
+
+            if (k == count)
+            {
+                ++count;
+            }
+
+            sectors_[k] = sector;
+            distances[k] = distance;
+            spots[k] = point;
+        }
+    }
+
+    return count;
 }
 
 int K_Graph_MovingSector(void)

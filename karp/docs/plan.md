@@ -2906,6 +2906,28 @@ Who controls the player in a fight (the user's model):
   40), green or blue armour pays for 1024 units of detour at least, less the more it is guarded
   (none from 20 health at risk); never any detour at all, not armour bonuses. E1M5 then: the
   armour picked up at 9.4 s, right after the shells.
+- **Shots leave late** (the user, E1M7: the bot set off a barrel in its face with the shotgun,
+  76 damage at 4.4 s). Running past a barrel 40 units off, it pressed fire at a zombieman far
+  off with the barrel clear of the shotgun's spread; the pellets left three tics and 20 units
+  later (`A_FireShotgun` comes 3 tics after the press: the pistol and the fist 4, the rocket 8,
+  the BFG 30), the barrel inside the spread then. Done: a shot is checked for barrels, and a
+  rocket for its burst, both where the press is read and where the shot leaves - the player
+  running on as fast, the aim on the target there by then; and the aim holds on what was fired
+  at until the shot leaves (a barrel pressed at was dropped the next tic, and the pellets went
+  along the route). Before that, at 2.9 s, the bot had shot at a barrel 104 off through a door
+  going up: the gun could hit it while its blast could not see the player yet. Done: a barrel
+  the gun could hit counts as near too, and none is shot from where the shot leaves near its
+  chain. Seen, left: a barrel by the route popped from far enough, the bot walked on toward it
+  and a fight stopped it stepping away (7 damage).
+- **Keys on ledges** (E1M7: stuck at 50 s with the yellow key). The blue key lies on a rim 32
+  high, between a walkway and nukage; the route to the rim needs the red key and then a step
+  too high, and nothing fixes the step, so the red key was never gone for. The engine picks the
+  key up from the walkway: the boxes overlap, and a thing up to the player's height above its
+  feet is in reach (`P_TouchSpecialThing`). Done: a key is also a goal from the nearest spot
+  touching it on each floor around it that reaches it, and the route picks; the blue key is then
+  "blocked by a door that needs the red key", and the red key is gone for. E1M7 then: finished
+  in 211 s, 79 of 84 killed, 100 health. Items still have only the spot where they lie (a detour
+  missed, never a stall).
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.
