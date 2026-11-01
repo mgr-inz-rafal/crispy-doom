@@ -187,6 +187,12 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // off than its length.
 #define WAIT_WAY 16.0
 
+// An item whose way there waits more than ITEM_WAIT_MOST at doors and
+// lifts is not gone for, for now (E1M6: at LOW health, any detour paying,
+// the bot stood 25.6 s at a door shut on a timer for a stimpack behind it,
+// and went for a medikit 1200 units off right after).
+#define ITEM_WAIT_MOST (8 * TICRATE)
+
 // A radiation suit (k_items.h: suit) is also worth the detour when going on
 // by it - the way there, then on with the suit worn - costs SUIT_GAIN less
 // than going on without, the floors counted as above: those it would keep
@@ -2150,6 +2156,11 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
     if (probe.result == K_PATH_FOUND)
     {
+        if (probe.wait > ITEM_WAIT_MOST)
+        {
+            return false;
+        }
+
         there = probe.length + probe.wait * WAIT_WAY;
         there_damage = probe.damage;
     }
@@ -2176,7 +2187,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
         for (i = 0; i < count; ++i)
         {
-            double to_fix, to_fix_damage;
+            double to_fix, to_fix_damage, to_fix_wait;
 
             K_Path_Find(&fix_probe, start, cell, fix_candidates[i].at);
 
@@ -2187,9 +2198,11 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
             to_fix = fix_probe.length + fix_probe.wait * WAIT_WAY;
             to_fix_damage = fix_probe.damage;
+            to_fix_wait = fix_probe.wait;
             K_Path_Find(&fix_probe, fix_candidates[i].at, -1, spot);
 
             if (OpenOrFixed(&fix_probe, true, type, param)
+             && to_fix_wait + fix_probe.wait <= ITEM_WAIT_MOST
              && (there < 0.0
                  || to_fix + fix_probe.length + fix_probe.wait * WAIT_WAY + FIX_WORK < there))
             {
@@ -2229,7 +2242,7 @@ static boolean SuitDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 {
     K_Path_Find(&probe, start, cell, spot);
 
-    if (probe.result != K_PATH_FOUND)
+    if (probe.result != K_PATH_FOUND || probe.wait > ITEM_WAIT_MOST)
     {
         return false;
     }

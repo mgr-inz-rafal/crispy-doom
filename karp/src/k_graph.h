@@ -263,6 +263,11 @@ double K_Graph_DropDistance(k_vec2_t at, double floor, double reach);
 
 k_mover_t K_Graph_SectorMover(int sector);
 
+// A door shut, or shutting, on a timer that opens it again by itself
+// (lines 16 and 76: 30 s; sector 14: 5 minutes): the tics until it is open
+// the player's height; -1 if the sector holds no such door.
+double K_Graph_TimerDoor(int sector);
+
 // Whether a mover holds the sector that will let go of it by itself: a door
 // (opening, open or closing), a floor, a lift that is not perpetual, a
 // ceiling that is not a crusher. A switch or walk-over line meant to move

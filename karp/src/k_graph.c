@@ -1497,6 +1497,41 @@ static const vldoor_t *DoorOf(const sector_t *sector)
     return NULL;
 }
 
+// A door shut, or shutting, on a timer, that opens again by itself
+// (EV_DoDoor's close30ThenOpen, lines 16 and 76: shut for 30 s;
+// P_SpawnDoorRaiseIn5Mins, sector 14): the tics until it is open the
+// player's height, or -1 if it is no such door.
+static double TimerDoorTics(const sector_t *sector)
+{
+    const vldoor_t *door = DoorOf(sector);
+    fixed_t from;
+    double tics;
+
+    if (door == NULL)
+    {
+        return -1.0;
+    }
+
+    if (door->type == vld_close30ThenOpen && door->direction == -1)
+    {
+        tics = (double) (sector->ceilingheight - sector->floorheight) / door->speed
+             + TICRATE * 30;
+        from = sector->floorheight;
+    }
+    else if ((door->type == vld_close30ThenOpen && door->direction == 0)
+          || (door->type == vld_raiseIn5Mins && door->direction == 2))
+    {
+        tics = door->topcountdown;
+        from = sector->ceilingheight;
+    }
+    else
+    {
+        return -1.0;
+    }
+
+    return tics + (double) SDL_max(0, sector->floorheight + PLAYER_HEIGHT - from) / door->speed;
+}
+
 // How high a door opens (EV_VerticalDoor): the lowest surrounding ceiling,
 // less 4. Live, since the surrounding ceilings can move.
 static fixed_t DoorTop(sector_t *sector)
@@ -1520,14 +1555,21 @@ static fixed_t OpeningCeiling(sector_t *sector)
 }
 
 // The ceiling of a sector the player stands in: standing in a door means
-// it is open.
+// it is open - a door shut on a timer too, waited for on the way in (E1M6:
+// sector 187, no line opens it, but line 206's timer).
 static fixed_t OpenCeiling(sector_t *sector)
 {
     fixed_t top = OpeningCeiling(sector);
+    const vldoor_t *door = DoorOf(sector);
 
     if (door_sectors[sector - sectors])
     {
         top = SDL_max(top, DoorTop(sector));
+    }
+
+    if (door != NULL && TimerDoorTics(sector) >= 0.0)
+    {
+        top = SDL_max(top, door->topheight);
     }
 
     return top;
@@ -2212,6 +2254,17 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, doubl
             return K_CROSS_DOOR;
         }
 
+        // A door shut on a timer, that opens again by itself: wait for it,
+        // if it opens high enough (E1M6: line 206 shuts the door at line
+        // 1150 behind the player for 30 s; the brain waited 15 s, gave the
+        // blue key up for 30 s more, and stood idle with the door open).
+        if (door != NULL && TimerDoorTics(b) >= 0.0
+         && Headroom(floor_a, ceiling_a, floor_b, SDL_max(ceiling_b, door->topheight)))
+        {
+            *wait = TimerDoorTics(b);
+            return K_CROSS_DOOR;
+        }
+
         // A door opened by using this line from its front side, if it opens
         // high enough.
         if (line != NULL && K_Specials_ManualDoor(line->special)
@@ -2810,7 +2863,10 @@ int K_Graph_OpensByItself(int portal_index, int from)
 
         case K_CROSS_DOOR:
             door = DoorOf(&sectors[map->subsectors[map->cells[to].subsector].sector]);
-            return door != NULL && door->direction == 1;
+            return door != NULL
+                && (door->direction == 1
+                    || TimerDoorTics(&sectors[map->subsectors[map->cells[to].subsector].sector])
+                       >= 0.0);
 
         default:
             return false;
@@ -3166,6 +3222,11 @@ int K_Graph_MovingSector(void)
     }
 
     return -1;
+}
+
+double K_Graph_TimerDoor(int sector)
+{
+    return sector >= 0 && sector < numsectors ? TimerDoorTics(&sectors[sector]) : -1.0;
 }
 
 k_mover_t K_Graph_SectorMover(int sector)

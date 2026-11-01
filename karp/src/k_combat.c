@@ -522,11 +522,13 @@ static int misses;
 static int last_ammo;
 static int last_ammo_type = am_noammo;
 
-// Targets given up on for now, and until when.
+// Targets given up on for now, and until when; unreachable: given up on as
+// one that could not come at the player, only until it can.
 typedef struct
 {
     const mobj_t *mo;
     int until;
+    boolean unreachable;
 } ignored_t;
 
 static ignored_t ignored[MAX_IGNORED];
@@ -1140,7 +1142,7 @@ static boolean Ignored(const mobj_t *mo)
     return false;
 }
 
-static void Ignore(const mobj_t *mo, int tics)
+static void Ignore(const mobj_t *mo, int tics, boolean unreachable)
 {
     int i, slot = 0;
 
@@ -1154,6 +1156,7 @@ static void Ignore(const mobj_t *mo, int tics)
 
     ignored[slot].mo = mo;
     ignored[slot].until = leveltime + tics;
+    ignored[slot].unreachable = unreachable;
 }
 
 static void DropTarget(void)
@@ -1362,6 +1365,31 @@ static boolean FoughtAsAny(int index)
     return monsters[index].hitscan || comfy || Reaches(index);
 }
 
+// Whether a monster (by its place in this tic's list) is left alone as a
+// target: given up on for now (Ignore), unless within CLOSE_REACH - in
+// reach of its blows, or in the way - or given up on as one that could not
+// come at the player, that now can (E1M6: an imp left so up the stairs came
+// down and clawed the bot from 83 health to 12, unshot, for the 10 s).
+static boolean IgnoredTarget(int index)
+{
+    int i;
+
+    if (monsters[index].distance < CLOSE_REACH)
+    {
+        return false;
+    }
+
+    for (i = 0; i < MAX_IGNORED; ++i)
+    {
+        if (ignored[i].mo == monster_mobjs[index] && leveltime < ignored[i].until)
+        {
+            return !ignored[i].unreachable || !FoughtAsAny(index);
+        }
+    }
+
+    return false;
+}
+
 static void ChooseTarget(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -1378,7 +1406,7 @@ static void ChooseTarget(const player_t *player)
 
         if (!monster->shootable || monster->distance > TARGET_REACH
          || (!monster->awake && monster->distance > ASLEEP_REACH)
-         || FarAndDodgeable(monster, monster_mobjs[i]) || Ignored(monster_mobjs[i]))
+         || FarAndDodgeable(monster, monster_mobjs[i]) || IgnoredTarget(i))
         {
             continue;
         }
@@ -1524,7 +1552,7 @@ static void CountMisses(const player_t *player)
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "the barrel at (%.0f,%.0f) seems out of reach of "
                   "the shots - %d without a hit; left alone for %d s", status.barrel_at.x,
                   status.barrel_at.y, barrel_misses, IGNORE_TICS / TICRATE);
-            Ignore(barrel_mo, IGNORE_TICS);
+            Ignore(barrel_mo, IGNORE_TICS, false);
             DropBarrel();
             return;
         }
@@ -1538,13 +1566,13 @@ static void CountMisses(const player_t *player)
         ++misses;
 
         // On the way past one that cannot come at the player: a shot or
-        // two, then it is left alone.
+        // two, then it is left alone, until it can.
         if (!FoughtAsAny(status.target) && ++out_shots >= OUT_SHOTS)
         {
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "leaving the %s alone for %d s - it cannot come "
                   "at the player; %d shots on the way", monsters[status.target].name,
                   IGNORE_TICS / TICRATE, out_shots);
-            Ignore(target_mo, IGNORE_TICS);
+            Ignore(target_mo, IGNORE_TICS, true);
             DropTarget();
             return;
         }
@@ -1555,7 +1583,7 @@ static void CountMisses(const player_t *player)
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s seems out of reach of the shots - %d without "
               "a hit; left alone for %d s", monsters[status.target].name, misses,
               MISS_IGNORE_TICS / TICRATE);
-        Ignore(target_mo, MISS_IGNORE_TICS);
+        Ignore(target_mo, MISS_IGNORE_TICS, false);
         DropTarget();
     }
 }
@@ -2390,7 +2418,7 @@ static void UpdateBattle(const player_t *player)
     {
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "leaving the %s alone for now - not hurt in %d s",
               monsters[status.target].name, STALEMATE_TICS / TICRATE);
-        Ignore(target_mo, IGNORE_TICS);
+        Ignore(target_mo, IGNORE_TICS, false);
         DropTarget();
     }
 

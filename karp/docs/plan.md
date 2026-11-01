@@ -2884,6 +2884,22 @@ Who controls the player in a fight (the user's model):
   2743 units off behind a floor to raise, was gone for before the waits counted; now its way
   passes the 3000 any item pays for at most, and it is left (no monsters there; with monsters a
   megasphere may deserve more).
+- **Doors shut on a timer** (the user, E1M6: the bot stood idle after the red key). Line 206
+  shuts the door at line 1150 behind the player for 30 s (special 16, close30ThenOpen); no line
+  opens it. The brain waited 15 s for the moving sector, gave the blue key up for 30 s, then
+  the yellow key for 30 s more, and stood idle about 30 s with the door open again (never giving
+  up worked, slowly). Done: a door shut, or shutting, on a timer that opens it again (lines 16
+  and 76; sector 14, 5 minutes) is a door crossing that opens by itself, its wait what is left
+  of the timer and the opening, timed from now; standing in one counts as open. Nav walks up and
+  waits - no pressing, no giving up while it stands still, and a fight may break the wait off.
+  An item whose way there waits more than 8 s at doors and lifts is not gone for, for now (at
+  LOW health, any detour paying, the bot stood 25.6 s at the second timer door, line 867, for a
+  stimpack). E1M6 then: finished in 185 s, 89 of 118 killed, 100 health (not finished before).
+- **Left alone, but clawing** (the user, E1M6: an imp scratched the bot on the stairs, unshot).
+  An imp up the stairs was left alone 10 s as one that could not come at the player, came down
+  and clawed it from 83 health to 12; still on the list, it was never a target. Done: a monster
+  within 96 is never left alone, whatever put it on the list; and one left as unable to come at
+  the player comes off as soon as it can.
 - **Armour while LOW** (the user, E1M5: green armour in plain sight by the start, at 0%, was left;
   worth 33, it paid for some 470 units with a sleeping shotgun guy near). Done, a little less
   eager than health and ammo: while monsters are left and armour is LOW (below 25 until above

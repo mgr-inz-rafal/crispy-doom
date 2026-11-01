@@ -20,7 +20,8 @@
 //	spot in front of the line, turns to face it and presses use - only
 //	when the engine's use trace (64 units straight ahead) would hit it,
 //	and never on a door already opening, since that closes it. Then it
-//	waits for as long as the door or lift keeps moving. A lift that comes
+//	waits for as long as the door or lift keeps moving. A door shut on a
+//	timer is not pressed, but waited for until it opens. A lift that comes
 //	down is boarded like any open floor; on it, the crossing off it waits
 //	for the ride up.
 //
@@ -1160,6 +1161,8 @@ static boolean LineBusy(int line)
 
 // Pressing use on a door that is opening (or open) closes it, and on a
 // busy lift does nothing; a switch does nothing while its sector is busy.
+// A door shut on a timer opens by itself (K_Graph_TimerDoor), its line
+// most often one that does nothing.
 static boolean WorthPressing(void)
 {
     k_mover_t mover;
@@ -1173,7 +1176,8 @@ static boolean WorthPressing(void)
 
     if (action.kind == K_ACTION_DOOR)
     {
-        return mover == K_MOVER_NONE || mover == K_MOVER_DOWN;
+        return (mover == K_MOVER_NONE || mover == K_MOVER_DOWN)
+            && K_Graph_TimerDoor(action.sector) < 0.0;
     }
 
     return mover == K_MOVER_NONE;
@@ -1528,8 +1532,17 @@ static void StartAction(k_crossing_t crossing, int r)
     switch (action.kind)
     {
         case K_ACTION_DOOR:
-            K_Log(K_LOG_NAV, K_LOG_INFO, "opening the door at line %d (%.0f,%.0f)",
-                  action.line, middle.x, middle.y);
+            if (K_Graph_TimerDoor(action.sector) >= 0.0)
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "waiting for the door at line %d (%.0f,%.0f) to "
+                      "open by itself, in %.1f s", action.line, middle.x, middle.y,
+                      K_Graph_TimerDoor(action.sector) / TICRATE);
+            }
+            else
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "opening the door at line %d (%.0f,%.0f)",
+                      action.line, middle.x, middle.y);
+            }
             break;
 
         case K_ACTION_LIFT:
@@ -1790,7 +1803,8 @@ static boolean UpdateAction(k_vec2_t at, double speed)
             // Already moving the right way: no press needed (Act presses
             // only when it is worth it).
             if ((action.kind == K_ACTION_DOOR
-              && (mover == K_MOVER_UP || mover == K_MOVER_WAITING))
+              && (mover == K_MOVER_UP || mover == K_MOVER_WAITING
+                  || K_Graph_TimerDoor(action.sector) >= 0.0))
              || (action.kind == K_ACTION_LIFT && mover != K_MOVER_NONE))
             {
                 SetPhase(PHASE_WAIT);
@@ -1803,6 +1817,15 @@ static boolean UpdateAction(k_vec2_t at, double speed)
             break;
 
         case PHASE_WAIT:
+            // A door shut on a timer: waited for, however long it stands -
+            // and that is no stall once it moves (E1M6: 6 s stood still,
+            // the door "stopped short" the tic it began to open).
+            if (action.kind == K_ACTION_DOOR && K_Graph_TimerDoor(action.sector) >= 0.0)
+            {
+                action.still = 0;
+                break;
+            }
+
             if (action.kind == K_ACTION_DOOR && mover == K_MOVER_DOWN)
             {
                 // Closing before the player got through: pressing again
@@ -2762,8 +2785,11 @@ int K_Nav_CarefulLeg(int leg)
 
 int K_Nav_CanPause(void)
 {
+    // At a door shut on a timer there is nothing to lose: it opens all
+    // the same, and the wait is begun again after.
     return status.state != K_NAV_DRIVING
-        || ((action.kind == K_ACTION_NONE || action.phase == PHASE_APPROACH)
+        || ((action.kind == K_ACTION_NONE || action.phase == PHASE_APPROACH
+             || (action.kind == K_ACTION_DOOR && K_Graph_TimerDoor(action.sector) >= 0.0))
             && jump_phase == JUMP_NONE && !OnJump(status.target));
 }
 
