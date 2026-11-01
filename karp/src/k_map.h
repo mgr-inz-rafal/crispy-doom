@@ -189,6 +189,12 @@ void K_Map_SectorHeights(int sector, double *floor, double *ceiling);
 // the damage out. Armour is not counted.
 double K_Map_FloorDamage(int sector);
 
+// The same, with a radiation suit worn or not, whatever the player wears.
+double K_Map_SuitFloorDamage(int sector, int suit);
+
+// Tics left on the player's radiation suit, 0 if none.
+int K_Map_SuitTics(void);
+
 // The player's health now (100 when there is no player).
 double K_Map_PlayerHealth(void);
 

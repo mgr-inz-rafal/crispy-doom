@@ -20,7 +20,8 @@
 //	Health weighs more when LOW - the lower, the more - and pays for any
 //	detour at all when CRITICAL (the user: a minute or two back to the
 //	level's start beats dying), and between fights, to keep near 100, a
-//	long detour, any when LOW. Ammo weighs three times when LOW, and the
+//	long detour, any when LOW. Green or blue armour, while armour is LOW, a
+//	long detour too. Ammo weighs three times when LOW, and the
 //	ammo running out pays for any detour at all, unguarded. Items
 //	lying together are picked up on one trip, so each counts with those
 //	beside it (Doom II MAP02: three stimpacks side by side, 30 health on
@@ -102,6 +103,14 @@
 // for HEALTH_REACH of detour at least, less the more it is guarded; when LOW
 // or CRITICAL, any detour at all, unguarded.
 #define HEALTH_REACH 1024.0
+
+// The same for armour, a little less eager (the user, E1M5: green armour in
+// plain sight by the start, at 0%, was left; worth 33, it paid for some 470
+// units of detour with a sleeping shotgun guy near): while monsters are left
+// and armour is LOW, green or blue armour pays for ARMOUR_REACH of detour at
+// least, less the more it is guarded. Never any detour at all, and not
+// armour bonuses.
+#define ARMOUR_REACH 1024.0
 
 // Health is worth breaking a fight off for when CRITICAL only if it gives
 // URGENT_HEALTH at least, with what lies beside it: running from a fight for
@@ -712,6 +721,7 @@ void K_Items_Tick(void)
         item->escape = false;
         item->first = item->worth > 0.0 && WeaponItem(entry->sprite, &weapon)
                    && weapon != wp_chainsaw && !player->weaponowned[weapon] && PistolOnly(player);
+        item->suit = entry->sprite == SPR_SUIT;
         entry->most = REACH_MOST;
 
         // Its guards and spot, about once a second; at once when it has been
@@ -814,6 +824,11 @@ void K_Items_Tick(void)
                         ? REACH_ANY
                         : SDL_max(item->reach,
                                   HEALTH_REACH * (1.0 - item->danger / ROOM_DANGER));
+        }
+        else if (item->danger < ROOM_DANGER && fights && condition->armour != K_NEED_OK
+              && (entry->sprite == SPR_ARM1 || entry->sprite == SPR_ARM2))
+        {
+            item->reach = SDL_max(item->reach, ARMOUR_REACH * (1.0 - item->danger / ROOM_DANGER));
         }
 
         if (item->kind == K_ITEM_HEALTH && item->together < URGENT_HEALTH)

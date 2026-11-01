@@ -64,6 +64,8 @@ typedef struct
     int first;              // a weapon better than the pistol while nothing
                             // better is held (a pistol start): goes before
                             // other items, but for health when CRITICAL
+    int suit;               // a radiation suit: the brain also weighs it by
+                            // the floors it would keep out on the way on
 } k_item_t;
 
 // Called by Karp on every level load.

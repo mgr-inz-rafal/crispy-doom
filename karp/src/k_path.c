@@ -24,7 +24,8 @@
 //	touchdown. It costs that distance and a little more, so a walk not much
 //	longer wins; one that does not work now is a blocked crossing.
 //
-//	A floor that hurts costs the health it takes on the way (HEALTH_COST).
+//	A floor that hurts costs the health it takes on the way (HEALTH_COST),
+//	none while a radiation suit lasts.
 //
 
 #include <math.h>
@@ -56,11 +57,18 @@
 // opening a door first (Doom II MAP20: the bot walked across the blood for
 // half a minute and died, where the user's way is dry once switch 73 opens
 // a door). The flight of a jump over such a floor costs nothing: the player
-// is off it. Until the bot knows its armour and radiation suits.
+// is off it; nor does the wait for a door or lift that opens by itself,
+// which nav spends off it (k_nav.c, waiting dry: Doom II MAP20's lift at
+// line 537 counted 10 s on the blood). Armour is not counted. A radiation suit keeps the floors out
+// only for as long as it lasts, the time on the way counted at running
+// speed, but for its last SUIT_SPARE tics: the player is slower than that
+// (corners, doors, fights). Once it runs out, they hurt again (the user:
+// a suit with seconds left counted as one for the whole way).
 #define HEALTH_COST 100.0
 #define HEALTH_COST_DEADLY 1.0e5
 #define HEALTH_SHARE 0.5
 #define RUN_SPEED 16.7
+#define SUIT_SPARE (5.0 * 35.0)
 
 // A player standing on a hole in the mesh starts from the nearest cell
 // within this distance.
@@ -90,6 +98,8 @@ static int num_nodes;
 static int nodes_capacity;
 static double *cost;
 static double *hurt;            // the health the floors take on the way
+static double *elapsed;         // tics on the way, at running speed
+static double *waited;          // of those, tics waiting at crossings
 static int *came_from;
 static unsigned int *seen;      // == search: cost and came_from are valid
 static unsigned int *done;      // == search: expanded
@@ -102,6 +112,12 @@ static int heap_capacity;
 static k_blockcost_t block_cost;
 static k_pinchcost_t pinch_cost;
 static double health_cost;      // HEALTH_COST or HEALTH_COST_DEADLY
+
+// The radiation suit searches assume (K_Path_AssumeSuit): tics, or -1 for
+// the player's own; and the search's: floors it keeps out cost nothing for
+// that many tics on the way.
+static double suit_assumed = -1.0;
+static double suit_left;
 
 // The search in progress.
 static const k_map_t *map;
@@ -363,12 +379,22 @@ static double PinchCost(int cell, k_vec2_t at)
 }
 
 // The health walking `distance` across a cell and waiting `wait` tics in it
-// takes.
-static double Damage(int cell, double distance, double wait)
+// takes, `at` tics into the way: under a radiation suit, only the part after
+// it runs out (suit_left) at the full rate.
+static double Damage(int cell, double distance, double wait, double at)
 {
-    double per_tic = K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector);
+    int sector = map->subsectors[map->cells[cell].subsector].sector;
+    double per_tic = K_Map_SuitFloorDamage(sector, false);
+    double tics = distance / RUN_SPEED + wait;
+    double suited;
 
-    return per_tic > 0.0 ? (distance / RUN_SPEED + wait) * per_tic : 0.0;
+    if (per_tic <= 0.0)
+    {
+        return 0.0;
+    }
+
+    suited = SDL_max(0.0, SDL_min(tics, suit_left - at));
+    return (tics - suited) * per_tic + suited * K_Map_SuitFloorDamage(sector, true);
 }
 
 static void PrepareNodes(void)
@@ -382,11 +408,15 @@ static void PrepareNodes(void)
         nodes_capacity = num_nodes;
         free(cost);
         free(hurt);
+        free(elapsed);
+        free(waited);
         free(came_from);
         free(seen);
         free(done);
         cost = malloc(nodes_capacity * sizeof(*cost));
         hurt = malloc(nodes_capacity * sizeof(*hurt));
+        elapsed = malloc(nodes_capacity * sizeof(*elapsed));
+        waited = malloc(nodes_capacity * sizeof(*waited));
         came_from = malloc(nodes_capacity * sizeof(*came_from));
         seen = calloc(nodes_capacity, sizeof(*seen));
         done = calloc(nodes_capacity, sizeof(*done));
@@ -405,8 +435,9 @@ static void PrepareNodes(void)
     heap_size = 0;
 }
 
-// A step of the route, and the health its floor takes on the way.
-static void Relax(int node, int from, double step, double damage)
+// A step of the route, the health its floor takes on the way, the tics it
+// takes, and of those the tics waiting at its crossing.
+static void Relax(int node, int from, double step, double damage, double tics, double wait)
 {
     double g = cost[from] + step + damage * health_cost;
 
@@ -421,6 +452,8 @@ static void Relax(int node, int from, double step, double damage)
         seen[node] = search;
         cost[node] = g;
         hurt[node] = hurt[from] + damage;
+        elapsed[node] = elapsed[from] + tics;
+        waited[node] = waited[from] + wait;
         came_from[node] = from;
         Push(g + Heuristic(NodePosition(node)), node);
     }
@@ -432,6 +465,8 @@ static boolean Search(k_path_t *path)
     seen[start_node] = search;
     cost[start_node] = 0.0;
     hurt[start_node] = 0.0;
+    elapsed[start_node] = 0.0;
+    waited[start_node] = 0.0;
     came_from[start_node] = -1;
     Push(Heuristic(start_point), start_node);
 
@@ -460,15 +495,16 @@ static boolean Search(k_path_t *path)
 
         if (cell == goal_cell)
         {
-            double step = Distance(at, goal_point);
-            double damage = Damage(cell, step, 0.0);
+            double walk = Distance(at, goal_point);
+            double step = walk;
 
             if (K_Graph_Pinched(cell, entry_a, entry_b, goal_point, goal_point, &pinch))
             {
                 step += PinchCost(cell, pinch);
             }
 
-            Relax(goal_node, node, step, damage);
+            Relax(goal_node, node, step, Damage(cell, walk, 0.0, elapsed[node]),
+                  walk / RUN_SPEED, 0.0);
         }
 
         end = graph->first_link[cell] + graph->link_count[cell];
@@ -479,6 +515,7 @@ static boolean Search(k_path_t *path)
             const k_portal_t *portal = &graph->portals[link->portal];
             k_crossing_t crossing;
             double step, walk, wait = 0.0, beyond = 0.0;
+            boolean opens = false;
             int next;
 
             // Never straight back out the way it came in.
@@ -506,6 +543,12 @@ static boolean Search(k_path_t *path)
                 else
                 {
                     wait = K_Graph_CrossingWait(link->portal, cell, NULL);
+
+                    if (crossing == K_CROSS_RIDE)
+                    {
+                        wait = SDL_max(0.0, wait - elapsed[node] - walk / RUN_SPEED);
+                    }
+
                     step += WAIT_COST * wait;
                 }
 
@@ -514,7 +557,8 @@ static boolean Search(k_path_t *path)
                     step += PinchCost(cell, pinch);
                 }
 
-                Relax(2 * link->portal + 1, node, step, Damage(cell, walk, wait));
+                Relax(2 * link->portal + 1, node, step, Damage(cell, walk, wait, elapsed[node]),
+                      (walk + Distance(portal->a, portal->b)) / RUN_SPEED + wait, wait);
                 continue;
             }
 
@@ -529,6 +573,19 @@ static boolean Search(k_path_t *path)
             else if (crossing != K_CROSS_OPEN)
             {
                 wait = K_Graph_CrossingWait(link->portal, cell, &beyond);
+                opens = K_Graph_OpensByItself(link->portal, cell);
+
+                // A sector already on its way - a lift coming, a floor or a
+                // door moving, a ride - is timed from now: what is left of
+                // its wait once the player gets there (Doom II MAP20: the
+                // lift at line 537 down in 358 tics and back up in 382, the
+                // ride on it put down as 382 more, on a floor that hurts).
+                if (opens || crossing == K_CROSS_RIDE)
+                {
+                    wait = SDL_max(0.0, wait - elapsed[node] - walk / RUN_SPEED);
+                    beyond = SDL_min(beyond, wait);
+                }
+
                 step += WAIT_COST * wait;
             }
 
@@ -539,10 +596,14 @@ static boolean Search(k_path_t *path)
             }
 
             // Waiting here, then past the crossing (aboard a lift, frozen
-            // at a teleporter's destination).
+            // at a teleporter's destination). Not here on a floor that
+            // hurts for one that opens by itself: nav waits off it.
             next = 2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1);
-            Relax(next, node, step, Damage(cell, walk, wait - beyond)
-                                    + Damage(NodeCell(next), 0.0, beyond));
+            Relax(next, node, step,
+                  Damage(cell, walk, opens ? 0.0 : wait - beyond, elapsed[node])
+                  + Damage(NodeCell(next), 0.0, beyond,
+                           elapsed[node] + walk / RUN_SPEED + wait - beyond),
+                  walk / RUN_SPEED + wait, wait);
         }
     }
 
@@ -856,6 +917,7 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
     path->num_points = 0;
     path->length = 0.0;
     path->damage = 0.0;
+    path->wait = 0.0;
     path->blocked_portal = -1;
     path->blocked_from = -1;
     path->blocked_by = K_CROSS_OPEN;
@@ -867,6 +929,7 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
     start_point = start;
     goal_point = goal;
     start_cell = goal_cell = -1;
+    suit_left = SDL_max(0.0, (suit_assumed >= 0.0 ? suit_assumed : K_Map_SuitTics()) - SUIT_SPARE);
 
     if (map->loaded && graph->generation == map->generation)
     {
@@ -908,6 +971,7 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
         {
             path->result = K_PATH_FOUND;
             path->damage = hurt[goal_node];
+            path->wait = waited[goal_node];
             Reconstruct(path);
             BuildPoints(path);
             FindBlocked(path);
@@ -930,6 +994,11 @@ void K_Path_SetBlockCost(k_blockcost_t cost)
 void K_Path_SetPinchCost(k_pinchcost_t cost)
 {
     pinch_cost = cost;
+}
+
+void K_Path_AssumeSuit(double tics)
+{
+    suit_assumed = tics;
 }
 
 void K_Path_Free(k_path_t *path)

@@ -11,6 +11,9 @@
 //	shotgun guy, out of shells); far ones are left alone (the user: chasing
 //	a far hitscanner wastes time and ammo), and so are tough ones whose
 //	shots can be sidestepped across a large room (a cacodemon, a baron).
+//	One that cannot come at the player (behind bars, on a ledge) is shot
+//	at on the way, a shot or two, and never fought - unless it is a gunman,
+//	or the player is comfy, with health and ammo to spare.
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
 //	hand (a switch takes about 0.9 s), and never instead of one whose next
@@ -25,16 +28,19 @@
 //	Pistol and chaingun shots stray only when the trigger is held through
 //	a shot (P_GunShot is accurate while refire is 0): far off they are
 //	tapped, fired only from the ready state. The plasma rifle is held: let
-//	go, it pauses 20 tics after each ball. Rockets are never fired at
-//	anything close (the blast reaches 128 from where it hits), unless the
-//	player is invulnerable.
+//	go, it pauses 20 tics after each ball. Rockets are fired only where
+//	they would burst well clear of the player, as the blast measures it,
+//	their path clear of walls and other monsters, no lost soul near; and
+//	only at tough monsters, or bunched ones, unless the player is
+//	invulnerable.
 //
 //	Barrels (plan, 7.3): never set off near the player, by a shot that could
 //	graze one (spread counted, and those behind the target) or a blow; kept
 //	away from in battle. Shot on purpose, from a safe distance, when the
 //	blast is worth more than a shot at the target, when one by the route
 //	ahead could be set off by monsters as the player passes (if cheap), or
-//	when the brain wants one out of the way.
+//	when the brain wants one out of the way. One a monster's shot has hit
+//	already is primed: kept away from as one going off, and popped first.
 //
 //	Battle mode (plan, 7.4), as a human who is not speedrunning plays (the
 //	user): a monster near enough to matter, awake, or asleep but close,
@@ -242,11 +248,50 @@
 #define FIST_SHARE 0.25
 #define MELEE_HEALTH 200
 
-// Rockets: none at anything nearer than ROCKET_MIN (the blast reaches 128
-// from where it hits, the player's box 16 more), unless invulnerable for
-// INVULN_LEFT tics more at least.
-#define ROCKET_MIN 160.0
+// Rockets (the user: the rocket launcher was a suicide on most levels). The
+// blast reaches BLAST less the larger of the x and y distances, less the
+// victim's radius (P_RadiusAttack), so a rocket is fired only where it
+// would burst ROCKET_SAFE off the player measured that way, the blast, the
+// player's box and a margin for its own moves: at the target's front, the
+// target closing in during the flight (ROCKET_SPEED a tic), or at any other
+// monster in its path, its radius counted; with its path clear of walls by
+// its radius either side as far as a burst would hurt (a corner the
+// centre misses). The weapon is wanted only where that holds whichever way
+// the player faces (the diagonal: ROCKET_MIN of flight to the target's
+// front). Never at a lost soul, nor with one within SOUL_CLEAR: they charge
+// at the player and meet the rocket halfway. All of it unless invulnerable
+// for INVULN_LEFT tics more at least. And rockets are dear: against a
+// monster with no more than ROCKET_HEALTH left and alone (no other within
+// BUNCHED of it, where the blast would get it too) they rate ROCKET_SHARE
+// of their damage - no rocket for a zombieman or an imp (the user).
+#define ROCKET_RADIUS 11.0
+#define ROCKET_SPEED 20.0
+#define ROCKET_SAFE (BLAST + PLAYER_RADIUS + 48.0)
+#define ROCKET_MIN (ROCKET_SAFE * 1.4142)
+#define SOUL_CLEAR 384.0
 #define INVULN_LEFT 70
+#define ROCKET_HEALTH 100
+#define BUNCHED 96.0
+#define ROCKET_SHARE 0.25
+
+// Monsters that cannot come at the player (the user: monsters shut in for
+// good behind bars, fought for ammo the bot needed later): judged by the
+// straight line from the monster to the player (WayClear), again every
+// REACH_TICS - most often right, and a mistake only means the monster is
+// killed later. Those within CLOSE_REACH can. One that cannot is shot on
+// the way, OUT_SHOTS shots, and left alone for IGNORE_TICS; never fought
+// (the route goes on), never shot asleep, nor if it only bites; it scores
+// OUT_SHARE as a target. Not gunmen, whose bullets reach the player
+// anyway: always cleared (the user). And when comfy - health OK and the
+// ammo of the weapon in hand at COMFY_AMMO of what the player can carry or
+// more, until it falls under UNCOMFY_AMMO - they are fought as any.
+#define REACH_TICS 17
+#define REACH_PIECE 128.0
+#define MAX_REACH_MEMO 64
+#define OUT_SHOTS 2
+#define OUT_SHARE 0.5
+#define COMFY_AMMO 0.75
+#define UNCOMFY_AMMO 0.5
 
 // Barrels (MT_BARREL, 20 health): dead, one blows up 12 to 15 tics later
 // (S_BEXP to A_Explode), hurting whatever can see it for BLAST less the
@@ -267,6 +312,20 @@
 #define BLAST_SAFE 160.0
 #define BARREL_MARGIN 4.0
 #define MAX_BARRELS 256
+
+// A barrel a monster's shot has hit already (less than BARREL_HEALTH left)
+// is primed: the next hit sets it off (the user, E1M5: an imp's fireballs
+// hit one twice in a doorway, the bot passing beside it, and it went off at
+// the second). Kept away from in battle as one going off; and popped
+// first, ahead of the target, from where the player is with the weapon in
+// hand, when its chain is clear of the player and it lies within
+// PRIMED_REACH of the player or by the route ahead. Out of a fight, one
+// whose blast could reach the player while an awake monster can see it is
+// stepped away from, as one going off, out to where it can be popped; for
+// PRIMED_DODGE_TICS at the most, then passed (no shot at it from anywhere,
+// the route leading past it).
+#define PRIMED_REACH (2.0 * BLAST_SAFE)
+#define PRIMED_DODGE_TICS (3 * TICRATE)
 
 // A barrel is shot instead of the target when its blast is worth
 // BARREL_GAIN times a shot at the target, and at least BARREL_MIN (a
@@ -496,6 +555,7 @@ typedef struct
     k_vec2_t at;
     double z;
     boolean live;           // not yet shot to death
+    int health;
     int chain;              // the first barrel of its chain
 } barrel_t;
 
@@ -505,6 +565,7 @@ typedef enum
     BARREL_WEAPON,          // its blast is worth more than a shot at the target
     BARREL_TRAP,            // by the route ahead, where monsters could set it off
     BARREL_BLOCKING,        // in the way: the brain asked (K_Combat_ShootBarrel)
+    BARREL_PRIMED,          // hit already: the next hit sets it off
 } barrelwhy_t;
 
 static barrel_t barrels[MAX_BARRELS];
@@ -526,9 +587,27 @@ static k_vec2_t blocking_at;
 // (dodging_blow), at DODGE_SPEED.
 static boolean dodging;
 static boolean dodging_blow;
+static boolean dodging_primed;
+static const mobj_t *primed_mo;     // the primed barrel stepped away from last
+static int primed_tics;             // and for how long in all
 
 // When a monster or its shot last hurt the player.
 static int hurt_tic;
+
+// Whether monsters could come at the player (WayClear), judged at tic.
+typedef struct
+{
+    const mobj_t *mo;
+    int tic;
+    boolean reaches;
+} reachmemo_t;
+
+static reachmemo_t reach_memo[MAX_REACH_MEMO];
+
+// Comfy: those that cannot come at the player are fought as any; and the
+// shots on the way at the target that cannot.
+static boolean comfy;
+static int out_shots;
 
 static double ToMap(fixed_t value)
 {
@@ -749,6 +828,13 @@ static void AddBarrel(const mobj_t *mo, boolean *changed)
     barrel->at.y = ToMap(mo->y);
     barrel->z = ToMap(mo->z);
     barrel->live = live;
+    barrel->health = mo->health;
+}
+
+// Hit already, and still standing: the next hit sets it off.
+static boolean Primed(const barrel_t *barrel)
+{
+    return barrel->live && barrel->health < BARREL_HEALTH;
 }
 
 static int ChainOf(int i)
@@ -962,10 +1048,26 @@ static boolean Selectable(const player_t *player, const weapon_t *weapon)
         && !(weapon->weapon == wp_shotgun && player->weaponowned[wp_supershotgun]);
 }
 
+// Whether a lost soul is within SOUL_CLEAR of the player: no rockets.
+static boolean SoulNear(void)
+{
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (monsters[i].type == MT_SKULL && monsters[i].distance < SOUL_CLEAR)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // The damage a shot of the weapon would do, on average, to a thing of the
 // radius at the distance: 0 if it cannot fire, the thing is out of a melee
 // weapon's reach, a barrel is beside the player (a blow could set it off),
-// or a rocket would hurt the player too.
+// or a rocket could hurt the player too (ROCKET_MIN, SOUL_CLEAR).
 static double ShotDamage(const player_t *player, const weapon_t *weapon, double distance,
                          double radius)
 {
@@ -990,8 +1092,8 @@ static double ShotDamage(const player_t *player, const weapon_t *weapon, double 
     }
     else if (weapon->flies)
     {
-        if (weapon->weapon == wp_missile && distance < ROCKET_MIN
-         && player->powers[pw_invulnerability] < INVULN_LEFT)
+        if (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
+         && (distance - radius - ROCKET_RADIUS < ROCKET_MIN || SoulNear()))
         {
             return 0.0;
         }
@@ -1117,6 +1219,149 @@ static void Track(k_vec2_t me, const k_monster_t *monster, boolean same)
     target_track[tracked++ % CLOSING_TICS] = monster->at;
 }
 
+// Whether the monster could come at the player along the straight line
+// between them: no wall, no line that blocks monsters, room for its height
+// at every line, and for one that walks, no step up or drop over MAX_CLIMB
+// (monsters do not step off ledges, P_TryMove). A door it can open counts
+// as open (P_UseSpecialLine: monsters work manual doors, not secret ones);
+// one that flies heeds no floors. In pieces of REACH_PIECE, for the lines
+// near each.
+static boolean WayClear(const k_monster_t *monster, const mobj_t *mo, k_vec2_t me)
+{
+    const k_map_t *map = K_Map_Get();
+    boolean flies = (mo->flags & MF_FLOAT) != 0;
+    k_vec2_t a = monster->at;
+    double dx = me.x - a.x, dy = me.y - a.y;
+    int pieces = (int) (sqrt(dx * dx + dy * dy) / REACH_PIECE) + 1;
+    int found[128];
+    int p, k, count;
+
+    for (p = 0; p < pieces; ++p)
+    {
+        k_vec2_t p0 = { a.x + dx * p / pieces, a.y + dy * p / pieces };
+        k_vec2_t p1 = { a.x + dx * (p + 1) / pieces, a.y + dy * (p + 1) / pieces };
+        k_vec2_t min = { SDL_min(p0.x, p1.x), SDL_min(p0.y, p1.y) };
+        k_vec2_t max = { SDL_max(p0.x, p1.x), SDL_max(p0.y, p1.y) };
+
+        count = K_Graph_LinesNear(min, max, found, arrlen(found));
+
+        for (k = 0; k < count; ++k)
+        {
+            const k_line_t *line = &map->lines[found[k]];
+            double ex = line->v2.x - line->v1.x, ey = line->v2.y - line->v1.y;
+            double s0 = ex * (p0.y - line->v1.y) - ey * (p0.x - line->v1.x);
+            double s1 = ex * (p1.y - line->v1.y) - ey * (p1.x - line->v1.x);
+            double t0 = (p1.x - p0.x) * (line->v1.y - p0.y) - (p1.y - p0.y) * (line->v1.x - p0.x);
+            double t1 = (p1.x - p0.x) * (line->v2.y - p0.y) - (p1.y - p0.y) * (line->v2.x - p0.x);
+            double from_floor, from_ceiling, to_floor, to_ceiling;
+            boolean front;
+
+            // Not crossed by this piece.
+            if (s0 * s1 >= 0.0 || t0 * t1 >= 0.0)
+            {
+                continue;
+            }
+
+            if (line->back_sector < 0 || (line->flags & (ML_BLOCKING | ML_BLOCKMONSTERS)))
+            {
+                return false;
+            }
+
+            if (line->special == 1 && !(line->flags & ML_SECRET))
+            {
+                continue;
+            }
+
+            // The front side is on the right of v1 to v2.
+            front = s0 < 0.0;
+            K_Map_SectorHeights(front ? line->front_sector : line->back_sector, &from_floor,
+                                &from_ceiling);
+            K_Map_SectorHeights(front ? line->back_sector : line->front_sector, &to_floor,
+                                &to_ceiling);
+
+            if (SDL_min(from_ceiling, to_ceiling) - SDL_max(from_floor, to_floor) < monster->height
+             || (!flies && fabs(to_floor - from_floor) > MAX_CLIMB))
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// Whether the monster (by its place in this tic's list) could come at the
+// player: within CLOSE_REACH, or the way clear, judged every REACH_TICS.
+static boolean Reaches(int index)
+{
+    const k_monster_t *monster = &monsters[index];
+    const mobj_t *mo = monster_mobjs[index];
+    const mobj_t *player_mo = players[consoleplayer].mo;
+    k_vec2_t me = { ToMap(player_mo->x), ToMap(player_mo->y) };
+    int k, slot = 0;
+
+    if (monster->distance < CLOSE_REACH)
+    {
+        return true;
+    }
+
+    for (k = 0; k < MAX_REACH_MEMO; ++k)
+    {
+        if (reach_memo[k].mo == mo)
+        {
+            if (reach_memo[k].tic <= leveltime && leveltime - reach_memo[k].tic < REACH_TICS)
+            {
+                return reach_memo[k].reaches;
+            }
+
+            slot = k;
+            break;
+        }
+
+        if (reach_memo[k].tic < reach_memo[slot].tic)
+        {
+            slot = k;
+        }
+    }
+
+    reach_memo[slot].mo = mo;
+    reach_memo[slot].tic = leveltime;
+    reach_memo[slot].reaches = WayClear(monster, mo, me);
+    return reach_memo[slot].reaches;
+}
+
+// Monsters that only bite, or charge: no threat from behind bars.
+static boolean BitesOnly(int type)
+{
+    return type == MT_SERGEANT || type == MT_SHADOWS || type == MT_SKULL;
+}
+
+// Whether those that cannot come at the player are fought as any: comfy,
+// health OK and the weapon in hand's ammo plentiful (COMFY_AMMO, until
+// under UNCOMFY_AMMO).
+static void UpdateComfy(const player_t *player)
+{
+    ammotype_t ammo = weaponinfo[player->readyweapon].ammo;
+    double share = ammo == am_noammo || player->maxammo[ammo] <= 0
+                 ? 0.0 : (double) player->ammo[ammo] / player->maxammo[ammo];
+
+    if (K_Condition_Get()->health != K_NEED_OK || share < UNCOMFY_AMMO)
+    {
+        comfy = false;
+    }
+    else if (share >= COMFY_AMMO)
+    {
+        comfy = true;
+    }
+}
+
+// Whether the target must be fought as any: a gunman, or one that can come
+// at the player, or comfy.
+static boolean FoughtAsAny(int index)
+{
+    return monsters[index].hitscan || comfy || Reaches(index);
+}
+
 static void ChooseTarget(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -1138,8 +1383,20 @@ static void ChooseTarget(const player_t *player)
             continue;
         }
 
+        // One that cannot come at the player: never asleep, nor one that
+        // only bites, and less than one that can.
+        if (!FoughtAsAny(i) && (!monster->awake || BitesOnly(monster->type)))
+        {
+            continue;
+        }
+
         score = Kind(monster->type)->threat * (monster->awake ? 2.0 : 1.0)
               * (monster->attacking ? 1.5 : 1.0) * (1.0 + 384.0 / (monster->distance + 64.0));
+
+        if (!FoughtAsAny(i))
+        {
+            score *= OUT_SHARE;
+        }
 
         // Turning far round to it takes time.
         turn = Wrap(atan2(monster->at.y - me.y, monster->at.x - me.x) - facing);
@@ -1196,11 +1453,13 @@ static void ChooseTarget(const player_t *player)
     {
         if (monster_mobjs[best] != lost_mo || leveltime - lost_tic > REGAIN_TICS)
         {
-            K_Log(K_LOG_COMBAT, K_LOG_INFO, "target: the %s at (%.0f,%.0f), %.0f units%s",
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "target: the %s at (%.0f,%.0f), %.0f units%s%s",
                   monsters[best].name, monsters[best].at.x, monsters[best].at.y,
-                  monsters[best].distance, monsters[best].awake ? "" : ", asleep");
+                  monsters[best].distance, monsters[best].awake ? "" : ", asleep",
+                  FoughtAsAny(best) ? "" : ", cannot come at the player");
             progress_tic = leveltime;
             misses = 0;
+            out_shots = 0;
         }
 
         target_velocity.x = target_velocity.y = 0.0;
@@ -1277,6 +1536,18 @@ static void CountMisses(const player_t *player)
     if (status.target >= 0 && fired)
     {
         ++misses;
+
+        // On the way past one that cannot come at the player: a shot or
+        // two, then it is left alone.
+        if (!FoughtAsAny(status.target) && ++out_shots >= OUT_SHOTS)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "leaving the %s alone for %d s - it cannot come "
+                  "at the player; %d shots on the way", monsters[status.target].name,
+                  IGNORE_TICS / TICRATE, out_shots);
+            Ignore(target_mo, IGNORE_TICS);
+            DropTarget();
+            return;
+        }
     }
 
     if (status.target >= 0 && misses >= MISS_SHOTS)
@@ -1341,8 +1612,27 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
     return true;
 }
 
+// Whether another monster stands within BUNCHED of this one: a rocket's
+// blast would get it too.
+static boolean Bunched(const k_monster_t *monster)
+{
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (&monsters[i] != monster && Kind(monsters[i].type)->cost > 0.0
+         && AxisDistance(monsters[i].at, monster->at) < BUNCHED)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Rating, less for the last resorts: the pistol where it is not right, the
-// bare fist always, any melee against a tough monster.
+// bare fist always, any melee against a tough monster, rockets at one weak
+// monster alone; none for rockets at a lost soul.
 static double Preference(const player_t *player, const weapon_t *weapon,
                          const k_monster_t *monster, boolean pistol_right)
 {
@@ -1357,6 +1647,15 @@ static double Preference(const player_t *player, const weapon_t *weapon,
               || monster->health > MELEE_HEALTH))
     {
         rating *= FIST_SHARE;
+    }
+    else if (weapon->weapon == wp_missile && monster->type == MT_SKULL)
+    {
+        rating = 0.0;
+    }
+    else if (weapon->weapon == wp_missile && monster->health <= ROCKET_HEALTH
+          && !Bunched(monster))
+    {
+        rating *= ROCKET_SHARE;
     }
 
     return rating;
@@ -1746,6 +2045,27 @@ static void ChooseBarrel(const player_t *player)
         return;
     }
 
+    // Primed, near or by the route ahead: popped first, the nearest, if the
+    // weapon in hand does it at one go.
+    for (i = 0; i < num_barrels; ++i)
+    {
+        double distance = Distance(me, barrels[i].at);
+
+        if (Primed(&barrels[i]) && BarrelShot(player, weapon, distance) >= barrels[i].health
+         && (best < 0 || distance < Distance(me, barrels[best].at))
+         && BarrelInReach(player, &barrels[i], me)
+         && (distance < PRIMED_REACH || TrapBarrel(&barrels[i], me)))
+        {
+            best = i;
+        }
+    }
+
+    if (best >= 0)
+    {
+        SetBarrel(best, BARREL_PRIMED, "it was hit already, and the next hit sets it off");
+        return;
+    }
+
     for (i = 0; i < num_barrels; ++i)
     {
         double chance = SDL_min(1.0, BarrelShot(player, weapon, Distance(me, barrels[i].at))
@@ -1979,14 +2299,14 @@ static void ChooseMove(const player_t *player)
         }
 
         // Out of the blast of barrels the monsters' shots may set off, and
-        // most of all of those already going off.
+        // most of all of those already going off, or primed.
         for (i = 0; i < num_barrels; ++i)
         {
             double axis = AxisDistance(far, barrels[i].at);
 
             if (axis < BLAST_SAFE)
             {
-                score -= (barrels[i].live ? BARREL_AWAY : DYING_AWAY)
+                score -= (barrels[i].live && !Primed(&barrels[i]) ? BARREL_AWAY : DYING_AWAY)
                        * (BLAST_SAFE - axis) / BLAST_SAFE;
             }
         }
@@ -2010,7 +2330,7 @@ static void ChooseMove(const player_t *player)
 
 // A target to stop for: one some weapon in hand can hurt, in sight for a
 // while, awake and near enough to matter (asleep ones are targets only when
-// close anyway).
+// close anyway), and one that can come at the player, a gunman, or comfy.
 static boolean WorthFighting(void)
 {
     const k_monster_t *target;
@@ -2021,7 +2341,7 @@ static boolean WorthFighting(void)
     }
 
     target = &monsters[status.target];
-    return !target->awake || target->distance <= BATTLE_REACH;
+    return (!target->awake || target->distance <= BATTLE_REACH) && FoughtAsAny(status.target);
 }
 
 static void StartBattle(const player_t *player)
@@ -2121,6 +2441,41 @@ static int PendingBlast(const player_t *player)
     return best;
 }
 
+// The nearest primed barrel whose blast could reach the player, that an
+// awake monster can see, not stepped away from for PRIMED_DODGE_TICS
+// already; or -1.
+static int PrimedNear(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double eye = ToMap(player->mo->z) + ToMap(player->mo->height) * 0.75;
+    int best = -1, i, k;
+
+    for (i = 0; i < num_barrels; ++i)
+    {
+        if (!Primed(&barrels[i]) || AxisDistance(me, barrels[i].at) >= BLAST_SAFE
+         || (barrels[i].mo == primed_mo && primed_tics >= PRIMED_DODGE_TICS)
+         || (best >= 0 && AxisDistance(me, barrels[i].at) >= AxisDistance(me, barrels[best].at))
+         || !K_Sight_Check(me.x, me.y, eye, barrels[i].at.x, barrels[i].at.y, barrels[i].z,
+                           barrels[i].z + BLAST_HEIGHT))
+        {
+            continue;
+        }
+
+        for (k = 0; k < num_monsters; ++k)
+        {
+            if (monsters[k].awake && Kind(monsters[k].type)->cost > 0.0
+             && Distance(monsters[k].at, barrels[i].at) < TRAP_SEEN
+             && K_Sight_Things(monster_mobjs[k], barrels[i].mo))
+            {
+                best = i;
+                break;
+            }
+        }
+    }
+
+    return best;
+}
+
 // The monster that hurt the player in the last BLOW_HOLD tics from within
 // BLOW_REACH (BLOW_SAFE once stepping away from it) where the shots cannot
 // find it, or -1.
@@ -2145,13 +2500,15 @@ static void StopDodge(void)
     {
         dodging = false;
         dodging_blow = false;
+        dodging_primed = false;
         move.x = move.y = 0.0;
         K_Nav_Pause(0);
     }
 }
 
-// Out of a fight, away from a blast about to go off, or from blows the
-// shots cannot answer: the route waits while the player steps the walkable
+// Out of a fight, away from a blast about to go off (or a primed barrel a
+// monster can see), or from blows the shots cannot answer: the route waits
+// while the player steps the walkable
 // way that gets furthest from it. A blow is stepped away from even at a door
 // or lift (the action is begun again after), but only if some way is
 // walkable: a lift going down rides on. In battle the strafing keeps away
@@ -2162,7 +2519,7 @@ static void UpdateDodge(const player_t *player)
     double floor = ToMap(player->mo->floorz);
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
     double edge = SDL_min(EDGE_MARGIN, K_Graph_DropDistance(me, floor, EDGE_MARGIN));
-    int blast, blow;
+    int blast, primed, blow;
     k_vec2_t from, way = { 0.0, 0.0 };
     double best = -1.0;
     int k;
@@ -2171,17 +2528,32 @@ static void UpdateDodge(const player_t *player)
     {
         dodging = false;
         dodging_blow = false;
+        dodging_primed = false;
         return;
     }
 
     blast = PendingBlast(player);
-    blow = blast < 0 ? BlowFrom(player) : -1;
+    primed = blast < 0 ? PrimedNear(player) : -1;
+    blow = blast < 0 && primed < 0 ? BlowFrom(player) : -1;
 
-    if ((blast < 0 && blow < 0)
+    if ((blast < 0 && primed < 0 && blow < 0)
      || (!dodging && !K_Nav_CanPause() && !(blow >= 0 && K_Nav_Waiting())))
     {
         StopDodge();
         return;
+    }
+
+    // A primed barrel: stepped away from as one going off, for a while.
+    if (primed >= 0)
+    {
+        if (barrels[primed].mo != primed_mo)
+        {
+            primed_mo = barrels[primed].mo;
+            primed_tics = 0;
+        }
+
+        ++primed_tics;
+        blast = primed;
     }
 
     from = blast >= 0 ? barrels[blast].at : monsters[blow].at;
@@ -2203,15 +2575,20 @@ static void UpdateDodge(const player_t *player)
         }
     }
 
-    if (blast < 0 && best < 0.0)
+    if ((blast < 0 || primed >= 0) && best < 0.0)
     {
         StopDodge();
         return;
     }
 
-    if (!dodging || dodging_blow != (blast < 0))
+    if (!dodging || dodging_blow != (blast < 0) || dodging_primed != (primed >= 0))
     {
-        if (blast >= 0)
+        if (primed >= 0)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the barrel at (%.0f,%.0f) - "
+                  "hit already, a monster in sight of it; the route waits", from.x, from.y);
+        }
+        else if (blast >= 0)
         {
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the barrel at (%.0f,%.0f) "
                   "about to go off - the route waits", from.x, from.y);
@@ -2226,6 +2603,7 @@ static void UpdateDodge(const player_t *player)
 
         dodging = true;
         dodging_blow = blast < 0;
+        dodging_primed = primed >= 0;
         K_Nav_Pause(1);
     }
 
@@ -2267,6 +2645,12 @@ void K_Combat_Reset(void)
     dodging = false;
     dodging_blow = false;
     hurt_tic = -BLOW_HOLD - 1;
+    memset(reach_memo, 0, sizeof(reach_memo));
+    comfy = false;
+    out_shots = 0;
+    dodging_primed = false;
+    primed_mo = NULL;
+    primed_tics = 0;
 }
 
 void K_Combat_Tick(int driving)
@@ -2319,6 +2703,7 @@ void K_Combat_Tick(int driving)
     if (driving)
     {
         UpdateClear();
+        UpdateComfy(player);
         ChooseTarget(player);
         CountMisses(player);
         ChooseWeapon(player);
@@ -2423,11 +2808,72 @@ static boolean LineOfFire(const player_t *player, k_vec2_t from, double facing,
                        from.y + sin(facing) * reach, monster->z, monster->z + monster->height);
 }
 
+// Whether a rocket fired along the facing at the target would burst
+// ROCKET_SAFE off the player as the blast measures it (the larger of the x
+// and y distances): at the target's front, nearer by what it closes in
+// during the flight; or at another monster it would meet first; with no
+// wall within its radius either side of its path, as far as a burst there
+// would still be too near. And no lost soul within SOUL_CLEAR.
+static boolean RocketSafe(const player_t *player, k_vec2_t from, double facing,
+                          const k_monster_t *target, double distance)
+{
+    double ux = cos(facing), uy = sin(facing);
+    double axis = SDL_max(fabs(ux), fabs(uy));
+    double gun = GunHeight(player->mo);
+    double closing = -(target_velocity.x * (target->at.x - from.x)
+                     + target_velocity.y * (target->at.y - from.y)) / SDL_max(distance, 1.0);
+    double burst = distance - target->radius - ROCKET_RADIUS
+                 - SDL_max(0.0, closing) * distance / ROCKET_SPEED;
+    double reach = SDL_min(SDL_max(distance - target->radius, distance * 0.5),
+                           ROCKET_SAFE / axis + ROCKET_RADIUS);
+    double middle = target->z + target->height * 0.5;
+    int i, side;
+
+    if (SoulNear())
+    {
+        return false;
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+        double along = (monster->at.x - from.x) * ux + (monster->at.y - from.y) * uy;
+        double across = fabs((monster->at.y - from.y) * ux - (monster->at.x - from.x) * uy);
+
+        if (monster != target && along > 0.0 && along < distance
+         && across < monster->radius + ROCKET_RADIUS)
+        {
+            burst = SDL_min(burst, along - monster->radius - ROCKET_RADIUS);
+        }
+    }
+
+    if (burst * axis < ROCKET_SAFE)
+    {
+        return false;
+    }
+
+    // Its edges, at the height it flies there.
+    for (side = -1; side <= 1; side += 2)
+    {
+        double ox = -uy * ROCKET_RADIUS * side, oy = ux * ROCKET_RADIUS * side;
+        double z = gun + (middle - gun) * reach / SDL_max(distance, 1.0);
+
+        if (!K_Sight_Aim(from.x + ox, from.y + oy, gun, from.x + ox + ux * reach,
+                         from.y + oy + uy * reach, z - 4.0, z + 4.0))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Whether a shot along the facing could set off a barrel whose chain would
 // hurt the player: one the shot could graze - within the weapon's spread
 // (none when accurate), and a margin, of the facing, in reach of the shot -
 // before the target or behind it, where a miss flies on to. A rocket also
-// sets off barrels near where it lands (impact).
+// sets off barrels near where it lands (impact), and grazes them with its
+// radius.
 static boolean BarrelAtRisk(const player_t *player, k_vec2_t from, double facing,
                             const weapon_t *weapon, k_vec2_t impact, boolean accurate)
 {
@@ -2451,7 +2897,8 @@ static boolean BarrelAtRisk(const player_t *player, k_vec2_t from, double facing
 
         distance = SDL_max(Distance(from, barrel->at), 1.0);
         spread = (accurate ? 0.0 : weapon->spread * K_PI / 180.0)
-               + atan2(BARREL_RADIUS + BARREL_MARGIN, distance);
+               + atan2(BARREL_RADIUS + BARREL_MARGIN
+                       + (weapon->weapon == wp_missile ? ROCKET_RADIUS : 0.0), distance);
 
         if (fabs(Wrap(atan2(barrel->at.y - from.y, barrel->at.x - from.x) - facing)) < spread
          && K_Sight_Aim(from.x, from.y, gun, barrel->at.x, barrel->at.y, barrel->z,
@@ -2576,8 +3023,8 @@ void K_Combat_Fire(int tic, k_command_t *command)
 
     if (fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - facing)) > tolerance
      || (weapon->reach > 0.0 && distance - monster->radius > weapon->reach)
-     || (weapon->weapon == wp_missile && distance < ROCKET_MIN
-         && player->powers[pw_invulnerability] < INVULN_LEFT)
+     || (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
+         && !RocketSafe(player, from, facing, monster, distance))
      || BarrelAtRisk(player, from, facing, weapon, at, weapon->taps && player->refire == 0)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))
      || !LineOfFire(player, from, facing, monster))

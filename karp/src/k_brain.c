@@ -172,6 +172,45 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // shotgun behind a door a switch opens, were left with the shells gone).
 #define FIX_WORK 300.0
 
+// The floors that hurt on a detour (k_path.h: damage) - there and on, less
+// what the route takes anyway - count against it, each point of health as
+// DAMAGE_WAY units of detour, as the pathfinder counts them; and health is
+// gone for only when they take no more than HEALTH_NET of what it gives
+// (the user: on levels with large pools of nukage, stimpacks chased across
+// it cost more health than they gave).
+#define DAMAGE_WAY 100.0
+#define HEALTH_NET 0.5
+
+// Ways count the waits at doors, lifts and teleporters on them, as the
+// pathfinder expects them (k_path.h: wait), each tic as WAIT_WAY units, the
+// way the player could run meanwhile: an item behind a slow lift is further
+// off than its length.
+#define WAIT_WAY 16.0
+
+// A radiation suit (k_items.h: suit) is also worth the detour when going on
+// by it - the way there, then on with the suit worn - costs SUIT_GAIN less
+// than going on without, the floors counted as above: those it would keep
+// out on the route ahead, or a way round a pool cut short through it (the
+// user: worth a detour for long stretches of nukage, and lying in the
+// nukage more often than not). About 5 health: the reckoning is rough, and
+// a little saved is no trip (Doom II MAP29: 353 saved, and a lift that took
+// 24 s); MAP24's suit by the nukage run below the ledge saves 768, and the
+// bot keeps 100 health through it (70 without). Not while one is worn with
+// SUIT_KEEP tics left.
+#define SUIT_GAIN 500.0
+#define SUIT_KEEP (20 * TICRATE)
+
+// Held up by a barrel where the map shows room to pass (the user, E1M5:
+// barrels in a doorway held the bot for seconds before it squeezed past):
+// following a route, with nothing to work and no fight, the player kept
+// within HOLD_RADIUS of one spot for HOLD_TICS, a standing barrel within
+// HOLD_GAP of its box - that barrel is shot from a safe spot, as one in the
+// way (GOAL_BARREL).
+#define HOLD_TICS (5 * TICRATE / 2)
+#define HOLD_RADIUS 48.0
+#define HOLD_GAP 24.0
+#define PLAYER_RADIUS 16.0
+
 typedef enum
 {
     GOAL_GOTO,              // a point (a click)
@@ -279,6 +318,8 @@ static boolean was_critical;            // health was CRITICAL at the last look
 static int dashing = -1;                // the item fights are broken off for
 static int *item_skip;                  // per item: not looked at before this
 static int item_skip_size;
+static k_vec2_t hold_at;                // where the player has kept near, and
+static int hold_since;                  // since when (HOLD_TICS)
 
 //
 // Names
@@ -2089,18 +2130,19 @@ static boolean OpenOrFixed(const k_path_t *path, boolean fixed, goal_type_t type
 }
 
 // The extra way an item takes: there and on to where the route goes, less
-// the way left; and the way there (the work at a fix counted). With fixes
-// allowed, a way there blocked by one fix the brain knows (FIX_WORK) is
-// counted through it, and fixed set. Returns false if there is no way there,
-// or none on.
+// the way left; the way there (the work at a fix counted); and the health
+// the floors take there and on, less what they take on the way left. Ways
+// with their waits (WAIT_WAY). With fixes allowed, a way there blocked by
+// one fix the brain knows (FIX_WORK) is counted through it, and fixed set.
+// Returns false if there is no way there, or none on.
 static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
-                          double remaining, boolean fixes, double *detour, double *way,
-                          boolean *fixed)
+                          double remaining, double remaining_damage, boolean fixes,
+                          double *detour, double *way, double *damage, boolean *fixed)
 {
     goal_type_t type = GOAL_GOTO;
     int param = -1, want, portal, from, key_door, count, i;
     boolean later;
-    double there = -1.0;
+    double there = -1.0, there_damage = 0.0;
     goal_t fix;
 
     *fixed = false;
@@ -2108,7 +2150,8 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
     if (probe.result == K_PATH_FOUND)
     {
-        there = probe.length;
+        there = probe.length + probe.wait * WAIT_WAY;
+        there_damage = probe.damage;
     }
     else if (fixes && probe.result == K_PATH_BLOCKED
           && RouteFix(&probe, &type, &param, &want, &portal, &from, &later, &key_door)
@@ -2133,7 +2176,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
         for (i = 0; i < count; ++i)
         {
-            double to_fix;
+            double to_fix, to_fix_damage;
 
             K_Path_Find(&fix_probe, start, cell, fix_candidates[i].at);
 
@@ -2142,13 +2185,16 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
                 continue;
             }
 
-            to_fix = fix_probe.length;
+            to_fix = fix_probe.length + fix_probe.wait * WAIT_WAY;
+            to_fix_damage = fix_probe.damage;
             K_Path_Find(&fix_probe, fix_candidates[i].at, -1, spot);
 
             if (OpenOrFixed(&fix_probe, true, type, param)
-             && (there < 0.0 || to_fix + fix_probe.length + FIX_WORK < there))
+             && (there < 0.0
+                 || to_fix + fix_probe.length + fix_probe.wait * WAIT_WAY + FIX_WORK < there))
             {
-                there = to_fix + fix_probe.length + FIX_WORK;
+                there = to_fix + fix_probe.length + fix_probe.wait * WAIT_WAY + FIX_WORK;
+                there_damage = to_fix_damage + fix_probe.damage;
             }
         }
 
@@ -2167,8 +2213,41 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
         return false;
     }
 
-    *detour = SDL_max(0.0, there + probe.length - remaining);
+    *detour = SDL_max(0.0, there + probe.length + probe.wait * WAIT_WAY - remaining);
     *way = there;
+    *damage = SDL_max(0.0, there_damage + probe.damage - remaining_damage);
+    return true;
+}
+
+// Going on by a radiation suit: what the way there costs, and the way on
+// from it with a fresh suit worn, the waits and the floors counted
+// (WAIT_WAY, DAMAGE_WAY); the way there; and the extra way, less the way
+// left (remaining). Returns false if there is no open way there, or none
+// on.
+static boolean SuitDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
+                          double remaining, double *cost, double *way, double *detour)
+{
+    K_Path_Find(&probe, start, cell, spot);
+
+    if (probe.result != K_PATH_FOUND)
+    {
+        return false;
+    }
+
+    *way = probe.length + probe.wait * WAIT_WAY;
+    *cost = *way + probe.damage * DAMAGE_WAY;
+    K_Path_AssumeSuit(IRONTICS);
+    K_Path_Find(&probe, spot, -1, end);
+    K_Path_AssumeSuit(-1.0);
+
+    if (probe.result != K_PATH_FOUND)
+    {
+        return false;
+    }
+
+
+    *cost += probe.length + probe.wait * WAIT_WAY + probe.damage * DAMAGE_WAY;
+    *detour = SDL_max(0.0, *way + probe.length + probe.wait * WAIT_WAY - remaining);
     return true;
 }
 
@@ -2194,13 +2273,14 @@ static boolean ConsiderItems(goal_t *goal)
     int order[MAX_ITEM_ROUTES];
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
-    double best_slack = 0.0, best_detour = 0.0, best_way = 0.0;
-    boolean best_fixed = false, best_first = false;
+    double best_slack = 0.0, best_detour = 0.0, best_way = 0.0, best_damage = 0.0;
+    double remaining_way = 0.0, remaining_damage = 0.0, remaining_cost = 0.0;
+    boolean best_fixed = false, best_first = false, best_suit = false, suits = false;
     const k_item_t *chosen;
     k_pose_t player;
     k_vec2_t start, end;
     goal_t *item_goal;
-    char name[64], guarded[64] = "";
+    char name[64], guarded[64] = "", floors[64] = "";
     int detour_at = -1;     // the detour on that goes first, which a nearer one may replace
     int i, k;
 
@@ -2307,6 +2387,8 @@ static boolean ConsiderItems(goal_t *goal)
         double reach = ItemReach(item, fighting);
         double score;
 
+        suits |= item->suit && item->present;
+
         if (item->present && reach > 0.0 && distance > reach)
         {
             distance = SDL_min(distance, 2.0 * RouteDistance(path, nav->target, start, item->at));
@@ -2339,20 +2421,48 @@ static boolean ConsiderItems(goal_t *goal)
         order_score[k] = score;
     }
 
+    suits &= !fighting && detour_at < 0 && K_Map_SuitTics() < SUIT_KEEP;
+
+    // The way left as the pathfinder sees it now, with its waits, and the
+    // floors that hurt on it; as nav has it if there is none.
+    remaining_way = nav->remaining;
+
+    if (found > 0 || suits)
+    {
+        K_Path_Find(&probe, start, player.cell, end);
+
+        if (probe.result == K_PATH_FOUND)
+        {
+            remaining_way = probe.length + probe.wait * WAIT_WAY;
+            remaining_damage = probe.damage;
+        }
+
+        remaining_cost = remaining_way + remaining_damage * DAMAGE_WAY;
+    }
+
     for (k = 0; k < found; ++k)
     {
         const k_item_t *item = K_Items_Get(order[k]);
         double reach = ItemReach(item, fighting);
         boolean first = GoesFirst(item, critical);
-        double detour, way;
+        double detour, way, damage;
         boolean fixed;
 
-        if (!ItemDetour(start, player.cell, item->spot, end, nav->remaining, !fighting,
-                        &detour, &way, &fixed))
+        if (!ItemDetour(start, player.cell, item->spot, end, remaining_way, remaining_damage,
+                        !fighting, &detour, &way, &damage, &fixed))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
         }
+
+        // Health the floors on the way would take most of back: left.
+        if (item->kind == K_ITEM_HEALTH && damage > item->together * HEALTH_NET)
+        {
+            item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
+            continue;
+        }
+
+        detour += damage * DAMAGE_WAY;
 
         if (detour <= reach
          && (best < 0 || (first && !best_first)
@@ -2363,9 +2473,34 @@ static boolean ConsiderItems(goal_t *goal)
             best_slack = reach - detour;
             best_detour = detour;
             best_way = way;
+            best_damage = damage;
             best_fixed = fixed;
             best_first = first;
         }
+    }
+
+    // A radiation suit, by what going on by it saves (SUIT_GAIN); not over a
+    // weapon at a pistol start, nor health when CRITICAL.
+    for (i = 0; suits && !best_first && i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+        double cost, way, detour;
+
+        if (!item->suit || !item->present || item->reach <= 0.0 || leveltime < item_skip[i]
+         || IsFailed(GOAL_ITEM, i)
+         || !SuitDetour(start, player.cell, item->spot, end, remaining_way, &cost, &way, &detour)
+         || remaining_cost - cost <= SUIT_GAIN || (best >= 0 && remaining_cost - cost <= best_slack))
+        {
+            continue;
+        }
+
+        best = i;
+        best_slack = remaining_cost - cost;
+        best_detour = detour;
+        best_way = way;
+        best_damage = 0.0;
+        best_fixed = false;
+        best_suit = true;
     }
 
     if (best < 0)
@@ -2378,11 +2513,11 @@ static boolean ConsiderItems(goal_t *goal)
     if (detour_at >= 0)
     {
         const k_item_t *on = K_Items_Get(goals[detour_at].param);
-        double on_detour, on_way = 1.0e9;
+        double on_detour, on_way = 1.0e9, on_damage;
         boolean on_fixed;
 
-        ItemDetour(start, player.cell, on->spot, end, nav->remaining, true, &on_detour,
-                   &on_way, &on_fixed);
+        ItemDetour(start, player.cell, on->spot, end, remaining_way, remaining_damage, true,
+                   &on_detour, &on_way, &on_damage, &on_fixed);
 
         if (best_way + REPLACE_MARGIN >= on_way)
         {
@@ -2425,9 +2560,19 @@ static boolean ConsiderItems(goal_t *goal)
         M_snprintf(guarded, sizeof(guarded), ", guarded: %.0f health at risk", chosen->danger);
     }
 
-    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s, "
+    if (best_suit)
+    {
+        M_snprintf(floors, sizeof(floors), ", going on by it saves %.0f in way and floors "
+                   "that hurt", best_slack);
+    }
+    else if (best_damage >= 0.5)
+    {
+        M_snprintf(floors, sizeof(floors), ", %.0f health off floors that hurt", best_damage);
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s%s, "
           "worth %.0f (%.0f with those beside it)%s", name, chosen->at.x, chosen->at.y,
-          best_detour, best_fixed ? " through what blocks it" : "", chosen->worth,
+          best_detour, best_fixed ? " through what blocks it" : "", floors, chosen->worth,
           chosen->together, guarded);
     return true;
 }
@@ -2495,6 +2640,74 @@ static void UpdateEscape(void)
     }
 }
 
+// Held up by a barrel (HOLD_TICS): it goes on top, to be shot from a safe
+// spot. Looked at every tic, to time the hold. Returns true if it was
+// added.
+static boolean ConsiderHeldUp(const goal_t *goal)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_map_t *map = K_Map_Get();
+    double vx, vy, best_gap = HOLD_GAP, reach = PLAYER_RADIUS + HOLD_GAP + 32.0;
+    int found[16], count, best = -1, i;
+    k_pose_t player;
+    k_vec2_t me, min, max;
+    char name[64];
+
+    if (!K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    me.x = player.x;
+    me.y = player.y;
+
+    // Following a route only: not fighting or stepping away (combat moves
+    // the player), not at a door or lift, not shooting a barrel already.
+    if (!goal->planned || goal->type == GOAL_BARREL || nav->state != K_NAV_DRIVING
+     || nav->action != K_ACTION_NONE || K_Combat_Move(&vx, &vy)
+     || AxisDistance(me, hold_at) > HOLD_RADIUS)
+    {
+        hold_at = me;
+        hold_since = leveltime;
+        return false;
+    }
+
+    if (leveltime - hold_since < HOLD_TICS)
+    {
+        return false;
+    }
+
+    hold_at = me;
+    hold_since = leveltime;
+    min.x = me.x - reach;
+    min.y = me.y - reach;
+    max.x = me.x + reach;
+    max.y = me.y + reach;
+    count = K_Map_BlocksNear(min, max, found, arrlen(found));
+
+    for (i = 0; i < count; ++i)
+    {
+        const k_block_t *block = &map->blocks[found[i]];
+        double gap = AxisDistance(me, block->at) - block->radius - PLAYER_RADIUS;
+
+        if (block->barrel && gap < best_gap && Allowed(GOAL_BARREL, found[i]))
+        {
+            best = found[i];
+            best_gap = gap;
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    GoalName(Push(GOAL_BARREL, best), name, sizeof(name));
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "held up by the barrel at (%.0f,%.0f) for %.1f s - added %s",
+          map->blocks[best].at.x, map->blocks[best].at.y, (double) HOLD_TICS / TICRATE, name);
+    return true;
+}
+
 // At the spot for a barrel in the way, combat shoots it.
 static void UpdateShooting(void)
 {
@@ -2528,6 +2741,8 @@ void K_Brain_Reset(void)
     item_check_tic = 0;
     was_critical = false;
     dashing = -1;
+    hold_since = 0;
+    hold_at.x = hold_at.y = 1.0e9;
 
     if (item_skip != NULL)
     {
@@ -2673,7 +2888,7 @@ void K_Brain_Tick(void)
         return;
     }
 
-    if (DoneIfOpen(goal) || ConsiderItems(goal))
+    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderItems(goal))
     {
         return;
     }

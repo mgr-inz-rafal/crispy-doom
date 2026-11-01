@@ -2835,7 +2835,61 @@ Who controls the player in a fight (the user's model):
   watched for a second.
 - **Monsters that cannot reach the player** (the user, jotted, MAP04): melee-only monsters with
   no way to the player - the spectres in the pit on the way to the blue key - are not shot at:
-  a waste of ammo. Needs a check that the monster has a walkable way up, or none.
+  a waste of ammo. Needs a check that the monster has a walkable way up, or none. Done (the
+  user, Doom 1: monsters shut in behind bars for good were fought; they need killing some day,
+  so the rule is a judgement, not a ban): a monster can come at the player if the straight line
+  from it to the player crosses no wall, no line that blocks monsters, no opening too low for
+  it and, for one that walks, no step up or drop over 24 (doors it can open count as open; one
+  that flies heeds no floors), or it is within 96. One that cannot is shot on the way, two
+  shots, then left alone 10 s; never fought (the route goes on), never shot asleep, nor if it
+  only bites (demon, spectre, lost soul). Gunmen are cleared always, as before (the user). And
+  when comfy - health OK and the weapon in hand's ammo at 3/4 of what the player can carry,
+  until under half - the bot fights them as any.
+- **Barrels in the way, and barrels hit already** (the user, Doom 1 E1M5). Barrels in a doorway
+  the map shows room to pass held the bot for seconds before it squeezed by. Done: following a
+  route, kept within 48 units of one spot for 2.5 s with a standing barrel within 24 of its box,
+  the bot shoots that barrel from a safe spot (the goal that shoots barrels the map shows in
+  the way). The death on E1M5 at 12.4 s was no shot of the bot's: an imp's fireballs hit a
+  barrel in the doorway beside it twice (18, then 3), and from standing a player covers some 50
+  units in the 12 to 15 tics before a blast. Done: a barrel hit already (less than 20 health
+  left) is primed - kept away from in battle as one going off; out of a fight, with an awake
+  monster in sight of it, stepped away from (3 s at the most per barrel); and popped first,
+  ahead of the target, from where the player is, once its chain is clear of the player. E1M5
+  then: finished in 197 s, 91 of 91 killed, 100 health.
+- **The rocket launcher is a suicide** (the user, Doom 1: once the bot had it, it killed itself
+  sooner or later on most levels). It fired at anything 160 off or more, but the blast measures
+  the larger of the x and y distances: diagonally, 160 left about 50 damage. Done: a rocket goes
+  only where it would burst 192 off the player measured that way (blast, box, a margin), at the
+  target's front less what it closes in during the flight, or at another monster in its path;
+  its path clear of walls by its radius either side as far as a burst would hurt; never at a
+  lost soul, nor with one within 384. The weapon is wanted only where that holds whichever way
+  the player faces. And rockets are dear: against a monster with 100 health or less, alone (no
+  other within 96, in the blast), they rate a quarter - no rockets for zombiemen and imps.
+- **Floors that hurt, and radiation suits** (the user, Doom 1: stimpacks chased across large
+  pools of nukage cost more health than they gave). Done: an item's detour counts the health
+  the floors take there and on, less what the route takes anyway, each point as 100 units (as
+  the pathfinder counts it), and health whose floors would take more than half of what it gives
+  is left. Ways count their waits at doors, lifts and teleporters too (16 units a tic). A suit
+  worn keeps the floors out only while it lasts (less 5 s), not for the whole way; the wait for
+  a door or lift that opens by itself costs no floor damage, as nav waits off the floor (Doom II
+  MAP20: a lift wait counted 245 health on the blood). The wait of a sector already on its way
+  (a lift coming, a floor or door moving, a ride) is timed from now, so only what is left of it
+  when the player gets there counts (MAP20: the lift at line 537 down in 358 tics and back up in
+  382, the ride on it counted as 382 more on the blood; the way left came to 740 tics and 124
+  health, where the bot, waiting dry, lost about 10; now 365 tics and 12). A radiation suit is
+  worth a detour when going on by it - there, then on with it worn - costs about 5 health (500)
+  less than going on without: long stretches of nukage, or a way round a pool cut short (the
+  user, MAP24: the suit by the nukage run below the ledge, a second away, was passed; now taken,
+  saving 768, and the bot keeps 100 health through the run, 70 before). Seen: MAP21's megasphere,
+  2743 units off behind a floor to raise, was gone for before the waits counted; now its way
+  passes the 3000 any item pays for at most, and it is left (no monsters there; with monsters a
+  megasphere may deserve more).
+- **Armour while LOW** (the user, E1M5: green armour in plain sight by the start, at 0%, was left;
+  worth 33, it paid for some 470 units with a sleeping shotgun guy near). Done, a little less
+  eager than health and ammo: while monsters are left and armour is LOW (below 25 until above
+  40), green or blue armour pays for 1024 units of detour at least, less the more it is guarded
+  (none from 20 health at risk); never any detour at all, not armour bonuses. E1M5 then: the
+  armour picked up at 9.4 s, right after the shells.
 - Left out for now: exact missile simulation (closest approach and a free side are enough), sound
   (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
   monsters walk beyond a few tics.

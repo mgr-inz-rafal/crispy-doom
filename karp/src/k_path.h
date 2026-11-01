@@ -67,6 +67,10 @@ typedef struct
     unsigned char *legs;    // k_leg_t
     double length;          // walked or run, without the teleports
     double damage;          // the health its floors take on the way, about
+    double wait;            // tics spent at its doors, lifts and teleporters,
+                            // as K_Graph_CrossingWait expects them; of a
+                            // sector already on its way, what is left by the
+                            // time the player gets there
 
     // K_PATH_BLOCKED: the first crossing on the route that is blocked (the
     // portal, and the cell it is crossed from), why, and by how much (the
@@ -109,6 +113,12 @@ void K_Path_SetBlockCost(k_blockcost_t cost);
 typedef double (*k_pinchcost_t)(int cell, k_vec2_t at);
 
 void K_Path_SetPinchCost(k_pinchcost_t cost);
+
+// The radiation suit the searches assume: one worn from the start for that
+// many tics (k_brain.c: the way on from a suit once picked up), or with -1
+// (the default) the player's own, for as long as it has left. While worn,
+// the floors it keeps out cost nothing.
+void K_Path_AssumeSuit(double tics);
 
 void K_Path_Free(k_path_t *path);
 

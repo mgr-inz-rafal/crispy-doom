@@ -1589,8 +1589,16 @@ void K_Map_SectorHeights(int sector, double *floor, double *ceiling)
 
 double K_Map_FloorDamage(int sector)
 {
-    boolean suit;
+    return K_Map_SuitFloorDamage(sector, players[consoleplayer].powers[pw_ironfeet] > 0);
+}
 
+int K_Map_SuitTics(void)
+{
+    return players[consoleplayer].powers[pw_ironfeet];
+}
+
+double K_Map_SuitFloorDamage(int sector, int suit)
+{
     if (sector < 0 || sector >= numsectors)
     {
         return 0.0;
@@ -1598,8 +1606,6 @@ double K_Map_FloorDamage(int sector)
 
     // P_PlayerInSpecialSector: once every 32 tics on the floor. A radiation
     // suit keeps out all of 5 and 7, and of 4 and 16 all but 5 in 256.
-    suit = players[consoleplayer].powers[pw_ironfeet] > 0;
-
     switch (sectors[sector].special)
     {
         case 5:
