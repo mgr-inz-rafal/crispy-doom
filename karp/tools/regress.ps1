@@ -59,6 +59,9 @@
 .EXAMPLE
     .\karp\tools\regress.ps1 -Maps '02' -Monsters -Salt 7
 #>
+# An unknown parameter is an error rather than dropped into $args: a mistyped
+# -karpsalt ran unsalted without a word.
+[CmdletBinding()]
 param(
     [string]$Iwad = $env:DOOM2_IWAD,
     [string[]]$Maps = @('01', '02', '03', '04', '05', '06', '08', '09', '10', '11', '12', '13', '14',
