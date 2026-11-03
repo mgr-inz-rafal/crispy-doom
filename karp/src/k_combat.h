@@ -135,6 +135,10 @@ void K_Combat_Fire(int tic, k_command_t *command);
 // What a kind of monster (a mobjtype_t) is called: "baron of hell".
 const char *K_Combat_KindName(int type);
 
+// What a fight with a kind of monster takes in health, roughly (the cost
+// K_Combat_Danger counts it by); 0 for one never fought (Commander Keen).
+double K_Combat_KindCost(int type);
+
 int K_Combat_MonsterCount(void);
 const k_monster_t *K_Combat_Monster(int index);
 int K_Combat_ProjectileCount(void);

@@ -35,6 +35,7 @@
 #include "r_state.h"
 
 #include "karp.h"
+#include "k_area.h"
 #include "k_brain.h"
 #include "k_combat.h"
 #include "k_condition.h"
@@ -182,6 +183,19 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define DAMAGE_WAY 100.0
 #define HEALTH_NET 0.5
 
+// So do the monsters inside the areas a detour goes through that the route
+// left does not (k_area.h: inside, the asleep at half) - not the item's own
+// area, whose guards its worth counts already (k_items.h: danger) - each
+// point of health as DAMAGE_WAY units of detour (the user: detours took the
+// bot into fresh fights on many fronts, waking monsters). An item any detour
+// pays for (k_items.h: reach - health LOW, the ammo running out) pays for
+// no more than RISKY_REACH while they come to RISKY_ANY or more (MAP10: a
+// stimpack at LOW health, 18062 units out of the way through 125 health of
+// monsters); but for health CRITICAL, when staying costs as much.
+#define ANY_REACH 1.0e5
+#define RISKY_ANY 20.0
+#define RISKY_REACH 3000.0
+
 // Ways count the waits at doors, lifts and teleporters on them, as the
 // pathfinder expects them (k_path.h: wait), each tic as WAIT_WAY units, the
 // way the player could run meanwhile: an item behind a slow lift is further
@@ -320,6 +334,14 @@ static int *line_last;              // per line, when it was last chosen
 static k_path_t scratch;
 static k_path_t probe;              // routes looked at while scratch is in use
 static k_path_t fix_probe;          // routes to and from a fix an item is behind
+
+// Areas (k_area.h) the route left goes through, marked route_stamp; those a
+// detour has counted already, marked risk_stamp.
+static int *route_marks;
+static int *risk_marks;
+static int marks_size;
+static int route_stamp;
+static int risk_stamp;
 static candidate_t fix_candidates[MAX_CANDIDATES];
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
@@ -2343,23 +2365,81 @@ static boolean OpenOrFixed(const k_path_t *path, boolean fixed, goal_type_t type
             && fix_type == type && fix_param == param);
 }
 
+// Marks the areas the route goes through from its route cell `from` on
+// (route_marks).
+static void MarkRouteAreas(const k_path_t *path, int from)
+{
+    int i;
+
+    if (marks_size < K_Area_Get()->num_areas)
+    {
+        marks_size = K_Area_Get()->num_areas * 2;
+        route_marks = realloc(route_marks, marks_size * sizeof(*route_marks));
+        risk_marks = realloc(risk_marks, marks_size * sizeof(*risk_marks));
+        memset(route_marks, 0, marks_size * sizeof(*route_marks));
+        memset(risk_marks, 0, marks_size * sizeof(*risk_marks));
+    }
+
+    ++route_stamp;
+
+    for (i = SDL_max(from, 0); path != NULL && i < path->num_cells; ++i)
+    {
+        int area = K_Area_Of(path->cells[i]);
+
+        if (area >= 0)
+        {
+            route_marks[area] = route_stamp;
+        }
+    }
+}
+
+// What the monsters inside the areas a way goes through would cost (k_area.h:
+// inside), but for the areas of the route (MarkRouteAreas), the area `skip`
+// and those counted already for this detour (risk_marks).
+static double WayRisk(const k_path_t *path, int skip)
+{
+    double risk = 0.0;
+    int i;
+
+    for (i = 0; i < path->num_cells; ++i)
+    {
+        int area = K_Area_Of(path->cells[i]);
+
+        if (area < 0 || area >= marks_size || area == skip || route_marks[area] == route_stamp
+         || risk_marks[area] == risk_stamp)
+        {
+            continue;
+        }
+
+        risk_marks[area] = risk_stamp;
+        risk += K_Area_Get()->areas[area].inside;
+    }
+
+    return risk;
+}
+
 // The extra way an item takes: there and on to where the route goes, less
 // the way left; the way there (the work at a fix counted); and the health
 // the floors take there and on, less what they take on the way left. Ways
 // with their waits (WAIT_WAY). With fixes allowed, a way there blocked by
 // one fix the brain knows (FIX_WORK) is counted through it, and fixed set.
-// Returns false if there is no way there, or none on.
+// risk, if not NULL, gets what the monsters in the areas the detour goes
+// through and the route does not would cost (WayRisk; not on the way to a
+// fix). Returns false if there is no way there, or none on.
 static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
                           double remaining, double remaining_damage, boolean fixes,
-                          double *detour, double *way, double *damage, boolean *fixed)
+                          double *detour, double *way, double *damage, boolean *fixed,
+                          double *risk)
 {
     goal_type_t type = GOAL_GOTO;
     int param = -1, want, portal, from, key_door, count, i;
+    int spot_area = K_Area_Of(K_Map_CellAt(spot.x, spot.y));
     boolean later;
-    double there = -1.0, there_damage = 0.0;
+    double there = -1.0, there_damage = 0.0, there_risk = 0.0;
     goal_t fix;
 
     *fixed = false;
+    ++risk_stamp;
     K_Path_Find(&probe, start, cell, spot);
 
     if (probe.result == K_PATH_FOUND)
@@ -2371,6 +2451,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
         there = probe.length + probe.wait * WAIT_WAY;
         there_damage = probe.damage;
+        there_risk = WayRisk(&probe, spot_area);
     }
     else if (fixes && probe.result == K_PATH_BLOCKED
           && RouteFix(&probe, &type, &param, &want, &portal, &from, &later, &key_door)
@@ -2437,6 +2518,12 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
     *detour = SDL_max(0.0, there + probe.length + probe.wait * WAIT_WAY - remaining);
     *way = there;
     *damage = SDL_max(0.0, there_damage + probe.damage - remaining_damage);
+
+    if (risk != NULL)
+    {
+        *risk = there_risk + WayRisk(&probe, spot_area);
+    }
+
     return true;
 }
 
@@ -2495,13 +2582,14 @@ static boolean ConsiderItems(goal_t *goal)
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
     double best_slack = 0.0, best_detour = 0.0, best_way = 0.0, best_damage = 0.0;
+    double best_risk = 0.0;
     double remaining_way = 0.0, remaining_damage = 0.0, remaining_cost = 0.0;
     boolean best_fixed = false, best_first = false, best_suit = false, suits = false;
     const k_item_t *chosen;
     k_pose_t player;
     k_vec2_t start, end;
     goal_t *item_goal;
-    char name[64], guarded[64] = "", floors[64] = "";
+    char name[64], guarded[64] = "", floors[64] = "", risky[64] = "";
     int detour_at = -1;     // the detour on that goes first, which a nearer one may replace
     int i, k;
 
@@ -2670,6 +2758,11 @@ static boolean ConsiderItems(goal_t *goal)
         {
             remaining_way = probe.length + probe.wait * WAIT_WAY;
             remaining_damage = probe.damage;
+            MarkRouteAreas(&probe, 0);
+        }
+        else
+        {
+            MarkRouteAreas(path, nav->route_cell);
         }
 
         remaining_cost = remaining_way + remaining_damage * DAMAGE_WAY;
@@ -2680,11 +2773,11 @@ static boolean ConsiderItems(goal_t *goal)
         const k_item_t *item = K_Items_Get(order[k]);
         double reach = ItemReach(item, fighting);
         boolean first = GoesFirst(item, critical);
-        double detour, way, damage;
+        double detour, way, damage, risk;
         boolean fixed;
 
         if (!ItemDetour(start, player.cell, item->spot, end, remaining_way, remaining_damage,
-                        !fighting, &detour, &way, &damage, &fixed))
+                        !fighting, &detour, &way, &damage, &fixed, &risk))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
@@ -2697,7 +2790,12 @@ static boolean ConsiderItems(goal_t *goal)
             continue;
         }
 
-        detour += damage * DAMAGE_WAY;
+        if (reach > ANY_REACH && risk >= RISKY_ANY && !(critical && item->kind == K_ITEM_HEALTH))
+        {
+            reach = RISKY_REACH;
+        }
+
+        detour += (damage + risk) * DAMAGE_WAY;
 
         if (detour <= reach
          && (best < 0 || (first && !best_first)
@@ -2709,6 +2807,7 @@ static boolean ConsiderItems(goal_t *goal)
             best_detour = detour;
             best_way = way;
             best_damage = damage;
+            best_risk = risk;
             best_fixed = fixed;
             best_first = first;
         }
@@ -2734,6 +2833,7 @@ static boolean ConsiderItems(goal_t *goal)
         best_detour = detour;
         best_way = way;
         best_damage = 0.0;
+        best_risk = 0.0;
         best_fixed = false;
         best_suit = true;
     }
@@ -2752,7 +2852,7 @@ static boolean ConsiderItems(goal_t *goal)
         boolean on_fixed;
 
         ItemDetour(start, player.cell, on->spot, end, remaining_way, remaining_damage, true,
-                   &on_detour, &on_way, &on_damage, &on_fixed);
+                   &on_detour, &on_way, &on_damage, &on_fixed, NULL);
 
         if (best_way + REPLACE_MARGIN >= on_way)
         {
@@ -2805,10 +2905,16 @@ static boolean ConsiderItems(goal_t *goal)
         M_snprintf(floors, sizeof(floors), ", %.0f health off floors that hurt", best_damage);
     }
 
-    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s%s, "
+    if (best_risk >= 0.5)
+    {
+        M_snprintf(risky, sizeof(risky), ", %.0f health at risk in the areas on the way",
+                   best_risk);
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s%s%s, "
           "worth %.0f (%.0f with those beside it)%s", name, chosen->at.x, chosen->at.y,
-          best_detour, best_fixed ? " through what blocks it" : "", floors, chosen->worth,
-          chosen->together, guarded);
+          best_detour, best_fixed ? " through what blocks it" : "", floors, risky,
+          chosen->worth, chosen->together, guarded);
     return true;
 }
 

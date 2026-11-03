@@ -3690,6 +3690,11 @@ const char *K_Combat_KindName(int type)
     return Kind(type)->name;
 }
 
+double K_Combat_KindCost(int type)
+{
+    return Kind(type)->cost;
+}
+
 int K_Combat_MonsterCount(void)
 {
     return num_monsters;

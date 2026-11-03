@@ -12,6 +12,7 @@ set(IMGUI_DIR "${KARP_DIR}/third_party/imgui")
 
 set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/karp.c"            "${KARP_DIR}/src/karp.h"
+    "${KARP_DIR}/src/k_area.c"          "${KARP_DIR}/src/k_area.h"
     "${KARP_DIR}/src/k_brain.c"         "${KARP_DIR}/src/k_brain.h"
     "${KARP_DIR}/src/k_combat.c"        "${KARP_DIR}/src/k_combat.h"
     "${KARP_DIR}/src/k_condition.c"     "${KARP_DIR}/src/k_condition.h"

@@ -19,6 +19,7 @@
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 
+#include "k_area.h"
 #include "k_brain.h"
 #include "k_combat.h"
 #include "k_condition.h"
@@ -70,6 +71,7 @@ static bool view_centroids;
 static bool view_graph;
 static bool view_monsters = true;
 static bool view_items = true;
+static bool view_areas = true;
 static std::vector<ImVec2> screen_points;   // scratch for polygon drawing
 
 static const ImVec4 category_colors[K_LOG_NUMCATEGORIES] =
@@ -529,6 +531,102 @@ static void DrawCells(ImDrawList *draw, const k_map_t *map,
     }
 }
 
+// An area's fill: green when safe (faint until visited, violet where its
+// floor hurts), yellow to red as its danger grows, blue for a door or lift.
+static ImU32 AreaColor(int index)
+{
+    const k_area_t *area = &K_Area_Get()->areas[index];
+
+    if (area->passage)
+    {
+        return IM_COL32(90, 140, 255, 45);
+    }
+
+    if (!K_Area_Safe(index))
+    {
+        float t = (float) SDL_min(1.0, area->danger / 40.0);
+
+        return IM_COL32(255, (int) (210.0f - 160.0f * t), (int) (60.0f - 20.0f * t),
+                        (int) (40.0f + 70.0f * t));
+    }
+
+    if (area->hurts >= 0.5)
+    {
+        return IM_COL32(190, 80, 255, area->visited ? 60 : 30);
+    }
+
+    return IM_COL32(60, 210, 90, area->visited ? 60 : 22);
+}
+
+// Areas (k_area.h): their cells filled by how dangerous they are, the
+// borders between them, and the danger written in those not safe, when
+// zoomed in enough to read it.
+static void DrawAreas(ImDrawList *draw, const k_map_t *map, const ImVec2 &center,
+                      const ImVec2 &origin, const ImVec2 &size)
+{
+    const k_areamap_t *areas = K_Area_Get();
+    const k_graph_t *graph = K_Graph_Get();
+    float thickness = SDL_max(1.0f, ui_scale);
+
+    if (areas->generation != map->generation || graph->generation != map->generation)
+    {
+        return;
+    }
+
+    for (int i = 0; i < map->num_cells; ++i)
+    {
+        const k_cell_t *cell = &map->cells[i];
+
+        if (areas->area_of[i] < 0 || !CellOnScreen(cell, center, origin, size))
+        {
+            continue;
+        }
+
+        ProjectCell(map, cell, center);
+        draw->AddConvexPolyFilled(screen_points.data(), cell->num_points,
+                                  AreaColor(areas->area_of[i]));
+    }
+
+    for (int i = 0; i < graph->num_portals; ++i)
+    {
+        const k_portal_t *portal = &graph->portals[i];
+
+        if (portal->jump < 0 && areas->area_of[portal->cell[0]] != areas->area_of[portal->cell[1]])
+        {
+            draw->AddLine(MapToScreen(center, portal->a.x, portal->a.y),
+                          MapToScreen(center, portal->b.x, portal->b.y),
+                          IM_COL32(255, 255, 255, 110), thickness);
+        }
+    }
+
+    for (int i = 0; i < areas->num_areas; ++i)
+    {
+        const k_area_t *area = &areas->areas[i];
+        ImVec2 at = MapToScreen(center, area->center.x, area->center.y);
+        char text[32];
+
+        if (K_Area_Safe(i) || area->passage
+         || (area->max.x - area->min.x) * view_scale < 48.0 * ui_scale)
+        {
+            continue;
+        }
+
+        if (area->monsters > 0)
+        {
+            snprintf(text, sizeof(text), "%.0f (%d)", area->danger, area->monsters);
+        }
+        else
+        {
+            snprintf(text, sizeof(text), "%.0f", area->danger);
+        }
+
+        ImVec2 text_size = ImGui::CalcTextSize(text);
+
+        draw->AddText(ImVec2(at.x - text_size.x * 0.5f, at.y - text_size.y * 0.5f),
+                      IM_COL32(255, 255, 255, 200), text);
+    }
+}
+
 static void DrawCentroids(ImDrawList *draw, const k_map_t *map,
                           const ImVec2 &center)
 {
@@ -740,6 +838,8 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
     char cell_of[32] = "";
     char under[64] = "";
     char stood[48] = "";
+    char area_text[128] = "";
+    int area_index = K_Area_Of(index);
     double floor, ceiling;
 
     if (graph->generation == map->generation)
@@ -775,11 +875,21 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
                  K_Map_CellFloor(index));
     }
 
+    if (area_index >= 0)
+    {
+        const k_area_t *area = &K_Area_Get()->areas[area_index];
+
+        snprintf(area_text, sizeof(area_text), "\nArea %d%s: %s, danger %.0f; %d monsters "
+                 "inside (%d awake)%s", area_index, area->passage ? " (door or lift)" : "",
+                 K_Area_Safe(area_index) ? "safe" : "not safe", area->danger, area->monsters,
+                 area->awake, area->visited ? ", visited" : "");
+    }
+
     ImGui::SetTooltip("Subsector %d%s%s\nSector %d\nFloor %.0f%s, ceiling %.0f\n"
-                      "%d vertices, area %.0f%s\n%s", cell->subsector, cell_of,
+                      "%d vertices, area %.0f%s%s\n%s", cell->subsector, cell_of,
                       ss->foreign_floor ? " (other-sector floor)" : "", ss->sector,
                       floor, stood, ceiling, cell->num_points, cell->area, under,
-                      neighbours.c_str());
+                      area_text, neighbours.c_str());
 }
 
 // Monsters as circles of their radius, with a tick the way they face: dark
@@ -1136,6 +1246,20 @@ static void DrawMapView(void)
                           "backpack. Violet: power-ups.\nBright: worth a detour now.");
     }
 
+    ImGui::SameLine();
+    ImGui::Checkbox("Areas", &view_areas);
+
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Room-like areas, split at doors, lifts and narrow openings, "
+                          "large spaces in pieces.\nGreen: safe - no monster inside, "
+                          "none that could hit the player there (bright once visited; "
+                          "violet: its floor hurts).\nYellow to red: the danger, the "
+                          "health the monsters that could hit the player there would "
+                          "cost; the number, and in brackets the monsters inside.\n"
+                          "Blue: a door or lift.");
+    }
+
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -1224,6 +1348,11 @@ static void DrawMapView(void)
     if (view_cells)
     {
         DrawCells(draw, map, center, origin, size);
+    }
+
+    if (view_areas)
+    {
+        DrawAreas(draw, map, center, origin, size);
     }
 
     if (path != NULL)
@@ -1467,6 +1596,22 @@ static void DrawMapTab(void)
         }
 
         StatRow("Build time", "%.1f ms", graph->build_ms);
+
+        const k_areamap_t *areas = K_Area_Get();
+
+        if (areas->generation == map->generation)
+        {
+            StatRow("Areas", "%d (%d doors or lifts), %.1f ms", areas->num_areas,
+                    areas->passages, areas->build_ms);
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Room-like areas: cells joined across open "
+                                  "crossings, split at doors, lifts, teleporters "
+                                  "and narrow openings, large spaces in pieces.");
+            }
+        }
+
         ImGui::EndTable();
     }
 }

@@ -3041,7 +3041,28 @@ Who controls the player in a fight (the user's model):
     floors that hurt make an area no place to hold, not a dangerous one; cleared once visited
     and empty, unsafe again when monsters turn up (teleported in, raised, spat out). A console
     overlay. First use: a detour costs the danger of the areas it enters that the route would
-    not.
+    not. Done (`k_area.c`): cells join where the floor goes on across the crossing both ways
+    (open; a solid thing over it; within a sector a BSP sliver too narrow to cross - half of
+    MAP04's crossings, which at first left most areas a single cell), within a step, not into a
+    door, a lift or a sector shut at load (a door a switch opens, bars: passages, areas of
+    their own); two sectors meeting over less than 128 of open border all told only touch.
+    Areas grow from the cell furthest south-west, breadth first, up to 768 across; areas under
+    128 by 128 of floor join the neighbour they share most border with, touching or joined (a
+    light strip, a pillar's foot), up to 960. A single huge cell stays one area (MAP20's open
+    ground, 2611 across). MAP04 comes out at 67 areas (30 doors, lifts and bars), MAP15 202 (49),
+    MAP20 196 (25), in 2 to 6 ms. Live: the monsters inside each area every tic, the asleep at
+    half; its danger, a few areas a tic, each about once a second - every live monster within
+    1024 that stands in it or can see one of up to 4 of its cells' middles, spread over it, by
+    its kind's cost, in full within 512; whether the player has stood in it; the share of its
+    floor that hurts. Safe: no monster inside, danger below a lone zombieman's. A detour costs
+    the monsters inside the areas it goes through that the route does not (not the item's own
+    area: its guards count already), each point of health as 100 units of detour, as floors
+    that hurt; an item any detour pays for (health LOW, the ammo running out) pays for 3000 at
+    the most while they come to 20 or more, but for health CRITICAL (MAP10: a stimpack at LOW
+    health, 18062 units out of the way through 125 health of monsters). The console's Areas
+    overlay: green safe (faint until visited, violet where the floor hurts), yellow to red by
+    danger with the number and the monsters inside, blue for passages, the borders between
+    areas; the area in the cell's tooltip; the count in the Map tab.
   - **C3**: fighting from safety (the user: by default stay in safe areas; open a door and hold
     outside, cherry-picking, instead of rushing in to be surrounded): hold at the safe side of
     the way into an area that is not safe, fight what comes or can be seen from there, go in
