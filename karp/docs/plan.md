@@ -3012,6 +3012,51 @@ Who controls the player in a fight (the user's model):
   wall after a sidestep, which the simulation finds already; in the open it turns back for pass
   after pass (a circle about 270 across; the player outruns it, 16.7 a tic to its 10), so get a
   wall between it and the player. Hitscanners as ever.
+- **Fights the bot walks into** (the user, after the sweep). Sticky detours: MAP10, out of shells
+  with bullets plenty (ammo not LOW), the shotguns dropped 30 to 100 off were passed for a cell
+  charge 2000 off, and the bot fought lost souls, demons and a pain elemental with the pistol.
+  Damaging floors: MAP15, fights in the middle of large lava pits. No safe areas: a detour, or a
+  door opened onto a room, takes the bot into fresh fights on many fronts, waking monsters,
+  surrounded. Planned, in this order:
+  - **C1**: a firepower need - the best weapon with ammo far weaker than a weapon held without
+    (the pistol, a shotgun held empty) - whose ammo goes first: it replaces a detour on, and is
+    dashed for in a fight; no fight begun on a floor that hurts (shooting on the way, the route
+    carrying on to dry floor), and in a fight dry floor first. Done: firepower is a need of the
+    condition (7.9); the ammo that matters running out is now the ammo of a strong weapon held
+    while firepower is LOW, and strong weapons lying about (not at a pistol start: weapons go
+    first there anyway), no longer the best weapon's ammo while another strong weapon fires
+    (MAP10: cells below a BFG shot, the shotgun loaded, paid for 6467 units of detour). That ammo,
+    like health, is worth leaving a fight for, goes before other items and drops a detour on,
+    but for health CRITICAL, when only health goes first (MAP15: a clip was added over the
+    medikits at 9 health and dropped for them every second). A fight is neither begun nor kept
+    on a floor that hurts: it is broken off, the route goes on, shooting on the way (E1M5,
+    MAP15). MAP15 then finished (144.9 s, 90 health; it had died twice), three fights broken off
+    on the lava; the cell charge hunts of MAP10 gone. Seen, left: MAP10's door onto the
+    Cyberdemon (C3), deaths to hitscanners met on the way (C2, C3), E1M7 stuck in a gap
+    (navigation, later).
+  - **C2**: areas - rooms split at doors, lifts, teleporters and narrow openings, and large open
+    spaces cut into pieces of bounded size (cells, not sectors: the user, large open maps) -
+    with a live danger per area: monsters inside (asleep at half), awake ones that can see in,
+    by distance and sight, not by being in the same sector; missiles not counted (they pass);
+    floors that hurt make an area no place to hold, not a dangerous one; cleared once visited
+    and empty, unsafe again when monsters turn up (teleported in, raised, spat out). A console
+    overlay. First use: a detour costs the danger of the areas it enters that the route would
+    not.
+  - **C3**: fighting from safety (the user: by default stay in safe areas; open a door and hold
+    outside, cherry-picking, instead of rushing in to be surrounded): hold at the safe side of
+    the way into an area that is not safe, fight what comes or can be seen from there, go in
+    once it is quiet (never stuck: in after a while anyway); fall back to the nearest safe area
+    when a fight goes badly; cover (line of sight, above); a soft cost on routes through areas
+    with awake strong monsters in sight (the user: soft only).
+- **Tough monsters** (the user, jotted for later):
+  - The Cyberdemon: never close to it if it can be helped - from up close it is nearly
+    impossible to beat, even at 200% health and armour with a full BFG.
+  - Invulnerability used well (MAP10: the bot beat a Cyberdemon with the BFG, and picked up the
+    invulnerability sphere after the fight). Map designers often leave one for the Cyberdemon:
+    plan to have it for the fight.
+  - Barons and arch-viles: stay away from them too - though one BFG shot point blank settles it.
+  - With tough monsters alive (Cyberdemon, Spider Mastermind, barons, arch-viles), keep plasma
+    cells in reserve for them; the low tier monsters are cleared with low tier weapons.
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
@@ -3023,7 +3068,9 @@ Who controls the player in a fight (the user's model):
   at 50 the bot looked anything but comfy, and below 75 none of a medikit's 25 is wasted),
   CRITICAL below 25 until above 35; armour LOW below 25 until above 40; ammo LOW when no ammo the
   player has a weapon for is at its low mark (bullets 20, shells 5, rockets 3, cells 40), OK again
-  above 30, 8, 5, 60.
+  above 30, 8, 5, 60; firepower LOW when no strong weapon held (the shotguns, the chaingun, the
+  rocket launcher, the plasma rifle, the BFG) has its ammo at the low mark - the pistol is the
+  best the player has, however many bullets - OK again at the OK mark (7.8, C1).
 - **Items** (7.5, `k_items.c`): every item lying in the level, told by its sprite as
   `P_TouchSpecialThing` tells it, found by place and sprite each tic, and worth what picking it
   up would give now: health below the most it may reach, armour better than what is worn (a

@@ -1,11 +1,11 @@
 //
 // DESCRIPTION:
-//	Karp condition: the player's ammo, health and armour, each judged on
-//	its own, with hysteresis - a need goes LOW below one mark and back to
-//	OK only above a higher one, so a stimpack does not flip it back and
-//	forth. The condition is the worst need, in the order COMFY, LOW AMMO,
-//	LOW HEALTH, CRITICAL; armour alone does not change it. For now it is
-//	only shown and logged; nothing acts on it yet (plan, 7.7: C4).
+//	Karp condition: the player's ammo, firepower, health and armour, each
+//	judged on its own, with hysteresis - a need goes LOW below one mark and
+//	back to OK only above a higher one, so a stimpack does not flip it back
+//	and forth. The condition is the worst need, in the order COMFY, LOW
+//	AMMO (ammo or firepower), LOW HEALTH, CRITICAL; armour alone does not
+//	change it.
 //
 
 #include <string.h>
@@ -34,6 +34,15 @@
 static const int ammo_low[NUMAMMO] = { 20, 5, 40, 3 };     // clip, shell, cell, misl
 static const int ammo_ok[NUMAMMO] = { 30, 8, 60, 5 };
 
+// Firepower is LOW when no strong weapon held (K_Condition_Strong) has its
+// ammo at the LOW mark: the pistol, the fist or the chainsaw is what the
+// player fights with, however many bullets it has (the user, Doom II MAP10:
+// out of shells, cells below a BFG shot, bullets plenty - ammo not LOW - the
+// bot fought lost souls, demons and a pain elemental with the pistol, the
+// shotguns the shotgun guys dropped lying by). OK again once one has its
+// ammo at the OK mark (MAP06: a shotgun picked up, 8 shells, was not
+// enough, and the bot broke off a fight for more).
+
 static k_conditionstatus_t status;
 static boolean judged;
 
@@ -44,6 +53,12 @@ void K_Condition_Reset(void)
 {
     memset(&status, 0, sizeof(status));
     judged = false;
+}
+
+int K_Condition_Strong(int weapon)
+{
+    return weapon == wp_shotgun || weapon == wp_supershotgun || weapon == wp_chaingun
+        || weapon == wp_missile || weapon == wp_plasma || weapon == wp_bfg;
 }
 
 // Whether the player has a weapon that fires the ammo type.
@@ -73,6 +88,30 @@ static k_need_t JudgeAmmo(const player_t *player, k_need_t was)
         {
             at_low |= player->ammo[a] >= ammo_low[a];
             above_ok |= player->ammo[a] > ammo_ok[a];
+        }
+    }
+
+    if (was == K_NEED_OK)
+    {
+        return at_low ? K_NEED_OK : K_NEED_LOW;
+    }
+
+    return above_ok ? K_NEED_OK : K_NEED_LOW;
+}
+
+static k_need_t JudgeFirepower(const player_t *player, k_need_t was)
+{
+    boolean at_low = false, above_ok = false;
+    int w;
+
+    for (w = 0; w < NUMWEAPONS; ++w)
+    {
+        ammotype_t ammo = weaponinfo[w].ammo;
+
+        if (player->weaponowned[w] && K_Condition_Strong(w))
+        {
+            at_low |= player->ammo[ammo] >= ammo_low[ammo];
+            above_ok |= player->ammo[ammo] >= ammo_ok[ammo];
         }
     }
 
@@ -127,21 +166,23 @@ void K_Condition_Tick(void)
     status.cells = player->ammo[am_cell];
 
     status.ammo = JudgeAmmo(player, judged ? was.ammo : K_NEED_OK);
+    status.firepower = JudgeFirepower(player, judged ? was.firepower : K_NEED_OK);
     status.health = JudgeHealth(player->health, judged ? was.health : K_NEED_OK);
     status.armour = JudgeArmour(player->armorpoints, judged ? was.armour : K_NEED_OK);
 
     status.condition = status.health == K_NEED_CRITICAL ? K_CONDITION_CRITICAL
                      : status.health == K_NEED_LOW ? K_CONDITION_LOW_HEALTH
-                     : status.ammo == K_NEED_LOW ? K_CONDITION_LOW_AMMO
+                     : status.ammo == K_NEED_LOW || status.firepower == K_NEED_LOW
+                     ? K_CONDITION_LOW_AMMO
                      : K_CONDITION_COMFY;
 
-    if (!judged || status.ammo != was.ammo || status.health != was.health
-     || status.armour != was.armour)
+    if (!judged || status.ammo != was.ammo || status.firepower != was.firepower
+     || status.health != was.health || status.armour != was.armour)
     {
-        K_Log(K_LOG_BRAIN, K_LOG_INFO, "condition %s - ammo %s, health %s (%d), armour %s (%d)",
-              condition_names[status.condition], need_names[status.ammo],
-              need_names[status.health], status.health_points, need_names[status.armour],
-              status.armour_points);
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "condition %s - ammo %s, firepower %s, health %s (%d), "
+              "armour %s (%d)", condition_names[status.condition], need_names[status.ammo],
+              need_names[status.firepower], need_names[status.health], status.health_points,
+              need_names[status.armour], status.armour_points);
     }
 
     judged = true;

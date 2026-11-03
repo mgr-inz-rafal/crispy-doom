@@ -2695,17 +2695,18 @@ static void StartBattle(const player_t *player)
     K_Nav_Pause(1);
 }
 
-static void EndBattle(const player_t *player)
+// Over, or broken off for why (NULL if not).
+static void EndBattle(const player_t *player, const char *why)
 {
     battle = false;
     status.battle = false;
     move.x = move.y = 0.0;
 
-    if (escape)
+    if (why != NULL)
     {
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "breaking off the fight after %.1f s, %d killed - %s",
               (double) (leveltime - battle_since) / TICRATE, player->killcount - battle_kills,
-              escape_why);
+              why);
     }
     else
     {
@@ -2716,8 +2717,14 @@ static void EndBattle(const player_t *player)
     K_Nav_Pause(0);
 }
 
+// No fight is fought on a floor that hurts (the user, Doom II MAP15: fights
+// in the middle of large lava pits): none is begun there, and one going on
+// is broken off at once; the route goes on, taking the player off it,
+// shooting on the way. A fight begun on dry floor keeps off such floors
+// (Steppable).
 static void UpdateBattle(const player_t *player)
 {
+    boolean burning = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
     boolean fight;
 
     // Out of reach of the shots (behind bars, too high for the aim):
@@ -2733,16 +2740,20 @@ static void UpdateBattle(const player_t *player)
     // Going for health, CRITICAL, or dashing for a weapon or ammo: no fight
     // is started, and one going on is broken off at once; the player shoots
     // on the way.
-    fight = WorthFighting() && !escape;
+    fight = WorthFighting() && !escape && !burning;
     calm = fight ? 0 : calm + 1;
 
     if (!battle && fight && K_Nav_CanPause())
     {
         StartBattle(player);
     }
-    else if (battle && (calm >= BATTLE_CALM || escape))
+    else if (battle && (escape || burning))
     {
-        EndBattle(player);
+        EndBattle(player, escape ? escape_why : "the floor hurts, going on to dry floor");
+    }
+    else if (battle && calm >= BATTLE_CALM)
+    {
+        EndBattle(player, NULL);
     }
 
     // Nothing to shoot for now (a monster ducked out of sight): standing,

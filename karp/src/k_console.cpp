@@ -1780,6 +1780,9 @@ static void DrawConditionLine(void)
     ImGui::TextDisabled("(b%d s%d r%d c%d)", condition->bullets, condition->shells,
                         condition->rockets, condition->cells);
     Separated();
+    ImGui::TextColored(NeedColor(condition->firepower), "firepower %s",
+                       K_Condition_NeedName(condition->firepower));
+    Separated();
     ImGui::TextColored(NeedColor(condition->health), "health %s (%d)",
                        K_Condition_NeedName(condition->health), condition->health_points);
     Separated();

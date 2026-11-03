@@ -33,6 +33,8 @@ typedef enum
 typedef struct
 {
     k_need_t ammo;
+    k_need_t firepower;     // LOW: no strong weapon held can fire, the
+                            // pistol is the best the player has
     k_need_t health;
     k_need_t armour;
     k_condition_t condition;    // the worst of the needs; armour alone does
@@ -56,6 +58,11 @@ const char *K_Condition_NeedName(k_need_t need);
 
 // The rounds of an ammo type (am_clip...) below which it is low.
 int K_Condition_AmmoLow(int ammo);
+
+// Whether a weapon (weapontype_t) is a strong one: the shotguns, the
+// chaingun, the rocket launcher, the plasma rifle, the BFG - not the fist,
+// the chainsaw or the pistol.
+int K_Condition_Strong(int weapon);
 
 #ifdef __cplusplus
 }

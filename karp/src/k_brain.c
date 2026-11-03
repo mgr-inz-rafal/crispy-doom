@@ -2253,30 +2253,38 @@ static boolean UpdateKill(goal_t *goal)
 }
 
 // Whether the item goes before the others (FIRST_SCORE): one worth leaving a
-// fight for however far (k_items.h: escape), and but when CRITICAL a weapon
-// at a pistol start.
+// fight for however far (k_items.h: escape) - but when CRITICAL only health
+// (Doom II MAP15: at 9 health a clip for the chaingun, firepower LOW, was
+// added over the medikits and dropped for them every second) - and but when
+// CRITICAL a weapon at a pistol start.
 static boolean GoesFirst(const k_item_t *item, boolean critical)
 {
-    return item->escape || (item->first && !critical);
+    return (item->escape && (item->kind == K_ITEM_HEALTH || !critical))
+        || (item->first && !critical);
 }
 
-// Whether some health worth leaving a fight for (k_items.h: escape) lies in
-// reach: health is LOW or CRITICAL.
-static boolean HealthToEscapeFor(void)
+// Whether something worth leaving a fight for (k_items.h: escape) lies in
+// reach: health, when LOW or CRITICAL; but for health CRITICAL, ammo when
+// ammo or firepower is LOW. *health tells which.
+static boolean EscapeFor(boolean critical, boolean *health)
 {
+    boolean ammo = false;
     int i;
+
+    *health = false;
 
     for (i = 0; i < K_Items_Count(); ++i)
     {
         const k_item_t *item = K_Items_Get(i);
 
-        if (item->escape && item->kind == K_ITEM_HEALTH && item->present && item->reach > 0.0)
+        if (item->escape && item->present && item->reach > 0.0)
         {
-            return true;
+            *health |= item->kind == K_ITEM_HEALTH;
+            ammo |= item->kind != K_ITEM_HEALTH && !critical;
         }
     }
 
-    return false;
+    return *health || ammo;
 }
 
 // How far out of its way the player may go for an item now: in a fight, a
@@ -2523,9 +2531,12 @@ static boolean ConsiderItems(goal_t *goal)
     // (k_items.h: escape): that one is dropped, with the fixes pushed for it,
     // and health looked for once the goal below is planned again (MAP10: an
     // armour bonus behind a gun switch kept the bot fighting at 20 health, a
-    // medikit in reach, until it died). When LOW, not one that goes first
-    // itself (GoesFirst: a weapon at a pistol start, ammo when LOW); that
-    // one gives way only to another that goes first, its way there
+    // medikit in reach, until it died). So does the ammo when ammo or
+    // firepower is LOW, but for health CRITICAL (MAP10: out of shells, the
+    // shotguns dropped beside the bot were passed for a cell charge 2000
+    // off, and the bot fought on with the pistol). When LOW, not one that
+    // goes first itself (GoesFirst: a weapon at a pistol start, that ammo);
+    // that one gives way only to another that goes first, its way there
     // REPLACE_MARGIN shorter (E2M5: a chaingun behind a walk-over line 2788
     // off was gone for at the start; a shotgun guy then dropped his shotgun
     // beside the bot, never looked at, and the bot fought demons with the
@@ -2533,6 +2544,7 @@ static boolean ConsiderItems(goal_t *goal)
     for (i = 0; i < depth && detour_at < 0; ++i)
     {
         const k_item_t *on;
+        boolean for_health;
 
         if (goals[i].type != GOAL_ITEM)
         {
@@ -2548,14 +2560,23 @@ static boolean ConsiderItems(goal_t *goal)
         }
 
         if (i == 0 || on->kind == K_ITEM_HEALTH || (!critical && GoesFirst(on, critical))
-         || !HealthToEscapeFor())
+         || !EscapeFor(critical, &for_health))
         {
             return false;
         }
 
         GoalName(&goals[i], name, sizeof(name));
-        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - health %s, health goes first", name,
-              critical ? "CRITICAL" : "LOW");
+
+        if (for_health)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - health %s, health goes first", name,
+                  critical ? "CRITICAL" : "LOW");
+        }
+        else
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - %s LOW, ammo goes first", name,
+                  K_Condition_Get()->firepower == K_NEED_LOW ? "firepower" : "ammo");
+        }
 
         if (goals[i].param < item_skip_size)
         {
@@ -2793,9 +2814,10 @@ static boolean ConsiderItems(goal_t *goal)
 
 // Fleeing (plan, 7.4), and dashes: while the goal on top is an item worth
 // breaking a fight off for (k_items.h: urgent) - health when LOW or
-// CRITICAL, and ammo when ammo is LOW, wherever it is (escape); a weapon the
-// player lacks, or the ammo running out, from when it comes within
-// FIGHT_REACH until it is picked up, while no monster is within DASH_CLEAR -
+// CRITICAL, and ammo when ammo or firepower is LOW, wherever it is
+// (escape); a weapon the player lacks, or the ammo running out, from when it
+// comes within FIGHT_REACH until it is picked up, while no monster is within
+// DASH_CLEAR -
 // combat starts no fight and breaks off the one going on; the player runs
 // for it, shooting on the way at what it sees. The item may have fixes on
 // top of it: working them is part of the run for it (MAP10: going for a
@@ -2829,7 +2851,8 @@ static void UpdateEscape(void)
     if (item->escape)
     {
         M_snprintf(why, sizeof(why), "%s, going for the %s",
-                   item->kind != K_ITEM_HEALTH ? "ammo LOW"
+                   item->kind != K_ITEM_HEALTH
+                   ? (K_Condition_Get()->firepower == K_NEED_LOW ? "firepower LOW" : "ammo LOW")
                    : K_Condition_Get()->health == K_NEED_CRITICAL ? "health CRITICAL"
                    : "health LOW", item->name);
         K_Combat_Escape(why);
