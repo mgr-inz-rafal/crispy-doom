@@ -2,7 +2,8 @@
 // DESCRIPTION:
 //	Karp combat (karp/docs/plan.md, 7.2-7.4): what the bot sees - every
 //	monster, and the projectiles in flight - which monster it shoots at,
-//	with which weapon, and the aiming and firing.
+//	with which weapon, the aiming and firing, and getting out of the way
+//	of projectiles.
 //
 //	Plain C types only: the console (C++) includes this header.
 //
@@ -62,6 +63,12 @@ typedef struct
     int battle;             // fighting: the route waits (battle mode)
     int barrel;             // shooting a barrel, at barrel_at
     k_vec2_t barrel_at;
+    int threats;            // projectiles and shots wound up for that could
+                            // reach the player (k_threat.h)
+    int dodges;             // stepped out of their way out of a fight, this
+                            // level
+    int missile_hits;       // hits from projectiles this level, and the
+    int missile_damage;     // health they took
     char text[96];          // what it is doing, for the console
 } k_combatstatus_t;
 
@@ -79,9 +86,15 @@ void K_Combat_Tick(int driving);
 // it was fired at. Returns 0 when there is nothing to aim at.
 int K_Combat_Aim(int tic, double *angle);
 
-// In battle mode: the velocity to move at (map units per tic), nav holding
-// its route. Returns 0 when not fighting: nav drives.
+// In battle mode, or stepping out of the way of something (a blast, blows,
+// a projectile): the velocity to move at (map units per tic), nav holding
+// its route - or following it still, for a sidestep on the way. Returns 0
+// when nav drives.
 int K_Combat_Move(double *vx, double *vy);
+
+// Logs what projectiles took from the player this level, and how often it
+// stepped out of their way.
+void K_Combat_LogSummary(void);
 
 // What going to (x, y), on a floor at `floor`, would cost in health,
 // roughly: the live monsters within 1024 that could see the player there

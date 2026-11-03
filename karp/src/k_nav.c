@@ -1276,6 +1276,51 @@ int K_Nav_Predict(int tic, k_pose_t *pose)
     return 1;
 }
 
+int K_Nav_Simulate(double vx, double vy, const double *face, int tics, k_vec2_t *at)
+{
+    body_t body;
+    k_pose_t pose;
+    int t;
+
+    if (!K_Map_GetPlayer(&pose))
+    {
+        return 0;
+    }
+
+    body.x = pose.x;
+    body.y = pose.y;
+    body.momx = pose.momx;
+    body.momy = pose.momy;
+    body.angle = pose.angle;
+    body.onground = pose.onground != 0;
+    body.frozen = pose.frozen;
+    body.floor = pose.floor;
+
+    // The tic that ran is gametic: the next is the first to simulate.
+    for (t = 0; t < tics; ++t)
+    {
+        int tic = gametic + 1 + t;
+        const sent_t *entry = &sent[tic % SENT_SIZE];
+        k_command_t command;
+
+        if (entry->tic == tic)
+        {
+            command = entry->command;
+        }
+        else
+        {
+            memset(&command, 0, sizeof(command));
+            Steer(&body, vx, vy, face, false, &command);
+        }
+
+        Step(&body, &command);
+        at[t].x = body.x;
+        at[t].y = body.y;
+    }
+
+    return tics;
+}
+
 void K_Nav_BuildCommand(int tic, const double *aim_angle, k_command_t *command)
 {
     body_t body;

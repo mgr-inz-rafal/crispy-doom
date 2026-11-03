@@ -1681,6 +1681,10 @@ static void DrawCombat(void)
                 combat->visible, combat->awake);
         StatRow("Projectiles", "%d, %d coming at the player", K_Combat_ProjectileCount(),
                 incoming);
+        StatRow("Threats", "%d could reach the player; %d dodges", combat->threats,
+                combat->dodges);
+        StatRow("Projectile hits", "%d for %d health", combat->missile_hits,
+                combat->missile_damage);
         StatRow("Kills", "%d", combat->kills);
         StatRow("Shots", "%d", combat->shots);
         ImGui::EndTable();

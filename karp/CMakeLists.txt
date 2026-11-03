@@ -27,6 +27,7 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h"
     "${KARP_DIR}/src/k_sight.c"         "${KARP_DIR}/src/k_sight.h"
     "${KARP_DIR}/src/k_specials.c"      "${KARP_DIR}/src/k_specials.h"
+    "${KARP_DIR}/src/k_threat.c"        "${KARP_DIR}/src/k_threat.h"
     "${KARP_DIR}/src/k_trace.c"         "${KARP_DIR}/src/k_trace.h")
 
 set(IMGUI_SOURCE_FILES

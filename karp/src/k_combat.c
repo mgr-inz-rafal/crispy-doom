@@ -57,6 +57,15 @@
 //	at a lift: vanilla's blows reach any height), the player steps away
 //	from it, the route waiting.
 //
+//	Projectiles (plan, 7.4; k_threat.h): each way the player could move is
+//	followed a second ahead against what flies at it or is about to - a
+//	shot a monster winds up for is aimed at where the way puts the player
+//	then - and costs the health its hits would take, a hit that could kill
+//	far more. In battle that is one more part of each way's score; out of
+//	a fight the route's way is judged, and when it would be hit the
+//	cheapest way is taken: a sidestep on the way, or, if a hit could kill,
+//	any way, the route waiting.
+//
 //	Escaping (plan, 7.4): while the brain goes for health with health
 //	CRITICAL, or dashes for a weapon or ammo close by, no fight is started
 //	and one going on is broken off; the player runs for it, shooting on the
@@ -86,6 +95,7 @@
 #include "k_log.h"
 #include "k_salt.h"
 #include "k_sight.h"
+#include "k_threat.h"
 
 #define K_PI 3.14159265358979323846
 #define ANGLETURN_PER_RADIAN (65536.0 / (2.0 * K_PI))
@@ -373,6 +383,38 @@
 // and its chain hit it).
 #define DODGE_SPEED 16.0
 
+// Projectiles, and the shots monsters wind up for (k_threat.h). Each way
+// the player could move is followed from now as nav would steer it
+// (K_Nav_Simulate), the player held where it could not step, looked at
+// every CHECK_TICS; its hits cost the health they would take. In battle a
+// way scores THREAT_WEIGHT less for each unit of that - an imp's fireball
+// at full health about as much as losing the target from sight, a rocket
+// that could kill far more than anything else (the user: at full health a
+// few fireballs do no harm, while dodging them can make things worse;
+// rockets always) - tried at STRAFE_SPEED and at DODGE_SPEED, which scores
+// SPRINT_COST less. The strafe turns the other way on its own only with
+// nothing coming: turning back is what walks into a shot.
+#define THREAT_WEIGHT 0.1
+#define SPRINT_COST 0.1
+#define CHECK_TICS 6
+
+// Out of a fight the way the route takes the player is judged the same way
+// (standing, when nav waits at a door, lift or switch, or has no goal);
+// when it would cost DODGE_MIN or more, so is each way at DODGE_SPEED, and
+// the cheapest is taken: the route by ROUTE_KEEP, the way stepped already
+// by DODGE_KEEP; a step within BLAST_SAFE of a barrel costs up to
+// BARREL_COST (DYING_COST for one primed or going off). Walking the route
+// the player sidesteps on the way, no more than 90 degrees off it, each
+// unit of 1 - cos of the angle costing DETOUR_COST; unless a hit could kill:
+// then the route waits, as it does standing, while the player steps any way
+// (the user). Never riding a lift up, nor running a jump.
+#define DODGE_MIN 1.0
+#define ROUTE_KEEP 1.0
+#define DODGE_KEEP 1.0
+#define DETOUR_COST 3.0
+#define BARREL_COST 10.0
+#define DYING_COST 40.0
+
 // Out of a fight, hurt in the last BLOW_HOLD tics by a monster within
 // BLOW_REACH that the shots cannot find, the player holds the route - even
 // waiting at a door or lift - and steps away from it until it is BLOW_SAFE
@@ -597,6 +639,16 @@ static boolean dodging_blow;
 static boolean dodging_primed;
 static const mobj_t *primed_mo;     // the primed barrel stepped away from last
 static int primed_tics;             // and for how long in all
+
+// Out of the way of projectiles, out of a fight (DodgeMissiles): the way
+// stepped (of MOVE_WAYS), and whether the route goes on meanwhile.
+static boolean dodging_missile;
+static int missile_way;
+static boolean missile_on_way;
+
+// In battle with nothing to shoot for now: the way stepped out of the way
+// of projectiles, -1 if none.
+static int battle_way = -1;
 
 // When a monster or its shot last hurt the player.
 static int hurt_tic;
@@ -959,6 +1011,7 @@ static void Collect(const player_t *player)
     num_projectiles = 0;
     num_barrels = 0;
     status.alive = status.visible = status.awake = 0;
+    K_Threat_Begin(player_mo);
 
     for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
     {
@@ -972,6 +1025,7 @@ static void Collect(const player_t *player)
         if (mo->flags & MF_MISSILE)
         {
             AddProjectile(mo, player_mo, me);
+            K_Threat_AddMissile(mo);
         }
         else if (mo->type == MT_BARREL)
         {
@@ -982,6 +1036,7 @@ static void Collect(const player_t *player)
             if (mo->health > 0 && !(mo->flags & MF_CORPSE))
             {
                 AddMonster(mo, player_mo, me);
+                K_Threat_AddMonster(mo, monsters[num_monsters - 1].visible);
             }
             else if (WasAlive(mo))
             {
@@ -1004,6 +1059,8 @@ static void Collect(const player_t *player)
 
     num_was_alive = num_monsters;
     UpdateChains(changed || num_barrels != was_barrels, player_mo);
+    K_Threat_End();
+    status.threats = K_Threat_Count();
 }
 
 // "the imp", "its own blast"; what hurt the player.
@@ -1025,16 +1082,35 @@ static void AttackerName(const player_t *player, char *buf, int buf_len)
 }
 
 // Hits from monsters and blasts; not from floors that hurt, which come
-// every 32 tics and are counted by the route (k_path.c).
+// every 32 tics and are counted by the route (k_path.c). A projectile's
+// (k_threat.h) with how long it was seen coming, and what the player was
+// doing about it, and counted.
 static void LogHits(const player_t *player)
 {
     char name[64];
+    const char *by;
+    int damage, seen;
 
     if (last_health >= 0 && player->health < last_health && player->attacker != NULL)
     {
-        AttackerName(player, name, sizeof(name));
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "hit for %d by %s - %d health left",
-              last_health - player->health, name, player->health);
+        damage = last_health - player->health;
+        by = player->attacker != player->mo ? K_Threat_HitBy(&seen) : NULL;
+
+        if (by != NULL)
+        {
+            ++status.missile_hits;
+            status.missile_damage += damage;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "hit for %d by the %s, seen %.1f s before, %s - "
+                  "%d health left", damage, by, (double) seen / TICRATE,
+                  battle ? "fighting" : dodging_missile ? "dodging" : "not dodging",
+                  player->health);
+        }
+        else
+        {
+            AttackerName(player, name, sizeof(name));
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "hit for %d by %s - %d health left", damage, name,
+                  player->health);
+        }
 
         if (player->attacker != player->mo)
         {
@@ -2256,24 +2332,58 @@ static boolean Walkable(k_vec2_t at, double floor, boolean hurts)
     return Steppable(at, floor, hurts, EDGE_MARGIN);
 }
 
+// What moving at (vx, vy) would cost in health from what flies at the
+// player or is about to (k_threat.h): from now, as nav would steer it
+// (K_Nav_Simulate), facing face if not NULL; held where it could not step
+// on (Steppable, every CHECK_TICS). hit, if not NULL, gets the costliest.
+static double MoveCost(k_vec2_t me, double vx, double vy, const double *face, double floor,
+                       boolean hurts, double edge, k_threathit_t *hit)
+{
+    k_vec2_t path[K_THREAT_TICS];
+    k_vec2_t good = me;
+    int tics = K_Nav_Simulate(vx, vy, face, K_THREAT_TICS, path);
+    int t, k;
+
+    for (t = CHECK_TICS - 1; t < tics && (vx != 0.0 || vy != 0.0); t += CHECK_TICS)
+    {
+        if (!Steppable(path[t], floor, hurts, edge))
+        {
+            for (k = t - CHECK_TICS + 1; k < tics; ++k)
+            {
+                path[k] = good;
+            }
+
+            break;
+        }
+
+        good = path[t];
+    }
+
+    return K_Threat_PathCost(path, tics, floor, hit);
+}
+
 // Where to move while fighting: each of MOVE_WAYS directions that can be
 // walked, scored by the side strafed to (and across the line of fire rather
 // than along it), the distance from where the fight began, and the awake
 // monsters close by, which it backs away from; keeping the target where
 // the shots find it (the user: strafing into a corridor and out, the bot
-// looked to be peeking round the corner), and open floor before a passage.
+// looked to be peeking round the corner), and open floor before a passage;
+// and out of the way of projectiles (THREAT_WEIGHT).
 static void ChooseMove(const player_t *player)
 {
+    static const double speeds[] = { STRAFE_SPEED, DODGE_SPEED };
     const k_monster_t *target = &monsters[status.target];
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double floor = ToMap(player->mo->floorz);
     double gun = GunHeight(player->mo);
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    boolean threats = K_Threat_Count() > 0;
     double tx = target->at.x - me.x, ty = target->at.y - me.y;
     double length = sqrt(tx * tx + ty * ty);
+    double face = atan2(ty, tx);
     double sx, sy, best_score = -1e9;
     boolean found = false;
-    int k, i;
+    int k, i, s;
 
     move.x = move.y = 0.0;
 
@@ -2285,7 +2395,7 @@ static void ChooseMove(const player_t *player)
     tx /= length;
     ty /= length;
 
-    if (--strafe_tics <= 0)
+    if (--strafe_tics <= 0 && !threats)
     {
         strafe_dir = -strafe_dir;
         strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
@@ -2301,11 +2411,24 @@ static void ChooseMove(const player_t *player)
         double ux = cos(angle), uy = sin(angle);
         k_vec2_t near = { me.x + ux * MOVE_LOOK * 0.5, me.y + uy * MOVE_LOOK * 0.5 };
         k_vec2_t far = { me.x + ux * MOVE_LOOK, me.y + uy * MOVE_LOOK };
-        double score, from_anchor;
+        double score, from_anchor, speed = STRAFE_SPEED, dodge = 0.0;
 
         if (!Walkable(near, floor, hurts) || !Walkable(far, floor, hurts))
         {
             continue;
+        }
+
+        for (s = 0; threats && s < arrlen(speeds); ++s)
+        {
+            double here = -THREAT_WEIGHT * MoveCost(me, ux * speeds[s], uy * speeds[s], &face,
+                                                    floor, hurts, EDGE_MARGIN, NULL)
+                        - (s > 0 ? SPRINT_COST : 0.0);
+
+            if (s == 0 || here > dodge)
+            {
+                dodge = here;
+                speed = speeds[s];
+            }
         }
 
         score = ux * sx + uy * sy + 0.3 * (1.0 - fabs(ux * tx + uy * ty))
@@ -2350,11 +2473,13 @@ static void ChooseMove(const player_t *player)
             }
         }
 
+        score += dodge;
+
         if (score > best_score)
         {
             best_score = score;
-            move.x = ux * STRAFE_SPEED;
-            move.y = uy * STRAFE_SPEED;
+            move.x = ux * speed;
+            move.y = uy * speed;
             found = true;
         }
     }
@@ -2365,6 +2490,99 @@ static void ChooseMove(const player_t *player)
         strafe_dir = -strafe_dir;
         strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
     }
+}
+
+// The cheapest way out of what flies at the player or is about to
+// (k_threat.h): going on at `velocity` (the route's way; zero, standing)
+// against each of MOVE_WAYS ways at DODGE_SPEED (DODGE_MIN). With sidestep,
+// only ways no more than 90 degrees off velocity, unless a hit going on
+// could kill. keep is the way stepped already, -1 if none. Returns the way,
+// or -1 to go on as it is; hit gets the costliest hit going on, *on_way
+// whether the way is a sidestep.
+static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep, int keep,
+                    k_threathit_t *hit, boolean *on_way)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double floor = ToMap(player->mo->floorz);
+    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    double edge = SDL_min(EDGE_MARGIN, K_Graph_DropDistance(me, floor, EDGE_MARGIN));
+    double speed = sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+    k_vec2_t ahead = { 0.0, 0.0 };
+    const double *face = NULL;
+    double face_angle, best_cost;
+    int k, i, best = -1;
+
+    *on_way = false;
+
+    if (status.target >= 0)
+    {
+        face_angle = atan2(monsters[status.target].at.y - me.y,
+                           monsters[status.target].at.x - me.x);
+        face = &face_angle;
+    }
+
+    if (speed > 1e-6)
+    {
+        ahead.x = velocity.x / speed;
+        ahead.y = velocity.y / speed;
+    }
+
+    best_cost = MoveCost(me, velocity.x, velocity.y, face, floor, hurts, edge, hit);
+
+    if (best_cost < DODGE_MIN)
+    {
+        return -1;
+    }
+
+    *on_way = sidestep && !hit->lethal;
+    best_cost -= keep >= 0 ? 0.0 : ROUTE_KEEP;
+
+    for (k = 0; k < MOVE_WAYS; ++k)
+    {
+        double angle = k * 2.0 * K_PI / MOVE_WAYS;
+        double ux = cos(angle), uy = sin(angle);
+        double along = ux * ahead.x + uy * ahead.y;
+        k_vec2_t near = { me.x + ux * MOVE_LOOK * 0.5, me.y + uy * MOVE_LOOK * 0.5 };
+        k_vec2_t far = { me.x + ux * MOVE_LOOK, me.y + uy * MOVE_LOOK };
+        double cost;
+
+        if ((*on_way && along < 0.0) || !Steppable(near, floor, hurts, edge)
+         || !Steppable(far, floor, hurts, edge))
+        {
+            continue;
+        }
+
+        cost = MoveCost(me, ux * DODGE_SPEED, uy * DODGE_SPEED, face, floor, hurts, edge, NULL);
+
+        if (*on_way)
+        {
+            cost += DETOUR_COST * (1.0 - along);
+        }
+
+        if (k == keep)
+        {
+            cost -= DODGE_KEEP;
+        }
+
+        for (i = 0; i < num_barrels; ++i)
+        {
+            double axis = AxisDistance(far, barrels[i].at);
+
+            if (axis < BLAST_SAFE)
+            {
+                cost += (barrels[i].live && !Primed(&barrels[i]) ? BARREL_COST : DYING_COST)
+                      * (BLAST_SAFE - axis) / BLAST_SAFE;
+            }
+        }
+
+        if (cost < best_cost)
+        {
+            best_cost = cost;
+            best = k;
+        }
+    }
+
+    return best;
 }
 
 // A target to stop for: one some weapon in hand can hurt, in sight for a
@@ -2448,13 +2666,27 @@ static void UpdateBattle(const player_t *player)
         EndBattle(player);
     }
 
+    // Nothing to shoot for now (a monster ducked out of sight): standing,
+    // or out of the way of what it fired (DodgeWay).
     if (battle && status.target >= 0)
     {
         ChooseMove(player);
+        battle_way = -1;
+    }
+    else if (battle && K_Threat_Count() > 0)
+    {
+        k_vec2_t still = { 0.0, 0.0 };
+        k_threathit_t hit;
+        boolean on_way;
+
+        battle_way = DodgeWay(player, still, false, battle_way, &hit, &on_way);
+        move.x = battle_way >= 0 ? cos(battle_way * 2.0 * K_PI / MOVE_WAYS) * DODGE_SPEED : 0.0;
+        move.y = battle_way >= 0 ? sin(battle_way * 2.0 * K_PI / MOVE_WAYS) * DODGE_SPEED : 0.0;
     }
     else
     {
         move.x = move.y = 0.0;
+        battle_way = -1;
     }
 }
 
@@ -2540,9 +2772,83 @@ static void StopDodge(void)
         dodging = false;
         dodging_blow = false;
         dodging_primed = false;
+        dodging_missile = false;
         move.x = move.y = 0.0;
         K_Nav_Pause(0);
     }
+}
+
+static void StopMissileDodge(void)
+{
+    if (dodging_missile)
+    {
+        StopDodge();
+    }
+}
+
+// Out of a fight, out of the way of what flies at the player or is about
+// to (k_threat.h): the way the route takes it, or standing, against the
+// others (DodgeWay).
+static void DodgeMissiles(const player_t *player)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    boolean walking = nav->state == K_NAV_DRIVING && !K_Nav_Waiting() && K_Nav_CanPause()
+                   && path != NULL && nav->target < path->num_points;
+    boolean standing = !walking && (K_Nav_CanPause()
+                                    || (K_Nav_Waiting() && nav->action != K_ACTION_RIDE));
+    k_vec2_t velocity = { 0.0, 0.0 };
+    k_threathit_t hit;
+    boolean on_way;
+    int best;
+
+    if (K_Threat_Count() == 0 || (!walking && !standing))
+    {
+        StopMissileDodge();
+        return;
+    }
+
+    if (walking && Distance(me, path->points[nav->target]) > 1e-6)
+    {
+        double length = Distance(me, path->points[nav->target]);
+
+        velocity.x = (path->points[nav->target].x - me.x) / length * K_Nav_Tuning()->max_speed;
+        velocity.y = (path->points[nav->target].y - me.y) / length * K_Nav_Tuning()->max_speed;
+    }
+
+    best = DodgeWay(player, velocity, walking, dodging_missile ? missile_way : -1, &hit, &on_way);
+
+    if (best < 0)
+    {
+        StopMissileDodge();
+        return;
+    }
+
+    if (!dodging_missile || missile_on_way != on_way)
+    {
+        if (on_way)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "sidestepping the %s - on the way still",
+                  hit.name != NULL ? hit.name : "projectile");
+        }
+        else
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping out of the way of the %s%s - the route "
+                  "waits", hit.name != NULL ? hit.name : "projectile",
+                  hit.lethal ? ", a hit could kill" : "");
+        }
+
+        status.dodges += !dodging_missile;
+    }
+
+    dodging = true;
+    dodging_missile = true;
+    missile_way = best;
+    missile_on_way = on_way;
+    K_Nav_Pause(!on_way);
+    move.x = cos(best * 2.0 * K_PI / MOVE_WAYS) * DODGE_SPEED;
+    move.y = sin(best * 2.0 * K_PI / MOVE_WAYS) * DODGE_SPEED;
 }
 
 // Out of a fight, away from a blast about to go off (or a primed barrel a
@@ -2551,7 +2857,8 @@ static void StopDodge(void)
 // way that gets furthest from it. A blow is stepped away from even at a door
 // or lift (the action is begun again after), but only if some way is
 // walkable: a lift going down rides on. In battle the strafing keeps away
-// from barrels (ChooseMove).
+// from barrels (ChooseMove). With none of these, out of the way of
+// projectiles (DodgeMissiles).
 static void UpdateDodge(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -2568,6 +2875,7 @@ static void UpdateDodge(const player_t *player)
         dodging = false;
         dodging_blow = false;
         dodging_primed = false;
+        dodging_missile = false;
         return;
     }
 
@@ -2575,10 +2883,19 @@ static void UpdateDodge(const player_t *player)
     primed = blast < 0 ? PrimedNear(player) : -1;
     blow = blast < 0 && primed < 0 ? BlowFrom(player) : -1;
 
-    if ((blast < 0 && primed < 0 && blow < 0)
-     || (!dodging && !K_Nav_CanPause() && !(blow >= 0 && K_Nav_Waiting())))
+    if (blast < 0 && primed < 0 && blow < 0)
     {
-        StopDodge();
+        if (!dodging_missile)
+        {
+            StopDodge();
+        }
+
+        DodgeMissiles(player);
+        return;
+    }
+
+    if (!dodging && !K_Nav_CanPause() && !(blow >= 0 && K_Nav_Waiting()))
+    {
         return;
     }
 
@@ -2620,7 +2937,8 @@ static void UpdateDodge(const player_t *player)
         return;
     }
 
-    if (!dodging || dodging_blow != (blast < 0) || dodging_primed != (primed >= 0))
+    if (!dodging || dodging_missile || dodging_blow != (blast < 0)
+     || dodging_primed != (primed >= 0))
     {
         if (primed >= 0)
         {
@@ -2643,6 +2961,7 @@ static void UpdateDodge(const player_t *player)
         dodging = true;
         dodging_blow = blast < 0;
         dodging_primed = primed >= 0;
+        dodging_missile = false;
         K_Nav_Pause(1);
     }
 
@@ -2692,6 +3011,11 @@ void K_Combat_Reset(void)
     primed_tics = 0;
     shot_mo = NULL;
     shot_tic = -1;
+    dodging_missile = false;
+    missile_way = 0;
+    missile_on_way = false;
+    battle_way = -1;
+    K_Threat_Reset();
 }
 
 void K_Combat_Tick(int driving)
@@ -2728,6 +3052,7 @@ void K_Combat_Tick(int driving)
             K_Log(K_LOG_COMBAT, K_LOG_WARN, "died at (%.0f,%.0f), %.1f s into the level - "
                   "killed by %s; %d kills of %d", ToMap(player->mo->x), ToMap(player->mo->y),
                   (double) leveltime / TICRATE, name, player->killcount, totalkills);
+            K_Combat_LogSummary();
         }
 
         status.died = true;
@@ -3248,6 +3573,13 @@ int K_Combat_BlastsPending(double x, double y, double reach)
     }
 
     return count;
+}
+
+void K_Combat_LogSummary(void)
+{
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "projectiles this level: %d hits for %d health; stepped "
+          "out of their way %d times out of fights", status.missile_hits, status.missile_damage,
+          status.dodges);
 }
 
 int K_Combat_Move(double *vx, double *vy)

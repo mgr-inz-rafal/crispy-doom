@@ -255,6 +255,7 @@ void K_Ticker(void)
      && gameaction == ga_completed && !level_completed)
     {
         level_completed = true;
+        K_Combat_LogSummary();
         K_Brain_LevelCompleted(secretexit);
 
         if (quit_on_exit)

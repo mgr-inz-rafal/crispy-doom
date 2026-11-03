@@ -2570,7 +2570,9 @@ The user's points, with what the engine says:
    player, its closest approach and how soon; if it would hit soon, step to the free side. Never
    off a ledge or into a floor that hurts (`K_Graph_Clearance`, `K_Graph_DropDistance`): on a
    narrow ledge, take the hit. A revenant's homing missile: break sight, or step aside late.
-6. **Breaking line of sight**, against hitscanners and arch-viles.
+   Done, each way judged against all of them at once (7.8, "Missile avoidance").
+6. **Breaking line of sight**, against hitscanners and arch-viles; arachnotrons' streams and
+   revenants' missiles in the open too (the user, 7.8 "Line of sight").
    - A zombieman winds up for 10 tics before it fires, so only cover right beside the player
      works then; between fights, keep cover near.
    - The arch-vile's flame does nothing if it loses sight of the player before it lands, 66 tics
@@ -2673,8 +2675,8 @@ Who controls the player in a fight (the user's model):
    way, back to the goals. Done but for monsters in the way.
 4. **C4 The condition** (the user, after MAP02: health and dodging will take the bot much
    further, health first): the needs, pickups on the way, detours, CRITICAL. Done.
-5. **C3 Dodging and cover**: projectiles (on MAP02 the bot stood in slow imp fireballs); breaking
-   line of sight against hitscanners and arch-viles.
+5. **C3 Dodging and cover**: projectiles (on MAP02 the bot stood in slow imp fireballs), done;
+   breaking line of sight against hitscanners, arch-viles, arachnotrons and revenants' missiles.
 6. **C5 The rest**: fight or avoid; barrels that block the way (MAP23, done with all of the
    barrels, 7.3 point 9); KILL ALL goals (MAP07, MAP32); MAP30.
 
@@ -2946,9 +2948,47 @@ Who controls the player in a fight (the user's model):
   90.5 s. MAP07 plans right (arachnotrons, behind walls the mancubi lower; mancubi first) and
   dies at 9.3 s in the open among four mancubi: a fight, not a plan. Left: MAP32's Keens (tag
   666 opens when they all die, any map, A_KeenDie), which combat never shoots (no cost).
-- Left out for now: exact missile simulation (closest approach and a free side are enough), sound
-  (what a shot wakes, for sneaking past), provoking infighting, BFG tricks, predicting where
-  monsters walk beyond a few tics.
+- **Missile avoidance** (the user: the bot stood soaking fireballs, and ran into ones fired
+  earlier; rockets always, imp fireballs at full health matter little, lost souls fly like
+  projectiles). Nothing used the projectiles before: the battle strafe, turning back at random
+  every 20 to 50 tics, dodged by luck. Engine facts: projectiles fly straight at a steady speed;
+  monsters never lead a shot (`P_SpawnMissile` aims at where the player is), so moving steadily
+  across the line of fire beats them, and standing, turning back or running along it gets hit;
+  a sidestep of 30 units takes about 7 tics from standing, plus the 1 to 3 before a command
+  runs. A hit does 1 to 8 times the projectile's damage (imp 3; cacodemon and arachnotron 5;
+  baron, knight and mancubus 8; revenant 10; a rocket 20 and its own burst, about 200 in all).
+  Done (`k_threat.c`): what could hit the player in the next 32 tics - projectiles flying to
+  their first wall, lost souls charging, the shots monsters in sight wind up for (found in their
+  states, aimed at where the way puts the player when fired), revenant missiles that home
+  (`A_Tracer` turns them at most 16.875 degrees every 4 tics, and only on tics a multiple of 4:
+  about half never turn), followed tic by tic, walls and all, and a rocket's burst where it
+  stops - is set against each way the player could take, followed as nav would steer it
+  (`K_Nav_Simulate`), held where it could not step. A hit costs the health it takes on average,
+  armour and skill counted, the more the less is left, and 200 more times the chance it kills.
+  In battle each of the 16 strafing ways scores a tenth of a point less for each unit of that (an
+  imp's fireball at full health about what losing the target from sight costs), tried at
+  strafing and at full speed; with something coming the strafe does not turn back on its timer;
+  with nothing to shoot for now, the player steps out of the way of what is in the air. Out of a
+  fight the route's way is judged, and when it would be hit the cheapest of 16 ways at full speed
+  is taken: walking, a sidestep on the way, no more than 90 degrees off it; if a hit could kill,
+  or standing (at a door, lift or switch, or with no goal), any way, the route waiting. Never
+  riding a lift up, nor running a jump. Each projectile hit is logged with how long it was seen
+  coming and what the player was doing, and a level's toll at its end or at death. MAP07 then:
+  finished in 103.6 s, 102 health, all 12 killed (it died at 9.3 s before); E1M1 to E1M8: 0 to
+  4 projectile hits a level, 42 health at the most, seven of eight finished. Left: hits from
+  close by - an imp 80 off, an arachnotron 150 off, a ball there in 3 to 6 tics, too soon to
+  sidestep from a run (MAP07: four plasma balls in 0.7 s) - which line of sight answers (below).
+- **Line of sight** (the user, jotted, for the cover work, 7.7 C3): some threats are answered by
+  getting out of sight, not by dodging. Arch-viles: the flame lands 66 tics after the attack
+  starts (20, and a blast of 70), only if the vile still sees the player then (`A_VileAttack`);
+  and they raise the dead, so they come first as targets. Arachnotrons: after 20 tics' wind-up
+  a plasma ball every 9 tics, 5 to 40 each, until they lose sight (`A_SpidRefire`); duck when
+  the stream starts, peek when it stops. Revenants: in a cramped room a homing missile meets a
+  wall after a sidestep, which the simulation finds already; in the open it turns back for pass
+  after pass (a circle about 270 across; the player outruns it, 16.7 a tic to its 10), so get a
+  wall between it and the player. Hitscanners as ever.
+- Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
+  tricks, predicting where monsters walk beyond a few tics.
 
 ### 7.9 Done so far
 

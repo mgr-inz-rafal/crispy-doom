@@ -138,6 +138,13 @@ k_navstate_t K_Nav_Tick(void);
 // cell is left -1. Returns 0 when there is no player.
 int K_Nav_Predict(int tic, k_pose_t *pose);
 
+// Once a tic, after it ran: where the player would be at the end of each of
+// the next `tics` tics (walls ignored), at[0] the first, steered for the
+// velocity (vx, vy) as K_Nav_BuildMoveCommand steers, facing face if not
+// NULL - after the commands already sent, replayed. Returns how many
+// points it gave: 0 when there is no player.
+int K_Nav_Simulate(double vx, double vy, const double *face, int tics, k_vec2_t *at);
+
 // The bot's input for the command that will run as game tic `tic`. aim, if
 // not NULL, is the way combat wants the player to face (radians): taken
 // wherever nav does not need the facing itself - not while running a jump,
