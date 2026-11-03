@@ -550,6 +550,7 @@ void K_Area_Build(void)
 
         areamap.passages += area->passage;
         ChooseSamples(map, a);
+        area->spot = num_samples[a] > 0 ? map->cells[samples[a][0]].centroid : area->center;
     }
 
     areamap.generation = map->generation;
@@ -578,6 +579,7 @@ static void Refresh(int a)
     int i, k;
 
     area->danger = 0.0;
+    area->awake_danger = 0.0;
 
     for (i = 0; i < K_Combat_MonsterCount(); ++i)
     {
@@ -603,9 +605,11 @@ static void Refresh(int a)
 
         if (sees)
         {
-            area->danger += cost * (monster->awake ? 1.0 : ASLEEP_SHARE)
-                          * (distance <= DANGER_FULL
-                             ? 1.0 : (DANGER_REACH - distance) / (DANGER_REACH - DANGER_FULL));
+            double share = distance <= DANGER_FULL
+                         ? 1.0 : (DANGER_REACH - distance) / (DANGER_REACH - DANGER_FULL);
+
+            area->danger += cost * share * (monster->awake ? 1.0 : ASLEEP_SHARE);
+            area->awake_danger += monster->awake ? cost * share : 0.0;
         }
     }
 

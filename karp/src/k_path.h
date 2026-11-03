@@ -114,6 +114,13 @@ typedef double (*k_pinchcost_t)(int cell, k_vec2_t at);
 
 void K_Path_SetPinchCost(k_pinchcost_t cost);
 
+// What walking from one cell into the next adds to a route's cost, besides
+// the way (the brain: the danger of the area entered); never to its length.
+// Without one, nothing.
+typedef double (*k_entercost_t)(int cell, int from_cell);
+
+void K_Path_SetEnterCost(k_entercost_t cost);
+
 // The radiation suit the searches assume: one worn from the start for that
 // many tics (k_brain.c: the way on from a suit once picked up), or with -1
 // (the default) the player's own, for as long as it has left. While worn,

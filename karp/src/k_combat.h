@@ -61,6 +61,8 @@ typedef struct
     int shots;              // fire presses this level
     int died;               // the player died this level
     int battle;             // fighting: the route waits (battle mode)
+    int holding;            // holding short of an area that is not safe,
+                            // letting its monsters come (k_area.h)
     int barrel;             // shooting a barrel, at barrel_at
     k_vec2_t barrel_at;
     int threats;            // projectiles and shots wound up for that could

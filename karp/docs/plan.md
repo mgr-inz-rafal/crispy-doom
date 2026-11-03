@@ -3068,7 +3068,34 @@ Who controls the player in a fight (the user's model):
     the way into an area that is not safe, fight what comes or can be seen from there, go in
     once it is quiet (never stuck: in after a while anyway); fall back to the nearest safe area
     when a fight goes badly; cover (line of sight, above); a soft cost on routes through areas
-    with awake strong monsters in sight (the user: soft only).
+    with awake strong monsters in sight (the user: soft only). Done but for cover (C4):
+    - Holding (`k_combat.c`): walking the route out of a safe area (or a door's or lift's
+      cells), with an area ahead within 512 along it that is not safe and holds 20 or more of
+      monsters inside (those that can come out: not monsters elsewhere seeing into it, E1M8),
+      no door or lift on the way there shut (it is opened first), the route waits while the
+      player stands 96 short of the way in along the route (further back out of a door's or
+      lift's cells, up to 384), facing it and fighting what comes or shows itself. Kept as the
+      monsters come and make the player's own area unsafe (E1M5, E1M8: holds first dropped
+      within half a second of the monsters showing, and the bot walked into the fight), and
+      wherever the fight takes the player, judged from the spot (MAP02: begun 500 off the way
+      in, it was over the next tic, and begun again, tic after tic). With nothing to shoot for
+      half a second the spot creeps on at 3 a tic to the way in and 64 past it (the user:
+      slowly, so monsters round the corners see the player one by one - not stand, then rush
+      in); once there with still nothing to shoot, or the area safe, or after 20 s, the area is
+      gone into, and not held off from again for 20 s.
+    - Falling back (`k_brain.c`, a GO TO on top, the fight broken off, shooting on the way): in
+      a fight going badly - 25 health or more lost over 3 s with 15 or more of awake monsters in
+      sight, or more of them than health left - in an area that is not safe, to the nearest
+      safe area within 1024 of route (of the 6 nearest; visited ones counted at three
+      quarters) whose way there goes through no other area with monsters inside; there,
+      holding takes over. Only against a crowd (3 or more) or gunmen worth 10 or more: a few
+      tough chasers follow anywhere (E1M8: falling back from the two barons, it died 3 s
+      later, where it had stood and won before); not while holding (MAP10: holding short of
+      ten monsters, it fell back 1331 units and died on the way); not again for 8 s.
+    - Routes: going into an area costs 20 units a point of the danger of its awake monsters
+      (`K_Path_SetEnterCost`), soft: never a route refused, the length the way walked.
+    Seen, left for navigation: MAP05 riding a lift up and dropping off it, over and over (the
+    user closed it); E1M7 stuck in a gap.
 - **Tough monsters** (the user, jotted for later):
   - The Cyberdemon: never close to it if it can be helped - from up close it is nearly
     impossible to beat, even at 200% health and armour with a full BFG.

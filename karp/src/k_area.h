@@ -23,6 +23,7 @@ typedef struct
 {
     k_vec2_t min, max;      // bounding box of its cells
     k_vec2_t center;        // of its floor, area-weighted
+    k_vec2_t spot;          // a point on its floor: its largest cell's middle
     double floor_area;
     int first_cell;         // into k_areamap_t.cells
     int num_cells;
@@ -37,6 +38,7 @@ typedef struct
                             // in it would cost: inside it or not, by sight
                             // and distance, the asleep at half; looked at
                             // about once a second
+    double awake_danger;    // of that, the awake monsters'
     int visited;            // the player has been in it
     double hurts;           // the share of its floor that hurts
 } k_area_t;

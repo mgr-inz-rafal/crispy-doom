@@ -196,6 +196,41 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define RISKY_ANY 20.0
 #define RISKY_REACH 3000.0
 
+// Routes (k_path.h: K_Path_SetEnterCost): going into an area costs
+// ROUTE_DANGER_WAY units for each point of what the awake monsters that
+// could hit the player there would cost (k_area.h: awake_danger) - a way
+// round a Cyberdemon in sight when it is not much longer; soft only, no
+// route is ever refused (the user).
+#define ROUTE_DANGER_WAY 20.0
+
+// Falling back (the user: fight from safety). In a fight going badly -
+// FALL_LOSS health or more lost over the last FALL_TICS with FALL_PRESSURE
+// or more of awake monsters in sight (what fights with them would cost), or
+// those costing more than the health left - in an area that is not safe,
+// the player falls back to the nearest safe area (k_area.h; of the
+// FALL_CANDIDATES nearest, within FALL_REACH of route, those visited before
+// counted VISITED_SHARE as far), whose way there goes through no other area
+// with monsters inside: a GO TO on top, the fight broken off, shooting on
+// the way (UpdateEscape); there, holding short of the way back in
+// (k_combat.c) lets the monsters come. Only against a crowd - FALL_CROWD
+// monsters or more on the player - or gunmen worth FALL_GUNMEN or more,
+// whom getting out of sight answers: a few tough ones that chase follow the
+// player anywhere, and running gives up the shots (E1M8: falling back from
+// the two barons, it died 3 s later, where it had stood and won before). Not
+// while holding already (MAP10: holding short of ten monsters as they came,
+// the bot fell back 1331 units and died on the way), nor further than
+// FALL_REACH; not again for FALL_AGAIN; with no such area, looked for again
+// in a second.
+#define FALL_LOSS 25
+#define FALL_TICS (3 * TICRATE)
+#define FALL_PRESSURE 15.0
+#define FALL_CROWD 3
+#define FALL_GUNMEN 10.0
+#define FALL_REACH 1024.0
+#define FALL_CANDIDATES 6
+#define VISITED_SHARE 0.75
+#define FALL_AGAIN (8 * TICRATE)
+
 // Ways count the waits at doors, lifts and teleporters on them, as the
 // pathfinder expects them (k_path.h: wait), each tic as WAIT_WAY units, the
 // way the player could run meanwhile: an item behind a slow lift is further
@@ -279,6 +314,8 @@ typedef struct
                                 // (wait counts the tics)
     boolean fixable;            // GOAL_ITEM: gone for through a fix in its
                                 // way (FIX_WORK), pushed in front of it
+    boolean fallback;           // GOAL_GOTO: falling back to a safe area out
+                                // of a fight going badly (FALL_LOSS)
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
     // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
@@ -342,6 +379,11 @@ static int *risk_marks;
 static int marks_size;
 static int route_stamp;
 static int risk_stamp;
+
+// The player's health over the last FALL_TICS, -1 where not known yet;
+// and when falling back may be looked at again.
+static int health_ring[FALL_TICS];
+static int fall_again;
 static candidate_t fix_candidates[MAX_CANDIDATES];
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
@@ -421,7 +463,8 @@ static void GoalName(const goal_t *goal, char *buf, int len)
             break;
 
         default:
-            M_snprintf(buf, len, "GO TO (%.0f, %.0f)", goal->point.x, goal->point.y);
+            M_snprintf(buf, len, "%s (%.0f, %.0f)", goal->fallback ? "FALL BACK TO" : "GO TO",
+                       goal->point.x, goal->point.y);
             break;
     }
 }
@@ -2938,6 +2981,14 @@ static void UpdateEscape(void)
     k_pose_t player;
     int i;
 
+    // Falling back to a safe area: the fight is broken off.
+    if (depth > 0 && goals[depth - 1].type == GOAL_GOTO && goals[depth - 1].fallback)
+    {
+        dashing = -1;
+        K_Combat_Escape("falling back to a safe area");
+        return;
+    }
+
     for (i = depth - 1; i >= 0 && goal == NULL; --i)
     {
         if (goals[i].type == GOAL_ITEM)
@@ -2986,6 +3037,145 @@ static void UpdateEscape(void)
 // Held up by a barrel (HOLD_TICS): it goes on top, to be shot from a safe
 // spot. Looked at every tic, to time the hold. Returns true if it was
 // added.
+// What going into a cell adds to a route's cost: the danger of the awake
+// monsters in its area, if it is another (ROUTE_DANGER_WAY).
+static double EnterCost(int cell, int from_cell)
+{
+    int area = K_Area_Of(cell);
+
+    return area < 0 || area == K_Area_Of(from_cell)
+         ? 0.0 : K_Area_Get()->areas[area].awake_danger * ROUTE_DANGER_WAY;
+}
+
+// Whether a way goes through an area with monsters inside, but `skip`.
+static boolean ThroughMonsters(const k_path_t *path, int skip)
+{
+    int i;
+
+    for (i = 0; i < path->num_cells; ++i)
+    {
+        int area = K_Area_Of(path->cells[i]);
+
+        if (area >= 0 && area != skip && K_Area_Get()->areas[area].monsters > 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Falling back out of a fight going badly (FALL_LOSS). Looked at every tic;
+// returns true if the goal was added.
+static boolean ConsiderFallBack(void)
+{
+    const k_areamap_t *areas = K_Area_Get();
+    int then = health_ring[(leveltime + 1) % FALL_TICS];
+    int order[FALL_CANDIDATES];
+    double order_distance[FALL_CANDIDATES];
+    double pressure = 0.0, gunmen = 0.0, health = K_Map_PlayerHealth();
+    double best_cost = 0.0, best_length = 0.0;
+    int found = 0, best = -1, crowd = 0, here, a, i, k;
+    k_pose_t player;
+    k_vec2_t start;
+    goal_t *goal;
+
+    if (!K_Combat_GetStatus()->battle || K_Combat_GetStatus()->holding
+     || leveltime < fall_again || depth >= MAX_GOALS
+     || (depth > 0 && goals[depth - 1].fallback) || !K_Map_GetPlayer(&player)
+     || (here = K_Area_Of(player.cell)) < 0 || K_Area_Safe(here))
+    {
+        return false;
+    }
+
+    for (i = 0; i < K_Combat_MonsterCount(); ++i)
+    {
+        const k_monster_t *monster = K_Combat_Monster(i);
+
+        if (monster->awake && monster->visible && monster->distance <= 1024.0
+         && K_Combat_KindCost(monster->type) > 0.0)
+        {
+            pressure += K_Combat_KindCost(monster->type);
+            gunmen += monster->hitscan ? K_Combat_KindCost(monster->type) : 0.0;
+            ++crowd;
+        }
+    }
+
+    if (!((then >= 0 && then - health >= FALL_LOSS && pressure >= FALL_PRESSURE)
+          || pressure > health)
+     || (crowd < FALL_CROWD && gunmen < FALL_GUNMEN))
+    {
+        return false;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+
+    // The nearest safe areas, as the crow flies.
+    for (a = 0; a < areas->num_areas; ++a)
+    {
+        const k_area_t *area = &areas->areas[a];
+        double distance = sqrt((area->spot.x - start.x) * (area->spot.x - start.x)
+                             + (area->spot.y - start.y) * (area->spot.y - start.y));
+
+        if (a == here || area->passage || !K_Area_Safe(a) || distance > FALL_REACH
+         || (found == FALL_CANDIDATES && distance >= order_distance[found - 1]))
+        {
+            continue;
+        }
+
+        for (k = found < FALL_CANDIDATES ? found++ : found - 1;
+             k > 0 && order_distance[k - 1] > distance; --k)
+        {
+            order[k] = order[k - 1];
+            order_distance[k] = order_distance[k - 1];
+        }
+
+        order[k] = a;
+        order_distance[k] = distance;
+    }
+
+    for (k = 0; k < found; ++k)
+    {
+        const k_area_t *area = &areas->areas[order[k]];
+        double cost;
+
+        K_Path_Find(&probe, start, player.cell, area->spot);
+
+        if (probe.result != K_PATH_FOUND || probe.length > FALL_REACH
+         || ThroughMonsters(&probe, here))
+        {
+            continue;
+        }
+
+        cost = probe.length * (area->visited ? VISITED_SHARE : 1.0);
+
+        if (best < 0 || cost < best_cost)
+        {
+            best = order[k];
+            best_cost = cost;
+            best_length = probe.length;
+        }
+    }
+
+    if (best < 0)
+    {
+        fall_again = leveltime + TICRATE;
+        return false;
+    }
+
+    fall_again = leveltime + FALL_AGAIN;
+    goal = Push(GOAL_GOTO, -1);
+    goal->point = areas->areas[best].spot;
+    goal->fallback = true;
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added FALL BACK TO (%.0f, %.0f) - area %d, safe, %.0f units "
+          "away: %d health lost in %d s, %.0f health's worth of monsters on the player",
+          goal->point.x, goal->point.y, best, best_length, then >= 0 ? then - (int) health : 0,
+          FALL_TICS / TICRATE, pressure);
+    PlanGoal(goal);
+    return true;
+}
+
 static boolean ConsiderHeldUp(const goal_t *goal)
 {
     const k_navstatus_t *nav = K_Nav_GetStatus();
@@ -3072,6 +3262,8 @@ static void UpdateShooting(void)
 
 void K_Brain_Reset(void)
 {
+    int i;
+
     if (depth > 0)
     {
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%d goals dropped - new level", depth);
@@ -3099,6 +3291,14 @@ void K_Brain_Reset(void)
 
     K_Path_SetBlockCost(BlockCost);
     K_Path_SetPinchCost(PinchCost);
+    K_Path_SetEnterCost(EnterCost);
+
+    for (i = 0; i < FALL_TICS; ++i)
+    {
+        health_ring[i] = -1;
+    }
+
+    fall_again = 0;
 }
 
 void K_Brain_RequestGoto(double x, double y)
@@ -3148,6 +3348,7 @@ void K_Brain_Tick(void)
     goal_t *goal;
     const k_item_t *item;
 
+    health_ring[leveltime % FALL_TICS] = (int) K_Map_PlayerHealth();
     UpdateEscape();
     UpdateShooting();
 
@@ -3239,7 +3440,7 @@ void K_Brain_Tick(void)
         return;
     }
 
-    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderItems(goal))
+    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderFallBack() || ConsiderItems(goal))
     {
         return;
     }

@@ -25,7 +25,9 @@
 //	longer wins; one that does not work now is a blocked crossing.
 //
 //	A floor that hurts costs the health it takes on the way (HEALTH_COST),
-//	none while a radiation suit lasts.
+//	none while a radiation suit lasts. The brain may add a cost for going
+//	from one cell into another (K_Path_SetEnterCost: the danger of the area
+//	entered); the length stays the way walked.
 //
 
 #include <math.h>
@@ -111,6 +113,7 @@ static int heap_capacity;
 
 static k_blockcost_t block_cost;
 static k_pinchcost_t pinch_cost;
+static k_entercost_t enter_cost;
 static double health_cost;      // HEALTH_COST or HEALTH_COST_DEADLY
 
 // The radiation suit searches assume (K_Path_AssumeSuit): tics, or -1 for
@@ -599,6 +602,12 @@ static boolean Search(k_path_t *path)
             // at a teleporter's destination). Not here on a floor that
             // hurts for one that opens by itself: nav waits off it.
             next = 2 * link->portal + (portal->cell[0] == link->neighbor ? 0 : 1);
+
+            if (enter_cost != NULL)
+            {
+                step += enter_cost(NodeCell(next), cell);
+            }
+
             Relax(next, node, step,
                   Damage(cell, walk, opens ? 0.0 : wait - beyond, elapsed[node])
                   + Damage(NodeCell(next), 0.0, beyond,
@@ -989,6 +998,11 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
 void K_Path_SetBlockCost(k_blockcost_t cost)
 {
     block_cost = cost;
+}
+
+void K_Path_SetEnterCost(k_entercost_t cost)
+{
+    enter_cost = cost;
 }
 
 void K_Path_SetPinchCost(k_pinchcost_t cost)
