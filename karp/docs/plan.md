@@ -2561,8 +2561,9 @@ The user's points, with what the engine says:
    cannot kill them at all. Built on the same per-kind costs as the danger around items (7.5).
 4. **Target priority.** Hitscanners first: the zombieman, shotgunner, chaingunner and Spider
    Mastermind, whose bullets cannot be dodged. Then arch-viles (they raise the dead, and their
-   flame), pain elementals (they spawn lost souls), then by threat: the damage a monster can do,
-   how close it is, how soon it would die. A monster within melee reach goes before that.
+   flame), pain elementals (they spawn lost souls; ahead of their souls, 7.8 "Pain elementals
+   first"), then by threat: the damage a monster can do, how close it is, how soon it would die.
+   A monster within melee reach goes before that.
 5. **Dodging, projectiles only.** A hitscan hit is decided the moment the monster fires. Against
    hitscanners: kill them first, keep the distance (their spread is an angle, so fewer hits far
    off), break line of sight (6). Projectiles (imps, cacodemons, barons and knights, mancubi,
@@ -2978,6 +2979,30 @@ Who controls the player in a fight (the user's model):
   4 projectile hits a level, 42 health at the most, seven of eight finished. Left: hits from
   close by - an imp 80 off, an arachnotron 150 off, a ball there in 3 to 6 tics, too soon to
   sidestep from a run (MAP07: four plasma balls in 0.7 s) - which line of sight answers (below).
+- **Dodging measured** (the user: finish missile avoidance before cover). Added: a mancubus's
+  side shots (11.25 degrees one way, then 22.5 the other, then 5.6 either way: `A_FatAttack1` to
+  3) and the lost soul a pain elemental spits out (74.5 ahead of it, charging at once) among the
+  shots wound up for; and a little leeway up and down (MAP11: a cacodemon's ball falling 6 a tic
+  passed under the feet of a player on a step, in the reckoning, a tic before it hit). Each
+  projectile hit is logged with how long it was seen coming. One seen 12 tics or more before
+  came in time to step aside from standing, and is told apart: foreseen (the way taken expected
+  it: every way cost more), not foreseen (a miss of the reckoning), or no way judged (riding a
+  lift up, a jump). Sweep with monsters - E2M1 to E2M7, E3M1 to E3M8, E4M6, Doom II MAP07, 08,
+  10 to 15 and 20: 89 projectile hits for 1398 health; 57 of them (908) seen under 12 tics
+  before, from close by, left for line of sight and cover (7.7, C3); of the 32 seen in time, 30
+  foreseen and taken (most in fights at good health, imps' and cacodemons' balls - the trade the
+  user asked for - the rest where every way was hit: a revenant's missile in the open, an
+  arachnotron's stream, hemmed in by a baron), 2 riding a lift, none not foreseen. The reckoning
+  takes 0.04 to 0.22 ms a tic on average, 11.5 at the most (E3M6, with 25 games at once). Seen,
+  left for other work: E2M8 stuck at the start (a gap 64 wide between floors of one height
+  judged narrower than the player), so its cyberdemon is untried; MAP10, a door opened onto a
+  cyberdemon 64 off (the route counts no danger on the way); deaths to demons, to cacodemons'
+  and barons' blows up close, and to arch-viles (line of sight).
+- **Pain elementals first** (the user). A pain elemental scored as a revenant, and a lost soul
+  within 96 four times more, so the souls were shot while it spat out more. Now it scores as an
+  arch-vile, and while one the shots can find is within 1024 and not left alone, lost souls
+  score a quarter, close by or not. MAP15: the pain elementals were the targets through the
+  fight there, one killed.
 - **Line of sight** (the user, jotted, for the cover work, 7.7 C3): some threats are answered by
   getting out of sight, not by dodging. Arch-viles: the flame lands 66 tics after the attack
   starts (20, and a blast of 70), only if the vile still sees the player then (`A_VileAttack`);

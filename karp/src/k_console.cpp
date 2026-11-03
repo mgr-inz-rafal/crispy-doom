@@ -1683,8 +1683,9 @@ static void DrawCombat(void)
                 incoming);
         StatRow("Threats", "%d could reach the player; %d dodges", combat->threats,
                 combat->dodges);
-        StatRow("Projectile hits", "%d for %d health", combat->missile_hits,
-                combat->missile_damage);
+        StatRow("Projectile hits", "%d for %d health; %d in time to dodge, for %d",
+                combat->missile_hits, combat->missile_damage, combat->dodgeable_hits,
+                combat->dodgeable_damage);
         StatRow("Kills", "%d", combat->kills);
         StatRow("Shots", "%d", combat->shots);
         ImGui::EndTable();

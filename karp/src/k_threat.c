@@ -7,7 +7,9 @@
 //	checks (missiles fly over blocking lines, as sight does). Monsters
 //	never lead a shot (P_SpawnMissile aims at where the player is that
 //	tic): a shot wound up for, seen coming in the monster's states, is
-//	aimed at where the way puts the player when it is fired. A revenant's
+//	aimed at where the way puts the player when it is fired (a mancubus's
+//	volleys, each shot off that line by its angle; the lost soul a pain
+//	elemental spits out, charging at once). A revenant's
 //	missile turns toward the player every 4 tics, TRACE_TURN at the most,
 //	when the tic it was fired on lets it (A_Tracer: about half of them); it
 //	is followed tic by tic along each way, walls and all. A lost soul
@@ -20,6 +22,7 @@
 //
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "SDL.h"
@@ -40,6 +43,11 @@
 #define PLAYER_RADIUS 16.0
 #define PLAYER_HEIGHT 56.0
 #define HIT_MARGIN 4.0
+
+// The same up and down: one falling steeply at a player on a step may pass
+// a few units under its feet in the reckoning a tic before it hits (Doom II
+// MAP11: a cacodemon's ball falling 6 a tic).
+#define HIT_RISE 8.0
 
 // The player runs no faster than this (units per tic): threats further off
 // than it can run before they get there never reach it.
@@ -66,6 +74,11 @@
 // walls further on are not known.
 #define WOUND_PAST 8
 
+// A hit counts as foreseen when the way taken expected it within
+// FORESEEN_TICS of when it came. UNJUDGED: no way was judged that tic.
+#define FORESEEN_TICS 4
+#define UNJUDGED (-2)
+
 // Within this a monster that claws or bites does that instead of shooting
 // (P_CheckMeleeRange: 44 plus the player's radius, and a margin).
 #define MELEE_RANGE 64.0
@@ -82,8 +95,11 @@ extern void A_FatAttack3();
 extern void A_BspiAttack();
 extern void A_CyberAttack();
 extern void A_SkullAttack();
+extern void A_PainAttack();
 
 extern int demostarttic;            // g_game.c
+
+#define MAX_SHOTS 2
 
 // The states' actions that fire a shot.
 typedef struct
@@ -93,22 +109,29 @@ typedef struct
     double launch;          // how far ahead of the monster it is at the end
                             // of the tic it is fired, in steps of its speed
                             // (P_CheckMissileSpawn: half a step, and its own
-                            // first step that tic)
+                            // first step that tic; a pain elemental's lost
+                            // soul, A_PainShootSkull: 74.5 ahead, and its
+                            // first step)
     boolean melee;          // in reach, the monster claws or bites instead
+    int count;              // how many it fires at once
+    double angles[MAX_SHOTS];   // each one's way off the straight line to
+                                // the player, degrees (a mancubus's volleys,
+                                // A_FatAttack1 to 3)
 } shot_t;
 
 static const shot_t shots[] =
 {
-    { A_TroopAttack, MT_TROOPSHOT,   1.5, true },
-    { A_HeadAttack,  MT_HEADSHOT,    1.5, true },
-    { A_BruisAttack, MT_BRUISERSHOT, 1.5, true },
-    { A_SkelMissile, MT_TRACER,      2.5, false },
-    { A_FatAttack1,  MT_FATSHOT,     1.5, false },
-    { A_FatAttack2,  MT_FATSHOT,     1.5, false },
-    { A_FatAttack3,  MT_FATSHOT,     1.5, false },
-    { A_BspiAttack,  MT_ARACHPLAZ,   1.5, false },
-    { A_CyberAttack, MT_ROCKET,      1.5, false },
-    { A_SkullAttack, MT_SKULL,       0.0, false },
+    { A_TroopAttack, MT_TROOPSHOT,   1.5, true,  1, { 0.0 } },
+    { A_HeadAttack,  MT_HEADSHOT,    1.5, true,  1, { 0.0 } },
+    { A_BruisAttack, MT_BRUISERSHOT, 1.5, true,  1, { 0.0 } },
+    { A_SkelMissile, MT_TRACER,      2.5, false, 1, { 0.0 } },
+    { A_FatAttack1,  MT_FATSHOT,     1.5, false, 2, { 0.0, 11.25 } },
+    { A_FatAttack2,  MT_FATSHOT,     1.5, false, 2, { 0.0, -22.5 } },
+    { A_FatAttack3,  MT_FATSHOT,     1.5, false, 2, { -5.625, 5.625 } },
+    { A_BspiAttack,  MT_ARACHPLAZ,   1.5, false, 1, { 0.0 } },
+    { A_CyberAttack, MT_ROCKET,      1.5, false, 1, { 0.0 } },
+    { A_SkullAttack, MT_SKULL,       0.0, false, 1, { 0.0 } },
+    { A_PainAttack,  MT_SKULL,       4.7, false, 1, { 0.0 } },
 };
 
 typedef enum
@@ -135,12 +158,14 @@ typedef struct
                             // WOUND: the tics it flies once fired
     int turn;               // HOMING: the first tic it turns
     int fires;              // WOUND: the tic it is fired
-    double launch;          // WOUND: see shot_t
+    const shot_t *shot;     // WOUND: what it fires
     double blast;           // its burst's reach (a rocket), 0 if none
     double cost;            // of a hit
     boolean lethal;         // a hit could kill
     boolean near;           // it could reach the player
     int seen;               // the leveltime it was first seen
+    int expected;           // the leveltime the way taken expects it to hit,
+                            // -1 if never; UNJUDGED (K_Threat_Expect)
 } threat_t;
 
 static threat_t threats[MAX_THREATS];
@@ -157,6 +182,7 @@ static k_vec2_t me;
 
 static const char *hit_name;
 static int hit_seen;
+static int hit_foreseen;
 static int hit_tic = -1;
 
 static double ToMap(fixed_t value)
@@ -346,6 +372,7 @@ static threat_t *NewThreat(const mobj_t *mo, threatkind_t kind)
     threat->mo = mo;
     threat->kind = kind;
     threat->seen = before != NULL ? before->seen : leveltime;
+    threat->expected = UNJUDGED;
     return threat;
 }
 
@@ -503,7 +530,7 @@ void K_Threat_AddMonster(const mobj_t *mo, int visible)
                                               : ToMap(mobjinfo[shot->missile].speed);
     threat->radius = ToMap(mobjinfo[shot->missile].radius);
     threat->fires = SDL_max(fires, 1);
-    threat->launch = shot->launch;
+    threat->shot = shot;
     threat->life = (int) (distance / SDL_max(threat->speed, 1.0)) + WOUND_PAST;
     threat->blast = shot->missile == MT_ROCKET ? BLAST : 0.0;
     threat->cost = HitCost(mobjinfo[shot->missile].damage,
@@ -558,6 +585,9 @@ void K_Threat_End(void)
         {
             hit_name = threat->name;
             hit_seen = leveltime - threat->seen;
+            hit_foreseen = threat->expected == UNJUDGED ? -1
+                         : threat->expected >= 0
+                           && abs(threat->expected - leveltime) <= FORESEEN_TICS;
             hit_tic = leveltime;
         }
     }
@@ -610,7 +640,7 @@ static int FlyingHit(const threat_t *threat, const k_vec2_t *path, int tics, dou
 
         if ((Overlaps(Along(threat, k), threat->radius, path[k - 1])
              || Overlaps(Along(threat, k - 0.5), threat->radius, path[k - 1]))
-         && z < floor + PLAYER_HEIGHT && z + threat->height > floor)
+         && z < floor + PLAYER_HEIGHT + HIT_RISE && z + threat->height > floor - HIT_RISE)
         {
             *cost = threat->cost;
             *lethal = threat->lethal;
@@ -677,13 +707,14 @@ static int HomingHit(const threat_t *threat, const k_vec2_t *path, int tics, dou
     return 0;
 }
 
-// A shot not fired yet: aimed at where the way puts the player then.
+// A shot not fired yet: aimed at where the way puts the player then, each
+// of a volley off that line by its angle; the hits add up.
 static int WoundHit(const threat_t *threat, const k_vec2_t *path, int tics, double *cost,
                     boolean *lethal)
 {
-    k_vec2_t aim, velocity, at;
-    double length;
-    int k, end;
+    k_vec2_t aim;
+    double straight;
+    int first = 0, s, k, end;
 
     if (threat->fires > tics)
     {
@@ -691,36 +722,61 @@ static int WoundHit(const threat_t *threat, const k_vec2_t *path, int tics, doub
     }
 
     aim = path[threat->fires - 1];
-    length = Distance(threat->at, aim);
 
-    if (length < 1.0)
+    if (Distance(threat->at, aim) < 1.0)
     {
         return 0;
     }
 
-    velocity.x = (aim.x - threat->at.x) / length * threat->speed;
-    velocity.y = (aim.y - threat->at.y) / length * threat->speed;
-    at.x = threat->at.x + velocity.x * threat->launch;
-    at.y = threat->at.y + velocity.y * threat->launch;
+    straight = atan2(aim.y - threat->at.y, aim.x - threat->at.x);
     end = SDL_min(tics, threat->fires + threat->life);
 
-    for (k = threat->fires; k <= end; ++k)
+    for (s = 0; s < threat->shot->count; ++s)
     {
-        if (k > threat->fires)
-        {
-            at.x += velocity.x;
-            at.y += velocity.y;
-        }
+        double angle = straight + threat->shot->angles[s] * K_PI / 180.0;
+        k_vec2_t velocity = { cos(angle) * threat->speed, sin(angle) * threat->speed };
+        k_vec2_t at = { threat->at.x + velocity.x * threat->shot->launch,
+                        threat->at.y + velocity.y * threat->shot->launch };
 
-        if (Overlaps(at, threat->radius, path[k - 1]))
+        for (k = threat->fires; k <= end; ++k)
         {
-            *cost = threat->cost;
-            *lethal = threat->lethal;
-            return k;
+            if (k > threat->fires)
+            {
+                at.x += velocity.x;
+                at.y += velocity.y;
+            }
+
+            if (Overlaps(at, threat->radius, path[k - 1]))
+            {
+                *cost += threat->cost;
+                *lethal |= threat->lethal;
+                first = first == 0 ? k : SDL_min(first, k);
+                break;
+            }
         }
     }
 
-    return 0;
+    return first;
+}
+
+// The tic it hits the player along the way, or 0; with what the hit costs.
+static int ThreatHit(const threat_t *threat, const k_vec2_t *path, int tics, double floor,
+                     double *cost, boolean *lethal)
+{
+    *cost = 0.0;
+    *lethal = false;
+
+    switch (threat->kind)
+    {
+        case THREAT_FLYING:
+            return FlyingHit(threat, path, tics, floor, cost, lethal);
+
+        case THREAT_HOMING:
+            return HomingHit(threat, path, tics, cost, lethal);
+
+        default:
+            return WoundHit(threat, path, tics, cost, lethal);
+    }
 }
 
 double K_Threat_PathCost(const k_vec2_t *path, int tics, double floor, k_threathit_t *worst)
@@ -743,31 +799,12 @@ double K_Threat_PathCost(const k_vec2_t *path, int tics, double floor, k_threath
     for (i = 0; i < num_threats; ++i)
     {
         const threat_t *threat = &threats[i];
-        double cost = 0.0;
-        boolean lethal = false;
+        double cost;
+        boolean lethal;
         int tic;
 
-        if (!threat->near)
-        {
-            continue;
-        }
-
-        switch (threat->kind)
-        {
-            case THREAT_FLYING:
-                tic = FlyingHit(threat, path, tics, floor, &cost, &lethal);
-                break;
-
-            case THREAT_HOMING:
-                tic = HomingHit(threat, path, tics, &cost, &lethal);
-                break;
-
-            default:
-                tic = WoundHit(threat, path, tics, &cost, &lethal);
-                break;
-        }
-
-        if (tic <= 0)
+        if (!threat->near
+         || (tic = ThreatHit(threat, path, tics, floor, &cost, &lethal)) <= 0)
         {
             continue;
         }
@@ -792,7 +829,24 @@ double K_Threat_PathCost(const k_vec2_t *path, int tics, double floor, k_threath
     return total;
 }
 
-const char *K_Threat_HitBy(int *seen)
+void K_Threat_Expect(const k_vec2_t *path, int tics, double floor)
+{
+    int i;
+
+    tics = SDL_min(tics, K_THREAT_TICS);
+
+    for (i = 0; i < num_threats; ++i)
+    {
+        threat_t *threat = &threats[i];
+        double cost;
+        boolean lethal;
+        int tic = threat->near ? ThreatHit(threat, path, tics, floor, &cost, &lethal) : 0;
+
+        threat->expected = tic > 0 ? leveltime + tic : -1;
+    }
+}
+
+const char *K_Threat_HitBy(int *seen, int *foreseen)
 {
     if (hit_tic != leveltime || hit_name == NULL)
     {
@@ -800,5 +854,6 @@ const char *K_Threat_HitBy(int *seen)
     }
 
     *seen = hit_seen;
+    *foreseen = hit_foreseen;
     return hit_name;
 }

@@ -6,7 +6,8 @@
 //	Each tic the monsters and projectiles are listed from the thinkers,
 //	and Karp's own sight checks tell which monsters the player can see.
 //	The target is the one scoring best: one within reach of its blows or in
-//	the way first, then the most dangerous kinds (hitscanners), awake ones,
+//	the way first, then the most dangerous kinds (hitscanners; a pain
+//	elemental before the lost souls it spits out), awake ones,
 //	attacking ones, near ones, those that drop what the player wants (a
 //	shotgun guy, out of shells); far ones are left alone (the user: chasing
 //	a far hitscanner wastes time and ammo), and so are tough ones whose
@@ -145,6 +146,12 @@
 // goes first; MAP04: a zombieman in the way held the bot 1.1 s, unshot).
 #define CLOSE_REACH 96.0
 #define CLOSE_FIRST 4.0
+
+// While a pain elemental the shots can find is within TARGET_REACH, and not
+// left alone, lost souls score SOUL_SHARE: it spits them out as fast as they
+// die, so it goes first, even past souls within CLOSE_REACH, unless it is far
+// off and they are on the player (the user; plan 7.3 point 4).
+#define SOUL_SHARE 0.25
 
 // Battle mode: for a target awake within BATTLE_REACH (asleep ones are
 // targets only near anyway), in sight for SIGHTED_TICS in a row (a glimpse
@@ -408,6 +415,13 @@
 // unit of 1 - cos of the angle costing DETOUR_COST; unless a hit could kill:
 // then the route waits, as it does standing, while the player steps any way
 // (the user). Never riding a lift up, nor running a jump.
+// A projectile hit seen DODGEABLE_TICS before or more came in time to step
+// out of its way from standing (about 7 tics, and up to 3 before a command
+// runs); counted apart: those are the dodging's misses, the rest came too
+// close. Of those, one the way taken expected (K_Threat_HitBy) was taken
+// knowingly: any other way cost more.
+#define DODGEABLE_TICS 12
+
 #define DODGE_MIN 1.0
 #define ROUTE_KEEP 1.0
 #define DODGE_KEEP 1.0
@@ -466,7 +480,7 @@ static const kind_t kinds[] =
     { MT_WOLFSS,    "Wolfenstein SS",    4.0,  10.0, true },
     { MT_SPIDER,    "spider mastermind", 6.0, 100.0, true },
     { MT_VILE,      "arch-vile",         6.0,  50.0, false },
-    { MT_PAIN,      "pain elemental",    4.0,  20.0, false },
+    { MT_PAIN,      "pain elemental",    6.0,  20.0, false },
     { MT_UNDEAD,    "revenant",          4.0,  25.0, false },
     { MT_FATSO,     "mancubus",          4.0,  30.0, false },
     { MT_BABY,      "arachnotron",       4.0,  25.0, false },
@@ -1087,23 +1101,38 @@ static void AttackerName(const player_t *player, char *buf, int buf_len)
 // doing about it, and counted.
 static void LogHits(const player_t *player)
 {
+    const k_navstatus_t *nav = K_Nav_GetStatus();
     char name[64];
     const char *by;
-    int damage, seen;
+    int damage, seen, foreseen;
 
     if (last_health >= 0 && player->health < last_health && player->attacker != NULL)
     {
         damage = last_health - player->health;
-        by = player->attacker != player->mo ? K_Threat_HitBy(&seen) : NULL;
+        by = player->attacker != player->mo ? K_Threat_HitBy(&seen, &foreseen) : NULL;
 
         if (by != NULL)
         {
             ++status.missile_hits;
             status.missile_damage += damage;
-            K_Log(K_LOG_COMBAT, K_LOG_INFO, "hit for %d by the %s, seen %.1f s before, %s - "
+
+            if (seen >= DODGEABLE_TICS)
+            {
+                ++status.dodgeable_hits;
+                status.dodgeable_damage += damage;
+                status.foreseen_hits += foreseen > 0;
+            }
+
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "hit for %d by the %s, seen %.1f s before%s, %s - "
                   "%d health left", damage, by, (double) seen / TICRATE,
-                  battle ? "fighting" : dodging_missile ? "dodging" : "not dodging",
-                  player->health);
+                  seen < DODGEABLE_TICS ? ""
+                  : foreseen > 0 ? " (in time to dodge; foreseen, every way cost more)"
+                  : foreseen == 0 ? " (in time to dodge; not foreseen)"
+                  : " (in time to dodge; no way judged)",
+                  battle ? "fighting" : dodging_missile ? "dodging"
+                  : nav->action == K_ACTION_RIDE ? "riding a lift"
+                  : !K_Nav_CanPause() ? "working a door, lift or switch, or jumping"
+                  : "not dodging", player->health);
         }
         else
         {
@@ -1482,9 +1511,15 @@ static void ChooseTarget(const player_t *player)
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double facing = player->mo->angle * (2.0 * K_PI / 4294967296.0);
     double best_score = 0.0;
-    boolean same;
+    boolean same, pain_near = false;
     int best = -1;
     int i;
+
+    for (i = 0; i < num_monsters && !pain_near; ++i)
+    {
+        pain_near = monsters[i].type == MT_PAIN && monsters[i].shootable
+                 && monsters[i].distance <= TARGET_REACH && !IgnoredTarget(i);
+    }
 
     for (i = 0; i < num_monsters; ++i)
     {
@@ -1530,6 +1565,11 @@ static void ChooseTarget(const player_t *player)
         if (monster->distance < CLOSE_REACH)
         {
             score *= CLOSE_FIRST;
+        }
+
+        if (monster->type == MT_SKULL && pain_near)
+        {
+            score *= SOUL_SHARE;
         }
 
         if (score > best_score)
@@ -2332,14 +2372,13 @@ static boolean Walkable(k_vec2_t at, double floor, boolean hurts)
     return Steppable(at, floor, hurts, EDGE_MARGIN);
 }
 
-// What moving at (vx, vy) would cost in health from what flies at the
-// player or is about to (k_threat.h): from now, as nav would steer it
-// (K_Nav_Simulate), facing face if not NULL; held where it could not step
-// on (Steppable, every CHECK_TICS). hit, if not NULL, gets the costliest.
-static double MoveCost(k_vec2_t me, double vx, double vy, const double *face, double floor,
-                       boolean hurts, double edge, k_threathit_t *hit)
+// Where moving at (vx, vy) takes the player over the next K_THREAT_TICS:
+// from now, as nav would steer it (K_Nav_Simulate), facing face if not
+// NULL; held where it could not step on (Steppable, every CHECK_TICS).
+// Returns how many points it gave.
+static int MovePath(k_vec2_t me, double vx, double vy, const double *face, double floor,
+                    boolean hurts, double edge, k_vec2_t *path)
 {
-    k_vec2_t path[K_THREAT_TICS];
     k_vec2_t good = me;
     int tics = K_Nav_Simulate(vx, vy, face, K_THREAT_TICS, path);
     int t, k;
@@ -2359,7 +2398,29 @@ static double MoveCost(k_vec2_t me, double vx, double vy, const double *face, do
         good = path[t];
     }
 
+    return tics;
+}
+
+// What moving at (vx, vy) would cost in health from what flies at the
+// player or is about to (k_threat.h), along MovePath. hit, if not NULL,
+// gets the costliest.
+static double MoveCost(k_vec2_t me, double vx, double vy, const double *face, double floor,
+                       boolean hurts, double edge, k_threathit_t *hit)
+{
+    k_vec2_t path[K_THREAT_TICS];
+    int tics = MovePath(me, vx, vy, face, floor, hurts, edge, path);
+
     return K_Threat_PathCost(path, tics, floor, hit);
+}
+
+// The way taken: what it expects to meet, for the log (K_Threat_Expect).
+static void ExpectMove(k_vec2_t me, double vx, double vy, const double *face, double floor,
+                       boolean hurts, double edge)
+{
+    k_vec2_t path[K_THREAT_TICS];
+    int tics = MovePath(me, vx, vy, face, floor, hurts, edge, path);
+
+    K_Threat_Expect(path, tics, floor);
 }
 
 // Where to move while fighting: each of MOVE_WAYS directions that can be
@@ -2484,6 +2545,12 @@ static void ChooseMove(const player_t *player)
         }
     }
 
+    // Hemmed in, the player stands.
+    if (threats)
+    {
+        ExpectMove(me, move.x, move.y, &face, floor, hurts, EDGE_MARGIN);
+    }
+
     // Going the other way after all (a wall, a monster): strafe that way.
     if (found && move.x * sx + move.y * sy < 0.0)
     {
@@ -2498,7 +2565,8 @@ static void ChooseMove(const player_t *player)
 // only ways no more than 90 degrees off velocity, unless a hit going on
 // could kill. keep is the way stepped already, -1 if none. Returns the way,
 // or -1 to go on as it is; hit gets the costliest hit going on, *on_way
-// whether the way is a sidestep.
+// whether the way is a sidestep. The way returned is the one taken
+// (Expect).
 static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep, int keep,
                     k_threathit_t *hit, boolean *on_way)
 {
@@ -2531,6 +2599,7 @@ static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep,
 
     if (best_cost < DODGE_MIN)
     {
+        ExpectMove(me, velocity.x, velocity.y, face, floor, hurts, edge);
         return -1;
     }
 
@@ -2580,6 +2649,16 @@ static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep,
             best_cost = cost;
             best = k;
         }
+    }
+
+    if (best >= 0)
+    {
+        ExpectMove(me, cos(best * 2.0 * K_PI / MOVE_WAYS) * DODGE_SPEED,
+                   sin(best * 2.0 * K_PI / MOVE_WAYS) * DODGE_SPEED, face, floor, hurts, edge);
+    }
+    else
+    {
+        ExpectMove(me, velocity.x, velocity.y, face, floor, hurts, edge);
     }
 
     return best;
@@ -3577,9 +3656,10 @@ int K_Combat_BlastsPending(double x, double y, double reach)
 
 void K_Combat_LogSummary(void)
 {
-    K_Log(K_LOG_COMBAT, K_LOG_INFO, "projectiles this level: %d hits for %d health; stepped "
-          "out of their way %d times out of fights", status.missile_hits, status.missile_damage,
-          status.dodges);
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "projectiles this level: %d hits for %d health, %d of them "
+          "seen in time to dodge (%d health, %d foreseen and taken); stepped out of their way "
+          "%d times out of fights", status.missile_hits, status.missile_damage,
+          status.dodgeable_hits, status.dodgeable_damage, status.foreseen_hits, status.dodges);
 }
 
 int K_Combat_Move(double *vx, double *vy)

@@ -69,6 +69,10 @@ typedef struct
                             // level
     int missile_hits;       // hits from projectiles this level, and the
     int missile_damage;     // health they took
+    int dodgeable_hits;     // of those, seen in time to step out of their
+    int dodgeable_damage;   // way
+    int foreseen_hits;      // and of those, taken knowingly: every way the
+                            // player could have taken cost more
     char text[96];          // what it is doing, for the console
 } k_combatstatus_t;
 

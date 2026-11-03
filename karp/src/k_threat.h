@@ -53,10 +53,17 @@ int K_Threat_Count(void);
 // less: the way can still change. worst, if not NULL, gets the costliest.
 double K_Threat_PathCost(const k_vec2_t *path, int tics, double floor, k_threathit_t *worst);
 
+// Once a tic, for the way the player takes (path as for K_Threat_PathCost):
+// marks when each threat is expected to hit it along that way, if at all,
+// for K_Threat_HitBy.
+void K_Threat_Expect(const k_vec2_t *path, int tics, double floor);
+
 // The projectile (or lost soul) that hit the player this tic, as far as can
 // be told: one that was about to reach it last tic and is gone now; with
-// how many tics it had been seen. NULL if none.
-const char *K_Threat_HitBy(int *seen);
+// how many tics it had been seen, and whether the way taken last tic
+// expected it then: 1 if so, 0 if not, -1 if no way was judged. NULL if
+// none.
+const char *K_Threat_HitBy(int *seen, int *foreseen);
 
 #ifdef __cplusplus
 }
