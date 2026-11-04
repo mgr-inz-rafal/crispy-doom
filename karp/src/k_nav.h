@@ -153,8 +153,8 @@ int K_Nav_Simulate(double vx, double vy, const double *face, int tics, k_vec2_t 
 void K_Nav_BuildCommand(int tic, const double *aim, k_command_t *command);
 
 // Fights (k_combat.h, battle mode): whether nav can leave its route now -
-// not while working a door, lift or switch past walking up to it, nor while
-// running a jump.
+// not while working a door, lift or switch past walking up to it (but for
+// a door pressed already, or shut on a timer), nor while running a jump.
 int K_Nav_CanPause(void);
 
 // Waiting at a door, lift or switch, walked up to it (not running a jump):

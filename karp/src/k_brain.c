@@ -87,7 +87,11 @@
 // line's uses (MAX_TRIGGERS) count for LINE_USES_TICS after the last one.
 // GO TO EXIT never fails: with no way, it is planned again every IDLE_TICS
 // (Doom II MAP02: stuck by a barrel for 8 s, the blue key was given up for
-// good, then the exit, and the bot stood idle).
+// good, then the exit, and the bot stood idle). While it waits so, with
+// nothing else to do, a goal that failed is tried again after IDLE_TICS,
+// twice that after failing again, and so on up to 8 times (the user, Doom
+// II MAP14: every goal failed at once from the spot of a shotgun picked up,
+// a moving floor in the way, and the bot stood idle for 30 s).
 #define FAIL_TICS (30 * TICRATE)
 #define MAX_FAIL_TICS (240 * TICRATE)
 #define TRIED_TICS (30 * TICRATE)
@@ -351,6 +355,7 @@ typedef struct
     goal_type_t type;
     int param;
     int count;              // times it failed this level
+    int since;              // when it failed last
     int until;              // when it may go on the stack again
     char text[K_LOG_LINE_LEN];
 } failed_t;
@@ -359,6 +364,7 @@ static goal_t goals[MAX_GOALS];
 static int depth;           // goals[depth - 1] is worked on
 static failed_t failed[MAX_FAILED];
 static int num_failed;
+static boolean idling;      // GO TO EXIT waits with no way, nothing to do
 static boolean exit_wanted; // GO TO EXIT goes on an empty list
 
 // Refreshed when planning: the keys lying in the level (up to
@@ -391,6 +397,7 @@ static char status[K_LOG_LINE_LEN * 2];
 static int item_check_tic;              // when to look for items next
 static boolean was_critical;            // health was CRITICAL at the last look
 static int dashing = -1;                // the item fights are broken off for
+static int run_waited = -1;             // the item whose run waited, logged
 static int *item_skip;                  // per item: not looked at before this
 static int item_skip_size;
 static k_vec2_t hold_at;                // where the player has kept near, and
@@ -488,12 +495,15 @@ static failed_t *FailedEntry(goal_type_t type, int param)
     return NULL;
 }
 
-// Failed, and not yet due to be tried again.
+// Failed, and not yet due to be tried again - sooner while idling.
 static boolean IsFailed(goal_type_t type, int param)
 {
     const failed_t *entry = FailedEntry(type, param);
 
-    return entry != NULL && leveltime < entry->until;
+    return entry != NULL
+        && leveltime < (idling ? SDL_min(entry->until, entry->since + (IDLE_TICS
+                                         << SDL_min(SDL_max(entry->count - 1, 0), 3)))
+                               : entry->until);
 }
 
 static boolean OnStack(goal_type_t type, int param)
@@ -631,6 +641,7 @@ static void FailGoal(const char *why)
     entry->param = goal->param;
     tics = FAIL_TICS << SDL_min(entry->count, 3);
     tics = SDL_min(tics, MAX_FAIL_TICS);
+    entry->since = leveltime;
     entry->until = leveltime + tics;
     ++entry->count;
 
@@ -1717,6 +1728,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     goal->waited = 0;
     goal->idle = false;
     goal->shooting = false;
+    idling = false;
 
     if (goal->type == GOAL_TRIGGER)
     {
@@ -2112,6 +2124,7 @@ static void PlanGoal(goal_t *goal)
         M_snprintf(goal->note, sizeof(goal->note), "no way for now, waiting - %s", reason);
         goal->retry_tic = leveltime + IDLE_TICS;
         goal->waited = 0;
+        idling = true;
         K_Nav_Clear();
     }
     else
@@ -2961,6 +2974,36 @@ static boolean ConsiderItems(goal_t *goal)
     return true;
 }
 
+// Whether the run for an item waits: its way goes into an area with
+// monsters inside, not the player's own (K_Combat_MonstersAhead) - fought
+// for there and held short of as on any way, not run into (E2M5: at
+// firepower LOW the bot ran for a box of shells past three imps in a
+// corridor, clawed; Doom II MAP14: a hold that had killed five was broken
+// off for a medikit among the monsters held short of). Not for health at
+// CRITICAL: worth any risk. Logged once a run.
+static boolean RunWaits(const goal_t *goal, const k_item_t *item)
+{
+    char name[64];
+    int area;
+
+    if (item->kind == K_ITEM_HEALTH && K_Condition_Get()->health == K_NEED_CRITICAL)
+    {
+        return false;
+    }
+
+    area = K_Combat_MonstersAhead();
+
+    if (area >= 0 && run_waited != goal->param)
+    {
+        GoalName(goal, name, sizeof(name));
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: the way goes into area %d, %d monsters inside - "
+              "fought for, not run for", name, area, K_Area_Get()->areas[area].monsters);
+        run_waited = goal->param;
+    }
+
+    return area >= 0;
+}
+
 // Fleeing (plan, 7.4), and dashes: while the goal on top is an item worth
 // breaking a fight off for (k_items.h: urgent) - health when LOW or
 // CRITICAL, and ammo when ammo or firepower is LOW, wherever it is
@@ -2968,7 +3011,8 @@ static boolean ConsiderItems(goal_t *goal)
 // comes within FIGHT_REACH until it is picked up, while no monster is within
 // DASH_CLEAR -
 // combat starts no fight and breaks off the one going on; the player runs
-// for it, shooting on the way at what it sees. The item may have fixes on
+// for it, shooting on the way at what it sees - but not while its way goes
+// into a room of monsters ahead (RunWaits). The item may have fixes on
 // top of it: working them is part of the run for it (MAP10: going for a
 // medikit at LOW health, the bot fought an arachnotron by the walk-over line
 // pushed for it, and died). With nothing to go for, fights go on as before:
@@ -3001,12 +3045,19 @@ static void UpdateEscape(void)
     if (item == NULL || !item->urgent)
     {
         dashing = -1;
+        run_waited = -1;
         K_Combat_Escape(NULL);
         return;
     }
 
     if (item->escape)
     {
+        if (RunWaits(goal, item))
+        {
+            K_Combat_Escape(NULL);
+            return;
+        }
+
         M_snprintf(why, sizeof(why), "%s, going for the %s",
                    item->kind != K_ITEM_HEALTH
                    ? (K_Condition_Get()->firepower == K_NEED_LOW ? "firepower LOW" : "ammo LOW")
@@ -3023,7 +3074,8 @@ static void UpdateEscape(void)
         dashing = goal->param;
     }
 
-    if (dashing == goal->param && K_Combat_MonstersWithin(DASH_CLEAR) == 0)
+    if (dashing == goal->param && K_Combat_MonstersWithin(DASH_CLEAR) == 0
+     && !RunWaits(goal, item))
     {
         M_snprintf(why, sizeof(why), "going for the %s", item->name);
         K_Combat_Escape(why);
@@ -3063,6 +3115,27 @@ static boolean ThroughMonsters(const k_path_t *path, int skip)
     }
 
     return false;
+}
+
+// Whether a way can be walked now: no door or lift on it to work or wait
+// for (E1M6: falling back through a door that opened by itself in 29 s,
+// the bot stood at it 16 s, no fight started, and died there).
+static boolean OpenNow(const k_path_t *path)
+{
+    int r;
+
+    for (r = 1; r < path->num_cells; ++r)
+    {
+        k_crossing_t crossing = K_Graph_CanCross(path->portals[r - 1], path->cells[r - 1]);
+
+        if (crossing != K_CROSS_OPEN && crossing != K_CROSS_JUMP
+         && crossing != K_CROSS_TELEPORT)
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 // Falling back out of a fight going badly (FALL_LOSS). Looked at every tic;
@@ -3143,7 +3216,7 @@ static boolean ConsiderFallBack(void)
         K_Path_Find(&probe, start, player.cell, area->spot);
 
         if (probe.result != K_PATH_FOUND || probe.length > FALL_REACH
-         || ThroughMonsters(&probe, here))
+         || ThroughMonsters(&probe, here) || !OpenNow(&probe))
         {
             continue;
         }
@@ -3275,7 +3348,9 @@ void K_Brain_Reset(void)
     exit_wanted = K_AutoplayEnabled();
     item_check_tic = 0;
     was_critical = false;
+    idling = false;
     dashing = -1;
+    run_waited = -1;
     hold_since = 0;
     hold_at.x = hold_at.y = 1.0e9;
 

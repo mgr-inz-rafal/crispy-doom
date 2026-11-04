@@ -898,6 +898,8 @@ static void DrawHoveredCell(ImDrawList *draw, const k_map_t *map, int index,
 // white, with the line of fire from the player; a barrel shot at, in
 // yellow. Projectiles as dots with a tail the way they fly (8 tics of it):
 // grey the player's own, yellow coming at the player, orange the rest.
+// Holding: the spot held at as a cyan ring, dashed to where creeping ends,
+// filled while creeping.
 static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t *player)
 {
     const k_combatstatus_t *combat = K_Combat_GetStatus();
@@ -953,6 +955,22 @@ static void DrawMonsters(ImDrawList *draw, const ImVec2 &center, const k_pose_t 
             DrawDashedLine(draw, MapToScreen(center, player->x, player->y), at,
                            IM_COL32(255, 220, 60, 160), thickness);
         }
+    }
+
+    if (combat->holding)
+    {
+        ImVec2 spot = MapToScreen(center, combat->hold_spot.x, combat->hold_spot.y);
+        ImVec2 end = MapToScreen(center, combat->hold_end.x, combat->hold_end.y);
+        float radius = SDL_max(4.0f * ui_scale, (float) (16.0 * view_scale));
+
+        DrawDashedLine(draw, spot, end, IM_COL32(60, 220, 240, 180), thickness);
+
+        if (combat->creeping)
+        {
+            draw->AddCircleFilled(spot, radius, IM_COL32(60, 220, 240, 70));
+        }
+
+        draw->AddCircle(spot, radius, IM_COL32(60, 220, 240, 240), 0, thickness);
     }
 
     for (int i = 0; i < K_Combat_ProjectileCount(); ++i)

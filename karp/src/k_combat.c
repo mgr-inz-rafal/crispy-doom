@@ -72,12 +72,14 @@
 //	and one going on is broken off; the player runs for it, shooting on the
 //	way at what it sees.
 //
-//	Holding (plan, 7.8: C3): walking the route out of a safe area
-//	(k_area.h) toward one with monsters inside, the route waits short of
-//	the way in, the player facing it and fighting what comes or shows
-//	itself - doors opened first, then stood back from - and, with nothing
-//	to shoot, creeping slowly on to the way in and a little past it; once
-//	there with still nothing to shoot, or the area safe, it goes in.
+//	Holding (plan, 7.8: C3): walking the route out of an area with no
+//	monsters inside (k_area.h) toward one with monsters inside, the route
+//	waits short of the way in, the player facing it and fighting what
+//	comes or shows itself - a door pressed, then stood back from as it
+//	rises - and, with nothing worth fighting, creeping slowly on to the way
+//	in and a little past it; once there with still nothing worth fighting,
+//	or the area safe, it goes in. Runs for items wait while such an area
+//	lies ahead (K_Combat_MonstersAhead).
 //
 //	Danger (plan, 7.5): what going to a spot would cost in health - the
 //	monsters that could see the player there, each by what a fight with its
@@ -439,27 +441,44 @@
 
 // Holding (the user: by default stay in safe areas - open a door and hold
 // outside, cherry-picking, instead of rushing in to be surrounded). Walking
-// the route from a safe area (k_area.h; or a door's or lift's cells), when
-// it is about to enter, within HOLD_AHEAD along it, an area that is not
-// safe with HOLD_RISK or more of monsters inside (AreaRisk), the route
-// waits - kept as the monsters come and make the player's own area unsafe
-// (E1M5, E1M8: holds dropped within half a second, as soon as monsters
-// came in sight, and the bot walked into the fight) - while the player
-// stands HOLD_BACK short of the way
+// the route from an area with no monsters inside (k_area.h; or a door's or
+// lift's cells) - seen from the area ahead or not, fighting or not (Doom
+// II MAP14: the blue door open, the chaingunner behind it saw the bot's
+// area, which was then not safe, and the bot walked in to fight it at 65
+// units) - when it is about to enter, within HOLD_START along it, an area
+// that is not safe with HOLD_RISK or more of monsters inside (AreaRisk),
+// the route waits - begun no further off, so the route walks the player up
+// to it, not a straight line (Doom II MAP04: begun 290 short of the spot,
+// the bot walked to it over a floor that hurts, 40 health) - and is kept,
+// out to HOLD_AHEAD, as the monsters come and make the player's own
+// area unsafe (E1M5, E1M8: holds dropped within half a second, as soon as
+// monsters came in sight, and the bot walked into the fight) - while the
+// player stands HOLD_BACK short of the way
 // in along the route (further back out of a door's or lift's cells, up to
-// HOLD_BACK_MOST), facing it, and fights what comes or can be seen. Not
-// while a door or lift on the way there is shut: it is opened first. With
-// nothing to shoot for CREEP_WAIT, the spot creeps toward the way in and
+// HOLD_BACK_MOST; straight back past the route's start, planned at the
+// door), facing it, and fights what comes or can be seen, the fight
+// leashed to the spot (HOLD_LEASH). A shut door on the way there is
+// pressed first, and the hold begins as it rises: the player backs off
+// while it opens. Shut again while holding (a fight from the spot outlasts
+// it), it is opened again and the hold taken up again, its time going on.
+// A lift on the way there, not down, starts no hold. The spot is never on
+// a floor that hurts, as no fight is (C1), and creeping stops short of
+// one. With nothing worth fighting for CREEP_WAIT, the player at the spot
+// (within HOLD_AT), the spot creeps toward the way in and
 // CREEP_PAST beyond it along the route at CREEP_SPEED (the user: slowly, so
 // monsters round the corners there see the player one by one - not stand,
-// then rush in), and waits while there is something to shoot. Over once
+// then rush in), and waits while there is. Over once
 // the area is safe, or below HOLD_RISK; once crept all the way with nothing
-// to shoot, or after HOLD_MOST in all, the area is gone into (never stuck)
-// and not held off from again for HOLD_SKIP.
+// worth fighting, or after HOLD_MOST in all, the area is gone into (never
+// stuck) and not held off from again for HOLD_SKIP.
 #define HOLD_AHEAD 512.0
-#define HOLD_RISK 20.0
+#define HOLD_START 192.0
+#define HOLD_AT 32.0
+#define HOLD_RISK 10.0
 #define HOLD_BACK 96.0
 #define HOLD_BACK_MOST 384.0
+#define HOLD_STEP 16.0
+#define HOLD_LEASH 64.0
 #define HOLD_MOST (20 * TICRATE)
 #define HOLD_SKIP (20 * TICRATE)
 #define HOLD_GAIN 0.25
@@ -706,16 +725,21 @@ static int battle_way = -1;
 
 // Holding short of an area that is not safe (HOLD_AHEAD): which, where the
 // route goes in, where the player stands (creeping on to hold_end), since
-// when, and the tics with nothing to shoot; the area gone into after a
-// hold, until when.
+// when, the tics with nothing worth fighting, and whether it has crept;
+// the area gone into after a hold, until when; the hold given up as its
+// door shut, its start, and until when it is taken up again from there.
 static boolean holding;
 static int hold_area;
 static k_vec2_t hold_spot;
 static k_vec2_t hold_end;
 static int hold_since;
 static int hold_quiet;
+static boolean hold_crept;
 static int hold_skip_area = -1;
 static int hold_skip_until;
+static int hold_shut_area = -1;
+static int hold_shut_since;
+static int hold_shut_until;
 
 // When a monster or its shot last hurt the player.
 static int hurt_tic;
@@ -2478,7 +2502,8 @@ static void ExpectMove(k_vec2_t me, double vx, double vy, const double *face, do
 
 // Where to move while fighting: each of MOVE_WAYS directions that can be
 // walked, scored by the side strafed to (and across the line of fire rather
-// than along it), the distance from where the fight began, and the awake
+// than along it), the distance from where the fight began (holding, from
+// the spot held at, on a shorter leash: back off a door), and the awake
 // monsters close by, which it backs away from; keeping the target where
 // the shots find it (the user: strafing into a corridor and out, the bot
 // looked to be peeking round the corner), and open floor before a passage;
@@ -2554,11 +2579,11 @@ static void ChooseMove(const player_t *player)
             score -= 1.5;
         }
 
-        from_anchor = Distance(far, anchor);
+        from_anchor = Distance(far, holding ? hold_spot : anchor);
 
-        if (from_anchor > LEASH)
+        if (from_anchor > (holding ? HOLD_LEASH : LEASH))
         {
-            score -= (from_anchor - LEASH) / 32.0;
+            score -= (from_anchor - (holding ? HOLD_LEASH : LEASH)) / 32.0;
         }
 
         for (i = 0; i < num_monsters; ++i)
@@ -3130,17 +3155,23 @@ static double AreaRisk(int area)
 }
 
 // Where the route ahead goes into an area that is not safe, with HOLD_RISK
-// at stake, within `reach` along it from me, no shut door or lift before
-// it: the area, the point it goes in at, and that point's index; -1 if
-// none.
-static int UnsafeAhead(k_vec2_t me, double reach, k_vec2_t *at, int *point)
+// at stake, within `reach` along it from me, no lift before it that is not
+// down, passing over area `except`, and with `only` not -1 over all others:
+// the area, the point it goes in at, and that point's index; -1 if none.
+// *shut tells whether a door before it is shut, or closing; one rising, or
+// open at the top, is as good as open.
+static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t *at,
+                       int *point, boolean *shut)
 {
+    const k_map_t *map = K_Map_Get();
     const k_navstatus_t *nav = K_Nav_GetStatus();
     const k_path_t *path = K_Nav_GetPath();
     const k_areamap_t *areas = K_Area_Get();
     k_vec2_t from = me;
     double along = 0.0;
     int i, was = -1;
+
+    *shut = false;
 
     if (path == NULL || nav->state != K_NAV_DRIVING)
     {
@@ -3170,8 +3201,18 @@ static int UnsafeAhead(k_vec2_t me, double reach, k_vec2_t *at, int *point)
 
         if (areas->areas[area].passage)
         {
-            if (r > 0 && K_Graph_CanCross(path->portals[r - 1], path->cells[r - 1])
-                         != K_CROSS_OPEN)
+            k_crossing_t crossing = r > 0
+                                  ? K_Graph_CanCross(path->portals[r - 1], path->cells[r - 1])
+                                  : K_CROSS_OPEN;
+
+            if (crossing == K_CROSS_DOOR)
+            {
+                k_mover_t mover = K_Graph_SectorMover(
+                    map->subsectors[map->cells[path->cells[r]].subsector].sector);
+
+                *shut |= mover != K_MOVER_UP && mover != K_MOVER_WAITING;
+            }
+            else if (crossing != K_CROSS_OPEN)
             {
                 return -1;
             }
@@ -3179,7 +3220,8 @@ static int UnsafeAhead(k_vec2_t me, double reach, k_vec2_t *at, int *point)
             continue;
         }
 
-        if (!K_Area_Safe(area) && AreaRisk(area) >= HOLD_RISK
+        if (area != except && (only < 0 || area == only)
+         && !K_Area_Safe(area) && AreaRisk(area) >= HOLD_RISK
          && !(area == hold_skip_area && leveltime < hold_skip_until))
         {
             *at = path->points[i];
@@ -3191,15 +3233,29 @@ static int UnsafeAhead(k_vec2_t me, double reach, k_vec2_t *at, int *point)
     return -1;
 }
 
+// Whether the floor at a point hurts.
+static boolean FloorHurts(k_vec2_t at)
+{
+    const k_map_t *map = K_Map_Get();
+    int cell = K_Map_CellAt(at.x, at.y);
+
+    return cell >= 0
+        && K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0;
+}
+
 // Where to stand while holding: HOLD_BACK short of route point `point`
 // along the route, further back out of a door's or lift's cells (up to
-// HOLD_BACK_MOST). Returns false if the player could not stand there.
+// HOLD_BACK_MOST); past the route's start, straight on back away from the
+// way in, as far as the player could stand, in HOLD_STEP steps (Doom II
+// MAP14: a route planned at the blue door had the spot 16 units off it).
+// Returns false if the player could not stand there - or with `hurts`
+// false, not without a floor that hurts.
 static boolean HoldSpot(int point, double floor, boolean hurts, k_vec2_t *spot)
 {
     const k_path_t *path = K_Nav_GetPath();
     const k_areamap_t *areas = K_Area_Get();
     k_vec2_t at = path->points[point];
-    double left = HOLD_BACK, back = 0.0;
+    double left = HOLD_BACK, back = 0.0, dx, dy, length;
     int i = point;
 
     while (i > 0)
@@ -3228,6 +3284,26 @@ static boolean HoldSpot(int point, double floor, boolean hurts, k_vec2_t *spot)
         }
 
         left = 32.0;
+    }
+
+    dx = at.x - path->points[point].x;
+    dy = at.y - path->points[point].y;
+    length = sqrt(dx * dx + dy * dy);
+
+    while (i == 0 && length > 1e-6 && back < HOLD_BACK_MOST)
+    {
+        int area = K_Area_Of(K_Map_CellAt(at.x, at.y));
+        k_vec2_t next = { at.x + dx / length * HOLD_STEP, at.y + dy / length * HOLD_STEP };
+
+        if ((left <= 0.0 && area >= 0 && !areas->areas[area].passage)
+         || !Steppable(next, floor, hurts, EDGE_MARGIN))
+        {
+            break;
+        }
+
+        at = next;
+        left -= HOLD_STEP;
+        back += HOLD_STEP;
     }
 
     *spot = at;
@@ -3291,68 +3367,117 @@ static void UpdateHold(const player_t *player)
 {
     const k_areamap_t *areas = K_Area_Get();
     double floor = ToMap(player->mo->floorz);
-    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) }, at = me, spot;
     int here = K_Area_Of(K_Map_CellAt(me.x, me.y));
     int area = -1, point = -1;
+    boolean shut = false;
 
-    // Begun from a safe area only; kept whatever the monsters it let come
-    // make of it, wherever the fight takes the player meanwhile - from the
-    // spot, which stands further back than where the hold began, or creeps
-    // on (MAP02: a hold begun 500 off the way in was over the next tic as
-    // more than HOLD_AHEAD from the spot, and begun again, tic after tic).
+    // Begun from an area with no monsters inside, whatever those ahead see
+    // of it, in a fight or not (Doom II MAP14: begun from a safe area only,
+    // none began at a door with monsters behind it - shut, it was opened
+    // first; opening, the nav was busy; open, they saw the player's area),
+    // a door on the way pressed and rising, the player backing off as it
+    // opens; kept whatever the monsters it let come make of it, wherever
+    // the fight takes the player meanwhile - from the spot, which stands
+    // further back than where the hold began, or creeps on (MAP02: a hold
+    // begun 500 off the way in was over the next tic as more than
+    // HOLD_AHEAD from the spot, and begun again, tic after tic) - its own
+    // area judged only, not another before it on the way (Doom II MAP14: a
+    // shotgun guy stepping to and fro over the border of the area before it
+    // swapped holds between the two, 190 units apart, every few tics).
     if (holding && !escape)
     {
-        area = UnsafeAhead(hold_spot, HOLD_AHEAD + HOLD_BACK_MOST + CREEP_PAST, &at, &point);
+        area = UnsafeAhead(hold_spot, HOLD_AHEAD + HOLD_BACK_MOST + CREEP_PAST, -1, hold_area,
+                           &at, &point, &shut);
     }
     else if (!holding && !escape && here >= 0
-          && (K_Area_Safe(here) || areas->areas[here].passage)
-          && !battle && !dodging && K_Nav_CanPause() && !K_Nav_Waiting())
+          && (areas->areas[here].monsters == 0 || areas->areas[here].passage)
+          && !dodging && K_Nav_CanPause()
+          && (!K_Nav_Waiting() || K_Nav_GetStatus()->action == K_ACTION_DOOR))
     {
-        area = UnsafeAhead(me, HOLD_AHEAD, &at, &point);
+        area = UnsafeAhead(me, HOLD_START, -1, -1, &at, &point, &shut);
     }
 
     if (holding)
     {
         double left = Distance(hold_spot, hold_end);
 
-        hold_quiet = status.target < 0 && !battle ? hold_quiet + 1 : 0;
+        // A far target, or one that cannot come, shot at on the way, holds
+        // no creeping up - once judged (SIGHTED_TICS); the player at the
+        // spot (MAP04: the spot crept off before the player got to it).
+        hold_quiet = !battle && Distance(me, hold_spot) < HOLD_AT
+                  && (status.target < 0 || (sighted >= SIGHTED_TICS && !WorthFighting()))
+                   ? hold_quiet + 1 : 0;
 
         if (area != hold_area)
         {
             StopHold(K_Area_Safe(hold_area) || AreaRisk(hold_area) < HOLD_RISK
                      ? "it is safe now" : escape ? escape_why : "the way changed");
         }
+        else if (shut)
+        {
+            hold_shut_area = hold_area;
+            hold_shut_since = hold_since;
+            hold_shut_until = leveltime + HOLD_SKIP;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "holding short of area %d, the door shut after %.1f s "
+                  "- opening it again, to hold again", hold_area,
+                  (double) (leveltime - hold_since) / TICRATE);
+            StopHold(NULL);
+        }
         else if ((left < 1.0 && hold_quiet >= CREEP_WAIT) || leveltime - hold_since >= HOLD_MOST)
         {
             hold_skip_area = hold_area;
             hold_skip_until = leveltime + HOLD_SKIP;
-            StopHold(left < 1.0 ? "crept in, nothing came, nothing to shoot"
+            StopHold(left < 1.0 ? "crept in, nothing came, nothing worth fighting"
                                 : "held long enough");
         }
         else if (hold_quiet >= CREEP_WAIT)
         {
-            // Creeping on, slowly.
+            // Creeping on, slowly - never onto a floor that hurts: the
+            // creeping ends short of it, and the route crosses it.
             double step = SDL_min(CREEP_SPEED, left);
+            k_vec2_t next = { hold_spot.x + (hold_end.x - hold_spot.x) * step / left,
+                              hold_spot.y + (hold_end.y - hold_spot.y) * step / left };
 
-            hold_spot.x += (hold_end.x - hold_spot.x) * step / left;
-            hold_spot.y += (hold_end.y - hold_spot.y) * step / left;
+            if (!hold_crept)
+            {
+                hold_crept = true;
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "nothing worth fighting for %.1f s - creeping on "
+                      "into area %d", (double) CREEP_WAIT / TICRATE, hold_area);
+            }
+
+            if (FloorHurts(next))
+            {
+                hold_end = hold_spot;
+            }
+            else
+            {
+                hold_spot = next;
+            }
         }
     }
-    else if (area >= 0 && HoldSpot(point, floor, hurts, &spot))
+    else if (area >= 0 && !shut && HoldSpot(point, floor, false, &spot))
     {
         holding = true;
         status.holding = true;
         hold_area = area;
         hold_spot = spot;
         hold_end = CreepEnd(point);
-        hold_since = leveltime;
+        hold_since = area == hold_shut_area && leveltime < hold_shut_until
+                   ? hold_shut_since : leveltime;
         hold_quiet = 0;
+        hold_crept = false;
+        hold_shut_area = -1;
         K_Nav_Pause(1);
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "holding at (%.0f,%.0f), short of area %d - %d monsters "
               "inside (%d awake), danger %.0f: letting them come", spot.x, spot.y, area,
               areas->areas[area].monsters, areas->areas[area].awake, areas->areas[area].danger);
     }
+
+    status.hold_area = holding ? hold_area : -1;
+    status.hold_spot = hold_spot;
+    status.hold_end = hold_end;
+    status.creeping = holding && hold_quiet >= CREEP_WAIT && Distance(hold_spot, hold_end) >= 1.0;
 
     if (holding && !battle && !dodging)
     {
@@ -3414,6 +3539,8 @@ void K_Combat_Reset(void)
     holding = false;
     hold_skip_area = -1;
     hold_skip_until = 0;
+    hold_shut_area = -1;
+    status.hold_area = -1;
     K_Threat_Reset();
 }
 
@@ -3445,6 +3572,8 @@ void K_Combat_Tick(int driving)
         status.battle = false;
         holding = false;
         status.holding = false;
+        status.hold_area = -1;
+        status.creeping = false;
 
         // Not when the death ended the level (E1M8's exit floor).
         if (!status.died && gameaction != ga_completed)
@@ -3507,7 +3636,8 @@ void K_Combat_Tick(int driving)
     else if (holding)
     {
         M_snprintf(status.text, sizeof(status.text), "holding short of area %d, %d monsters "
-                   "inside - letting them come", hold_area, K_Area_Get()->areas[hold_area].monsters);
+                   "inside - %s", hold_area, K_Area_Get()->areas[hold_area].monsters,
+                   status.creeping ? "creeping in" : "letting them come");
     }
     else if (status.visible > 0)
     {
@@ -3957,6 +4087,29 @@ int K_Combat_MonstersWithin(double reach)
     }
 
     return count;
+}
+
+int K_Combat_MonstersAhead(void)
+{
+    const player_t *player = &players[consoleplayer];
+    k_vec2_t me, at;
+    int point;
+    boolean shut;
+
+    if (holding)
+    {
+        return hold_area;
+    }
+
+    if (player->mo == NULL)
+    {
+        return -1;
+    }
+
+    me.x = ToMap(player->mo->x);
+    me.y = ToMap(player->mo->y);
+    return UnsafeAhead(me, HOLD_AHEAD, K_Area_Of(K_Map_CellAt(me.x, me.y)), -1, &at, &point,
+                       &shut);
 }
 
 void K_Combat_Escape(const char *why)

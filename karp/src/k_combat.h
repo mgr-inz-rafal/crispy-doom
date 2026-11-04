@@ -63,6 +63,10 @@ typedef struct
     int battle;             // fighting: the route waits (battle mode)
     int holding;            // holding short of an area that is not safe,
                             // letting its monsters come (k_area.h)
+    int hold_area;          // holding: that area, -1 if not holding
+    k_vec2_t hold_spot;     // holding: where the player stands, creeping on
+    k_vec2_t hold_end;      // to where the creeping ends
+    int creeping;           // holding, creeping on: nothing worth fighting
     int barrel;             // shooting a barrel, at barrel_at
     k_vec2_t barrel_at;
     int threats;            // projectiles and shots wound up for that could
@@ -112,6 +116,12 @@ double K_Combat_Danger(double x, double y, double floor);
 
 // How many monsters the player can see within reach of it.
 int K_Combat_MonstersWithin(double reach);
+
+// The area with monsters inside, not safe, that the route goes into ahead
+// (within 512 along it, past doors shut or not, not the player's own) -
+// the one held short of while holding; -1 if none. A run for an item waits
+// while there is one.
+int K_Combat_MonstersAhead(void);
 
 // Set by the brain while it goes for health with health CRITICAL, or dashes
 // for a weapon or ammo close by, with why ("health CRITICAL, going for

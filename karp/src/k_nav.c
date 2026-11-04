@@ -2830,11 +2830,13 @@ int K_Nav_CarefulLeg(int leg)
 
 int K_Nav_CanPause(void)
 {
-    // At a door shut on a timer there is nothing to lose: it opens all
-    // the same, and the wait is begun again after.
+    // At a door shut on a timer, or one pressed already, there is nothing
+    // to lose: it opens all the same, and the wait is begun again after (a
+    // hold backs off a door as it rises: k_combat.c).
     return status.state != K_NAV_DRIVING
         || ((action.kind == K_ACTION_NONE || action.phase == PHASE_APPROACH
-             || (action.kind == K_ACTION_DOOR && K_Graph_TimerDoor(action.sector) >= 0.0))
+             || (action.kind == K_ACTION_DOOR
+                 && (K_Graph_TimerDoor(action.sector) >= 0.0 || action.phase == PHASE_WAIT)))
             && jump_phase == JUMP_NONE && !OnJump(status.target));
 }
 

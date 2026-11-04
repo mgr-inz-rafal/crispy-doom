@@ -3096,6 +3096,41 @@ Who controls the player in a fight (the user's model):
       (`K_Path_SetEnterCost`), soft: never a route refused, the length the way walked.
     Seen, left for navigation: MAP05 riding a lift up and dropping off it, over and over (the
     user closed it); E1M7 stuck in a gap.
+  - **C3 follow-up** (the user, MAP14 and E2M5: the bot opened the blue door and was shot up by
+    two chaingunners, no creeping; it ran past three imps in a corridor for a box of shells;
+    few creeps seen at all). Found: no hold ever began at a door with monsters close behind
+    it - shut, it was opened first; opening, the nav was busy; open, they saw the player's area,
+    which was then not safe; and a route planned at the door had the spot 16 off it. And runs
+    for items (escape, dash) shut holds and fights off, so they went straight through rooms of
+    monsters (E2M5 at firepower LOW; MAP14, a hold that had killed five broken off for a
+    medikit among the monsters). Done:
+    - Holds begin from an area with no monsters inside (seen or not), in a fight or not; a
+      door on the way is pressed and the hold begins as it rises (`K_Nav_CanPause`: a door
+      pressed already is as a timer door), the player backing off while it opens; shut again
+      while holding, it is opened again and the hold taken up again, its time going on. Past
+      the route's start the spot goes straight on back. Begun only within 192 of the way in,
+      so the route walks the player up to the spot, not a straight line (MAP04: begun 290
+      short, the bot walked over a floor that hurts and crept on before it got there - 40
+      health, then dead); the spot never on a floor that hurts, creeping stopping short of
+      one. A fight while holding is leashed to the spot (64). Creeping goes on while nothing
+      is worth fighting (a far or unreachable target shot at on the way holds nothing up),
+      the player at the spot, logged once a hold; 10 of monsters inside is enough (was 20). A
+      running hold is judged on its own area only (MAP14: a shotgun guy on the border of the
+      area before it swapped holds every few tics).
+    - Falling back only along a way open now - no door or lift to work or wait for (E1M6: a
+      fall-back through a door that opened by itself in 29 s; the bot stood at it 16 s, no
+      fight started, and died).
+    - Runs for items wait while the way goes into an area with monsters inside, ahead
+      (`K_Combat_MonstersAhead`; not the player's own): fought for there, held short of; not
+      for health at CRITICAL.
+    - The console draws the spot held at (cyan ring, dashed to where creeping ends, filled
+      while creeping).
+    - Idle no longer waits out the failures (the user, MAP14: every goal failed at once and the
+      bot stood still 30 s): while GO TO EXIT has no way, a failed goal is tried again after
+      5 s, doubling to 40.
+    MAP14's blue door: held 80 back, the two chaingunners fought from 134-192 for 11 health (52
+    before). Left for C4: an arch-vile seeing the spot held at (MAP14: two flames for 86 in a
+    7.4 s hold, the vile out of reach and left alone).
 - **Tough monsters** (the user, jotted for later):
   - The Cyberdemon: never close to it if it can be helped - from up close it is nearly
     impossible to beat, even at 200% health and armour with a full BFG.
