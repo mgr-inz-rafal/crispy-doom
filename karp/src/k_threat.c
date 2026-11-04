@@ -478,23 +478,24 @@ void K_Threat_AddMissile(const mobj_t *mo)
 
     AddFlying(mo, MissileName(mo->type), mo->info->damage);
 
-    if (mo->type != MT_TRACER || mo->tracer != player_mo || mo->state == NULL
-     || (mo->state - states != S_TRACER && mo->state - states != S_TRACER2)
-     || num_threats == 0 || threats[num_threats - 1].mo != mo)
+    if (!K_Threat_Homes(mo, player_mo) || num_threats == 0 || threats[num_threats - 1].mo != mo)
     {
         return;
     }
 
-    // A_Tracer runs as each state starts, every 2 tics from mo->tics on,
-    // and turns the missile only on tics that are a multiple of 4.
     threat = &threats[num_threats - 1];
     when = (unsigned int) (gametic + mo->tics - demostarttic);
+    threat->kind = THREAT_HOMING;
+    threat->turn = (when & 3) == 0 ? mo->tics : mo->tics + 2;
+}
 
-    if (!(when & 1))
-    {
-        threat->kind = THREAT_HOMING;
-        threat->turn = (when & 3) == 0 ? mo->tics : mo->tics + 2;
-    }
+int K_Threat_Homes(const mobj_t *mo, const mobj_t *target_mo)
+{
+    // A_Tracer runs as each state starts, every 2 tics from mo->tics on,
+    // and turns the missile only on tics that are a multiple of 4.
+    return mo->type == MT_TRACER && mo->tracer == target_mo && mo->state != NULL
+        && (mo->state - states == S_TRACER || mo->state - states == S_TRACER2)
+        && !((unsigned int) (gametic + mo->tics - demostarttic) & 1);
 }
 
 void K_Threat_AddMonster(const mobj_t *mo, int visible)

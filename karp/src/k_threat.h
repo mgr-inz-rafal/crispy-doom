@@ -65,6 +65,10 @@ void K_Threat_Expect(const k_vec2_t *path, int tics, double floor);
 // none.
 const char *K_Threat_HitBy(int *seen, int *foreseen);
 
+// Whether the missile is a revenant's that turns after target_mo (about
+// half of them do: A_Tracer turns only on tics that are a multiple of 4).
+int K_Threat_Homes(const struct mobj_s *mo, const struct mobj_s *target_mo);
+
 #ifdef __cplusplus
 }
 #endif

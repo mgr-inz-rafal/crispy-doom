@@ -3131,6 +3131,42 @@ Who controls the player in a fight (the user's model):
     MAP14's blue door: held 80 back, the two chaingunners fought from 134-192 for 11 health (52
     before). Left for C4: an arch-vile seeing the spot held at (MAP14: two flames for 86 in a
     7.4 s hold, the vile out of reach and left alone).
+  - **C4**: cover - line of sight (above). Done (`k_combat.c`):
+    - Ducking: an arch-vile winding up its flame (it lands as the vile enters A_VileAttack, 66
+      tics after the attack starts, if the vile still sees the player), an arachnotron or the
+      spider mastermind winding up its stream or firing it (it stops once they lose sight), a
+      revenant's homing missile coming within 512 (`K_Threat_Homes`). Sight as the monster
+      sees (MAP14: riding a lift, the player did not see the vile that saw it). From when the
+      blow is coming, cover is looked for every 4 tics: the nearest spot out of its sight -
+      the missile's where it will be when the player gets there, on its way to the player -
+      along 16 straight rays, every 8 units on floor the player can step on, out to 512; with
+      none, the cells reached through open crossings, nearest first, out to 768, the way there
+      by the portals' middles (MAP14: a hold in a pocket off a door, ledges on three sides, the
+      cover back through the door and to the side). In time: from standing, strafing (top
+      speed 13.3), 3 tics a corner, 4 tics of commands already sent (reckoned at 16 a tic from
+      the start, the bot got to cover after the flame). Spots other monsters see, and ways
+      something flies along, count as further off. The player shoots on till the time left is
+      the time to get there and 6 tics, then steps there, the route waiting, the fight going on;
+      over a quarter second after the blow is past (3 s at most). Logged: "ducking out of the
+      arch-vile's sight (flame in 22 tics), 184 units to (x,y)[, round a corner]", "out of
+      the ...'s sight for 0.8 s", "no cover from the ... in reach".
+    - Exposure: in battle each way the player could step scores less by what the 6 costliest
+      awake monsters in sight but the target (not those that only bite) would see of it there
+      (0.05 a point of what they cost): it fights from where the fewest can shoot it.
+    - The rocket launcher and the BFG fire only on a fresh press (`A_WeaponReady`: not while
+      `attackdown`): fire held on from before is let go for a tic first (the user, MAP10 2:05:
+      fire held on from the shotgun through the BFG picked up, it never fired while a demon
+      bit the bot for 5 s).
+    Hard Doom II set (MAP06, 08, 11, 13, 14, 15, 17, 19, 20) against the build before: finished
+    MAP06, 11 and 14 (before: 06 and 11), alive at the end of MAP17 (before: dead); died on 08,
+    13, 15, 19, 20 (before: those and 14, 17) - MAP15 on a baron's roll (55 where the build
+    before rolled 24, same spot), MAP20 at a crusher both builds die at. 28 ducks, 5 round a
+    corner, 17 times no cover. Standard sets: Doom II MAP01-05 and 10 finished (MAP10 with the
+    BFG firing: 100 health, 92 kills), E1 as before, no monsters 29/29. Left: a revenant's
+    missiles in the open (MAP06: nothing hides from one
+    turning after the player there; the sidestep is all); the escape/fight flip-flop
+    (MAP11: out of shells, running for a box past an arachnotron, stuck at its side); own
+    rockets in the mastermind fight (E3M8: 28 and 42 from its own blasts); E4M8 stuck.
 - **Tough monsters** (the user, jotted for later):
   - The Cyberdemon: never close to it if it can be helped - from up close it is nearly
     impossible to beat, even at 200% health and armour with a full BFG.

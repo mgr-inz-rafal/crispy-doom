@@ -81,6 +81,14 @@
 //	or the area safe, it goes in. Runs for items wait while such an area
 //	lies ahead (K_Combat_MonstersAhead).
 //
+//	Cover (plan, 7.8: C4): blows that need the monster to see the player -
+//	an arch-vile's flame, an arachnotron's or the spider mastermind's
+//	stream, a revenant's homing missile - are ducked out of sight of, just
+//	in time, to the nearest spot it does not see that the player can get to
+//	straight; and in battle each way the player could step counts what the
+//	other monsters that would see it there cost: it fights from where the
+//	fewest can shoot it.
+//
 //	Danger (plan, 7.5): what going to a spot would cost in health - the
 //	monsters that could see the player there, each by what a fight with its
 //	kind takes. A guarded medikit loses to a lonely one.
@@ -110,6 +118,11 @@
 
 #define K_PI 3.14159265358979323846
 #define ANGLETURN_PER_RADIAN (65536.0 / (2.0 * K_PI))
+
+// The blows ducked from (DUCK_EARLY).
+extern void A_VileAttack();
+extern void A_BspiAttack();
+extern void A_SPosAttack();
 
 // Monsters further off are not sight-checked: far beyond any target.
 #define SIGHT_REACH 2048.0
@@ -488,6 +501,68 @@
 #define CREEP_SPEED 3.0
 #define CREEP_PAST 64.0
 
+// Ducking (plan, 7.8: C4; the user: some threats are answered by getting
+// out of sight, not by dodging): an arch-vile winding up its flame (it
+// lands as the vile enters A_VileAttack, 66 tics after the attack starts,
+// and only if the vile still sees the player), an arachnotron or the
+// spider mastermind winding up its stream or firing it (it stops once they
+// lose sight: A_SpidRefire), a revenant's homing missile coming (in the
+// open it turns back for pass after pass; it meets a wall). From when the
+// blow is coming the nearest spot out of its sight (as the monster sees:
+// P_CheckSight from its eyes; the missile's, where it will be when the
+// player gets there, on its way to the player) is looked for every
+// DUCK_REPLAN tics: one the player gets to in time, straight along one of
+// MOVE_WAYS rays, every DUCK_STEP on floor it can step on, at a spot every
+// DUCK_RING out to DUCK_REACH, from standing, strafing (DUCK_THRUST a tic,
+// the friction DUCK_FRICTION: top speed 13.3), DUCK_CORNER tics more for
+// each corner, DUCK_LATENCY tics late (the commands already sent; Doom II
+// MAP11, MAP14: reckoned at 16 a tic from the start, the bot got to cover
+// after the flame). Spots other monsters see (DUCK_SEEN each, by
+// what they cost) and ways that something flies along (DUCK_HIT a point
+// of health) count as further off. With none along the rays, the cells
+// the player can walk to through open crossings, nearest first (portal
+// middle to portal middle), out to DUCK_GRAPH_REACH: the nearest whose
+// middle is out of sight and in time, walked to by way of the portals
+// (Doom II MAP14: a hold in a pocket off a door, ledges on three sides,
+// the vile looking in and up the corridor beyond: the cover was back
+// through the door and to the side). The player shoots on, and steps there
+// once the time left is the time to get there and DUCK_SLACK (Doom II
+// MAP14: looked for only 24 tics before the flame, no cover was in reach,
+// and the vile killed the bot; a vile's attack is its time to be shot).
+// The route waits, the fight goes on from there; over DUCK_LINGER after
+// the blow is past, or after DUCK_MOST. None in time: logged once a blow.
+#define DUCK_REPLAN 4
+#define DUCK_SLACK 6
+#define DUCK_STEP 8.0
+#define DUCK_RING 32.0
+#define DUCK_REACH 512.0
+#define DUCK_SPEED 16.0
+#define DUCK_THRUST 1.25
+#define DUCK_FRICTION 0.90625
+#define DUCK_TRAVEL_TICS 105
+#define DUCK_CORNER 3
+#define DUCK_LATENCY 4
+#define DUCK_SEEN 4.0
+#define DUCK_HIT 8.0
+#define DUCK_LINGER (TICRATE / 4)
+#define DUCK_MOST (3 * TICRATE)
+#define DUCK_GAIN 0.5
+#define DUCK_NEAR 4.0
+#define DUCK_MISSILE_REACH 512.0
+#define DUCK_STREAM 18
+#define DUCK_GRAPH_REACH 768.0
+#define DUCK_POINTS 32
+#define DUCK_WAYPOINT 24.0
+
+// Exposure (C4): in battle, each way the player could step scores less by
+// what the awake monsters but the target that would see it there cost
+// (EXPOSE_WEIGHT a point; the MAX_EXPOSERS costliest in sight within
+// EXPOSE_REACH, not those that only bite): it fights from where the fewest
+// can shoot it - a door frame, a corner, the target alone in sight.
+#define EXPOSE_WEIGHT 0.05
+#define EXPOSE_REACH 1024.0
+#define MAX_EXPOSERS 6
+
 // Out of a fight, hurt in the last BLOW_HOLD tics by a monster within
 // BLOW_REACH that the shots cannot find, the player holds the route - even
 // waiting at a door or lift - and steps away from it until it is BLOW_SAFE
@@ -596,6 +671,7 @@ static int num_monsters;
 static int monster_capacity;
 
 static k_projectile_t *projectiles;
+static const mobj_t **projectile_mobjs;
 static int num_projectiles;
 static int projectile_capacity;
 
@@ -740,6 +816,38 @@ static int hold_skip_until;
 static int hold_shut_area = -1;
 static int hold_shut_since;
 static int hold_shut_until;
+
+// Ducking (DUCK_REPLAN): the way there (the spot last) and the point gone
+// for, out of whose sight (a monster or a missile; compared, never
+// followed), what, since when, the tics since its blow was last coming,
+// and the blow the player found no cover from (logged once). Before it:
+// out of whose sight a spot was looked for, when, whether found, and how
+// long getting there takes. And the cell search's (DUCK_GRAPH_REACH): per
+// cell, how far, where it is come into, and from which cell.
+static boolean ducking;
+static k_vec2_t duck_points[DUCK_POINTS];
+static int duck_num_points;
+static int duck_next;
+static const mobj_t *duck_from;
+static char duck_what[32];
+static int duck_since;
+static int duck_calm;
+static const mobj_t *duck_none_from;
+static const mobj_t *plan_from;
+static int plan_tic;
+static boolean plan_found;
+static int plan_tics;
+static double *cover_distance;
+static k_vec2_t *cover_entry;
+static int *cover_from;
+static int *cover_hops;
+static int *cover_open;
+static int cover_capacity;
+
+// What exposes the player (EXPOSE_WEIGHT): this tic's costliest awake
+// monsters in sight, but the target.
+static int exposers[MAX_EXPOSERS];
+static int num_exposers;
 
 // When a monster or its shot last hurt the player.
 static int hurt_tic;
@@ -912,8 +1020,11 @@ static void AddProjectile(const mobj_t *mo, const mobj_t *player_mo, k_vec2_t me
     {
         projectile_capacity = SDL_max(64, projectile_capacity * 2);
         projectiles = realloc(projectiles, projectile_capacity * sizeof(*projectiles));
+        projectile_mobjs = realloc(projectile_mobjs,
+                                   projectile_capacity * sizeof(*projectile_mobjs));
     }
 
+    projectile_mobjs[num_projectiles] = mo;
     projectile = &projectiles[num_projectiles++];
     projectile->name = ThingName(mo->type);
     projectile->at.x = ToMap(mo->x);
@@ -1206,7 +1317,7 @@ static void LogHits(const player_t *player)
                   : foreseen > 0 ? " (in time to dodge; foreseen, every way cost more)"
                   : foreseen == 0 ? " (in time to dodge; not foreseen)"
                   : " (in time to dodge; no way judged)",
-                  battle ? "fighting" : dodging_missile ? "dodging"
+                  ducking ? "ducking" : battle ? "fighting" : dodging_missile ? "dodging"
                   : nav->action == K_ACTION_RIDE ? "riding a lift"
                   : !K_Nav_CanPause() ? "working a door, lift or switch, or jumping"
                   : "not dodging", player->health);
@@ -2500,6 +2611,59 @@ static void ExpectMove(k_vec2_t me, double vx, double vy, const double *face, do
     K_Threat_Expect(path, tics, floor);
 }
 
+// This tic's exposers (EXPOSE_WEIGHT): the MAX_EXPOSERS costliest awake
+// monsters in sight within EXPOSE_REACH, but the target and those that only
+// bite.
+static void UpdateExposers(void)
+{
+    int i, k;
+
+    num_exposers = 0;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+        double cost = Kind(monster->type)->cost;
+
+        if (i == status.target || !monster->awake || !monster->visible || cost <= 0.0
+         || monster->distance > EXPOSE_REACH || BitesOnly(monster->type)
+         || (num_exposers == MAX_EXPOSERS
+             && cost <= Kind(monsters[exposers[num_exposers - 1]].type)->cost))
+        {
+            continue;
+        }
+
+        for (k = num_exposers < MAX_EXPOSERS ? num_exposers++ : num_exposers - 1;
+             k > 0 && Kind(monsters[exposers[k - 1]].type)->cost < cost; --k)
+        {
+            exposers[k] = exposers[k - 1];
+        }
+
+        exposers[k] = i;
+    }
+}
+
+// What the exposers that would see the player at a spot, on the floor at
+// `floor`, cost.
+static double Exposure(k_vec2_t at, double floor)
+{
+    double cost = 0.0;
+    int i;
+
+    for (i = 0; i < num_exposers; ++i)
+    {
+        const k_monster_t *monster = &monsters[exposers[i]];
+
+        if (K_Sight_Check(monster->at.x, monster->at.y, monster->z + monster->height * 0.75,
+                          at.x, at.y, floor, floor + PLAYER_HEIGHT))
+        {
+            cost += Kind(monster->type)->cost;
+        }
+    }
+
+    return cost;
+}
+
 // Where to move while fighting: each of MOVE_WAYS directions that can be
 // walked, scored by the side strafed to (and across the line of fire rather
 // than along it), the distance from where the fight began (holding, from
@@ -2507,7 +2671,8 @@ static void ExpectMove(k_vec2_t me, double vx, double vy, const double *face, do
 // monsters close by, which it backs away from; keeping the target where
 // the shots find it (the user: strafing into a corridor and out, the bot
 // looked to be peeking round the corner), and open floor before a passage;
-// and out of the way of projectiles (THREAT_WEIGHT).
+// out of the sight of the other monsters that shoot (Exposure); and out of
+// the way of projectiles (THREAT_WEIGHT).
 static void ChooseMove(const player_t *player)
 {
     static const double speeds[] = { STRAFE_SPEED, DODGE_SPEED };
@@ -2578,6 +2743,8 @@ static void ChooseMove(const player_t *player)
         {
             score -= 1.5;
         }
+
+        score -= EXPOSE_WEIGHT * Exposure(far, floor);
 
         from_anchor = Distance(far, holding ? hold_spot : anchor);
 
@@ -2792,8 +2959,8 @@ static void EndBattle(const player_t *player, const char *why)
               (double) (leveltime - battle_since) / TICRATE, player->killcount - battle_kills);
     }
 
-    // Holding, the route waits on.
-    if (!holding)
+    // Holding or ducking, the route waits on.
+    if (!holding && !ducking)
     {
         K_Nav_Pause(0);
     }
@@ -2947,7 +3114,7 @@ static void StopDodge(void)
         dodging_missile = false;
         move.x = move.y = 0.0;
 
-        if (!holding)
+        if (!holding && !ducking)
         {
             K_Nav_Pause(0);
         }
@@ -2971,7 +3138,7 @@ static void DodgeMissiles(const player_t *player)
     const k_path_t *path = K_Nav_GetPath();
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     boolean walking = nav->state == K_NAV_DRIVING && !K_Nav_Waiting() && K_Nav_CanPause()
-                   && path != NULL && nav->target < path->num_points && !holding;
+                   && path != NULL && nav->target < path->num_points && !holding && !ducking;
     boolean standing = !walking && (K_Nav_CanPause()
                                     || (K_Nav_Waiting() && nav->action != K_ACTION_RIDE));
     k_vec2_t velocity = { 0.0, 0.0 };
@@ -3354,7 +3521,7 @@ static void StopHold(const char *why)
               (double) (leveltime - hold_since) / TICRATE, why);
     }
 
-    if (!battle && !dodging)
+    if (!battle && !dodging && !ducking)
     {
         move.x = move.y = 0.0;
         K_Nav_Pause(0);
@@ -3490,6 +3657,546 @@ static void UpdateHold(const player_t *player)
     }
 }
 
+// What a duck is out of the sight of (DUCK_REPLAN): a monster winding up
+// its blow, or a homing missile.
+typedef struct
+{
+    const mobj_t *mo;
+    const char *name;       // "arch-vile", "revenant missile"
+    const char *blow;       // "flame"
+    k_vec2_t at;
+    double eye;
+    int tics;               // until its blow lands (or might)
+    boolean missile;
+    k_vec2_t toward;        // a missile: it turns after the player, here
+    double speed;           // at this speed
+} duckfrom_t;
+
+// Tics until the monster's states next run `action`, from where it is now
+// (the current state's action has run already); -1 if not within its next
+// 32 states, or past one that lasts for ever.
+static int TicsUntil(const mobj_t *mo, actionf_v action)
+{
+    int tics = mo->tics, steps;
+    int s = mo->state->nextstate;
+
+    for (steps = 0; steps < 32 && s > S_NULL && tics >= 0; ++steps)
+    {
+        if (states[s].action.acv == action)
+        {
+            return tics;
+        }
+
+        if (states[s].tics < 0)
+        {
+            return -1;
+        }
+
+        tics += states[s].tics;
+        s = states[s].nextstate;
+    }
+
+    return -1;
+}
+
+// The most pressing blow to duck from, if any: a monster in sight winding
+// up a blow at the player, a stream going on (it may land once more before
+// the monster loses sight: DUCK_STREAM to get away), or a homing missile
+// coming within DUCK_MISSILE_REACH.
+static boolean DuckThreat(const player_t *player, duckfrom_t *from)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    boolean found = false;
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const mobj_t *mo = monster_mobjs[i];
+        boolean stream = mo->type != MT_VILE;
+        int tics;
+
+        // As the monster sees (A_VileAttack, A_SpidRefire), not as the
+        // player does (Doom II MAP14: riding a lift, the player did not see
+        // the vile that saw it, and took the flame unducked).
+        if (mo->target != player->mo || mo->state == NULL || !attack_states[mo->state - states]
+         || (mo->type != MT_VILE && mo->type != MT_BABY && mo->type != MT_SPIDER)
+         || monsters[i].distance > SIGHT_REACH || !K_Sight_Things(mo, player->mo))
+        {
+            continue;
+        }
+
+        tics = TicsUntil(mo, mo->type == MT_VILE ? (actionf_v) A_VileAttack
+                           : mo->type == MT_BABY ? (actionf_v) A_BspiAttack
+                           : (actionf_v) A_SPosAttack);
+
+        if (tics < 0)
+        {
+            continue;
+        }
+
+        if (stream && mo->state != &states[mo->info->missilestate])
+        {
+            tics = SDL_max(tics, DUCK_STREAM);
+        }
+
+        if (!found || tics < from->tics)
+        {
+            found = true;
+            from->mo = mo;
+            from->name = monsters[i].name;
+            from->blow = mo->type == MT_VILE ? "flame" : mo->type == MT_BABY ? "plasma"
+                       : "bullets";
+            from->at = monsters[i].at;
+            from->eye = monsters[i].z + monsters[i].height * 0.75;
+            from->tics = tics;
+            from->missile = false;
+        }
+    }
+
+    for (i = 0; i < num_projectiles; ++i)
+    {
+        const k_projectile_t *projectile = &projectiles[i];
+        double dx = me.x - projectile->at.x, dy = me.y - projectile->at.y;
+        double distance = sqrt(dx * dx + dy * dy);
+        double speed = sqrt(projectile->velocity.x * projectile->velocity.x
+                            + projectile->velocity.y * projectile->velocity.y);
+        int tics;
+
+        if (!K_Threat_Homes(projectile_mobjs[i], player->mo) || distance > DUCK_MISSILE_REACH
+         || speed < 1e-6 || dx * projectile->velocity.x + dy * projectile->velocity.y <= 0.0)
+        {
+            continue;
+        }
+
+        tics = (int) (distance / speed);
+
+        if (!found || tics < from->tics)
+        {
+            found = true;
+            from->mo = projectile_mobjs[i];
+            from->name = projectile->name;
+            from->blow = "hit";
+            from->at = projectile->at;
+            from->eye = ToMap(projectile_mobjs[i]->z) + ToMap(projectile_mobjs[i]->height) * 0.5;
+            from->tics = tics;
+            from->missile = true;
+            from->toward = me;
+            from->speed = speed;
+        }
+    }
+
+    return found;
+}
+
+// How far the player gets in `tics` from standing, strafing (DUCK_THRUST,
+// DUCK_FRICTION), up to DUCK_TRAVEL_TICS.
+static double TravelDistance(int tics)
+{
+    static double covered[DUCK_TRAVEL_TICS + 1];
+    static boolean made;
+
+    if (!made)
+    {
+        double speed = 0.0;
+        int t;
+
+        for (t = 1; t <= DUCK_TRAVEL_TICS; ++t)
+        {
+            speed = speed * DUCK_FRICTION + DUCK_THRUST;
+            covered[t] = covered[t - 1] + speed;
+        }
+
+        made = true;
+    }
+
+    return covered[SDL_max(0, SDL_min(tics, DUCK_TRAVEL_TICS))];
+}
+
+// The tics until the player stands `distance` off by way of `corners`
+// corners: the commands already sent, then getting there from standing.
+static int TravelTics(double distance, int corners)
+{
+    int t = 0;
+
+    while (t < DUCK_TRAVEL_TICS && TravelDistance(t) < distance)
+    {
+        ++t;
+    }
+
+    return t + DUCK_LATENCY + DUCK_CORNER * corners;
+}
+
+// Whether a spot on the floor at `floor` is out of its sight `reach` tics
+// on - a missile's from where it will be then, on its way to where the
+// player is now, short of it (Doom II MAP06: judged from where it would
+// fly on straight, no cover was ever found from a missile turning after
+// the player in the open).
+static boolean DuckHidden(const duckfrom_t *from, k_vec2_t at, double floor, int reach)
+{
+    k_vec2_t eye = from->at;
+
+    if (from->missile)
+    {
+        double dx = from->toward.x - from->at.x, dy = from->toward.y - from->at.y;
+        double distance = sqrt(dx * dx + dy * dy);
+        double flown = SDL_min(from->speed * reach, SDL_max(distance - 2.0 * PLAYER_RADIUS, 0.0));
+
+        eye.x += dx / SDL_max(distance, 1e-6) * flown;
+        eye.y += dy / SDL_max(distance, 1e-6) * flown;
+    }
+
+    return !K_Sight_Check(eye.x, eye.y, from->eye, at.x, at.y, floor, floor + PLAYER_HEIGHT);
+}
+
+// With no spot along the rays (DUCK_GRAPH_REACH): the nearest cell whose
+// middle is out of its sight, walked to in time through open crossings,
+// none on a floor that hurts unless the player stands on one; the way
+// there (the portals' middles, the cell's middle last), and when.
+static boolean CoverByCells(const player_t *player, const duckfrom_t *from, k_vec2_t *points,
+                            int *num_points, int *spot_tics)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_graph_t *graph = K_Graph_Get();
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    double reach = SDL_min(DUCK_GRAPH_REACH, TravelDistance(from->tics - DUCK_LATENCY));
+    int start = K_Map_CellAt(me.x, me.y);
+    int num_open = 0, best = -1, best_tics = 0, cell, k, i;
+    double best_score = 1e30;
+
+    if (start < 0 || reach <= 0.0 || graph->generation != map->generation)
+    {
+        return false;
+    }
+
+    if (cover_capacity < map->num_cells)
+    {
+        cover_capacity = map->num_cells;
+        cover_distance = realloc(cover_distance, cover_capacity * sizeof(*cover_distance));
+        cover_entry = realloc(cover_entry, cover_capacity * sizeof(*cover_entry));
+        cover_from = realloc(cover_from, cover_capacity * sizeof(*cover_from));
+        cover_hops = realloc(cover_hops, cover_capacity * sizeof(*cover_hops));
+        cover_open = realloc(cover_open, cover_capacity * sizeof(*cover_open));
+    }
+
+    for (i = 0; i < map->num_cells; ++i)
+    {
+        cover_distance[i] = 1e30;
+    }
+
+    cover_distance[start] = 0.0;
+    cover_entry[start] = me;
+    cover_from[start] = -1;
+    cover_hops[start] = 0;
+    cover_open[num_open++] = start;
+
+    while (num_open > 0)
+    {
+        int nearest = 0;
+        const k_cell_t *c;
+        double length;
+
+        for (i = 1; i < num_open; ++i)
+        {
+            if (cover_distance[cover_open[i]] < cover_distance[cover_open[nearest]])
+            {
+                nearest = i;
+            }
+        }
+
+        cell = cover_open[nearest];
+        cover_open[nearest] = cover_open[--num_open];
+
+        if (cover_distance[cell] > reach)
+        {
+            break;
+        }
+
+        c = &map->cells[cell];
+        length = cover_distance[cell] + Distance(cover_entry[cell], c->centroid);
+
+        if (cell != start && length <= reach)
+        {
+            double floor = K_Map_CellFloor(cell);
+            int tics = TravelTics(length, cover_hops[cell]);
+
+            if (tics <= from->tics && Steppable(c->centroid, floor, hurts, EDGE_MARGIN)
+             && DuckHidden(from, c->centroid, floor, tics))
+            {
+                double score = length + DUCK_SEEN * Exposure(c->centroid, floor);
+
+                if (score < best_score)
+                {
+                    best_score = score;
+                    best = cell;
+                    best_tics = tics;
+                }
+            }
+        }
+
+        for (k = 0; k < graph->link_count[cell]; ++k)
+        {
+            const k_link_t *link = &graph->links[graph->first_link[cell] + k];
+            const k_portal_t *portal = &graph->portals[link->portal];
+            int next = link->neighbor;
+            k_vec2_t middle = { (portal->a.x + portal->b.x) * 0.5, (portal->a.y + portal->b.y) * 0.5 };
+            double distance = cover_distance[cell] + Distance(cover_entry[cell], middle);
+
+            if (distance >= cover_distance[next] || portal->jump >= 0
+             || K_Graph_CanCross(link->portal, cell) != K_CROSS_OPEN
+             || (!hurts && K_Map_FloorDamage(map->subsectors[map->cells[next].subsector].sector)
+                           > 0.0))
+            {
+                continue;
+            }
+
+            if (cover_distance[next] >= 1e30)
+            {
+                cover_open[num_open++] = next;
+            }
+
+            cover_distance[next] = distance;
+            cover_entry[next] = middle;
+            cover_from[next] = cell;
+            cover_hops[next] = cover_hops[cell] + 1;
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    // The way back from the cell to the player's, then turned round.
+    *num_points = 0;
+    points[(*num_points)++] = map->cells[best].centroid;
+
+    for (cell = best; cover_from[cell] >= 0 && *num_points < DUCK_POINTS; cell = cover_from[cell])
+    {
+        points[(*num_points)++] = cover_entry[cell];
+    }
+
+    for (i = 0; i < *num_points / 2; ++i)
+    {
+        k_vec2_t swap = points[i];
+
+        points[i] = points[*num_points - 1 - i];
+        points[*num_points - 1 - i] = swap;
+    }
+
+    *spot_tics = best_tics;
+    return true;
+}
+
+// The nearest spot out of its sight the player gets to in time
+// (DUCK_REPLAN), the way there (the spot last), and when. Along each ray
+// the first spot out of sight, a step or two deeper if still out of sight
+// and in time; with none, by way of the cells (CoverByCells).
+static boolean FindDuckSpot(const player_t *player, const duckfrom_t *from, k_vec2_t *points,
+                            int *num_points, int *spot_tics)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double floor = ToMap(player->mo->floorz);
+    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    double face = atan2(from->at.y - me.y, from->at.x - me.x);
+    double best = 1e30;
+    int k, step;
+
+    for (k = 0; k < MOVE_WAYS; ++k)
+    {
+        double angle = k * 2.0 * K_PI / MOVE_WAYS;
+        double ux = cos(angle), uy = sin(angle);
+        double step_floor = floor;
+        int steps = (int) (DUCK_REACH / DUCK_STEP), ring = (int) (DUCK_RING / DUCK_STEP);
+        int found = -1, found_tics = 0;
+        double found_floor = floor;
+
+        for (step = 1; step <= steps; ++step)
+        {
+            k_vec2_t at = { me.x + ux * DUCK_STEP * step, me.y + uy * DUCK_STEP * step };
+            int cell = K_Map_CellAt(at.x, at.y);
+            int tics = TravelTics(DUCK_STEP * step, 0);
+
+            if (cell < 0 || tics > from->tics || !Steppable(at, step_floor, hurts, EDGE_MARGIN))
+            {
+                break;
+            }
+
+            step_floor = K_Map_CellFloor(cell);
+
+            // Deeper in cover, a step or two on.
+            if (found >= 0)
+            {
+                if (step > found + 2 || !DuckHidden(from, at, step_floor, tics))
+                {
+                    break;
+                }
+
+                found = step;
+                found_tics = tics;
+                found_floor = step_floor;
+                continue;
+            }
+
+            if (step % ring == 0 && DuckHidden(from, at, step_floor, tics))
+            {
+                found = step;
+                found_tics = tics;
+                found_floor = step_floor;
+            }
+        }
+
+        if (found >= 0)
+        {
+            k_vec2_t at = { me.x + ux * DUCK_STEP * found, me.y + uy * DUCK_STEP * found };
+            double score = DUCK_STEP * found
+                         + DUCK_HIT * MoveCost(me, ux * DUCK_SPEED, uy * DUCK_SPEED, &face, floor,
+                                               hurts, EDGE_MARGIN, NULL)
+                         + DUCK_SEEN * Exposure(at, found_floor);
+
+            if (score < best)
+            {
+                best = score;
+                points[0] = at;
+                *num_points = 1;
+                *spot_tics = found_tics;
+            }
+        }
+    }
+
+    return best < 1e30 || CoverByCells(player, from, points, num_points, spot_tics);
+}
+
+static void StopDuck(const char *why)
+{
+    if (!ducking)
+    {
+        return;
+    }
+
+    ducking = false;
+    status.ducking = false;
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "out of the %s's sight for %.1f s - %s", duck_what,
+          (double) (leveltime - duck_since) / TICRATE, why);
+
+    if (!battle && !dodging && !holding)
+    {
+        move.x = move.y = 0.0;
+        K_Nav_Pause(0);
+    }
+}
+
+// Ducking out of sight of a blow coming (DUCK_REPLAN): the spot looked for,
+// begun, kept, moved (a new blow, or the spot seen now), or over; and the
+// step along the way there.
+static void UpdateDuck(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    k_vec2_t points[DUCK_POINTS];
+    duckfrom_t from;
+    boolean coming = DuckThreat(player, &from);
+    int num_points, tics;
+
+    if (!coming)
+    {
+        duck_none_from = NULL;
+        plan_from = NULL;
+    }
+
+    if (ducking)
+    {
+        k_vec2_t spot = duck_points[duck_num_points - 1];
+        int cell = K_Map_CellAt(spot.x, spot.y);
+        double spot_floor = cell >= 0 ? K_Map_CellFloor(cell) : ToMap(player->mo->floorz);
+
+        duck_calm = coming ? 0 : duck_calm + 1;
+
+        if (duck_calm >= DUCK_LINGER)
+        {
+            StopDuck("the blow is past");
+        }
+        else if (leveltime - duck_since >= DUCK_MOST)
+        {
+            StopDuck("ducked long enough");
+        }
+        else if (coming && (from.mo != duck_from || !DuckHidden(&from, spot, spot_floor, 0))
+              && FindDuckSpot(player, &from, points, &num_points, &tics))
+        {
+            memcpy(duck_points, points, num_points * sizeof(*points));
+            duck_num_points = num_points;
+            duck_next = 0;
+            duck_from = from.mo;
+            M_StringCopy(duck_what, from.name, sizeof(duck_what));
+        }
+    }
+    else if (coming && (K_Nav_CanPause() || battle || holding))
+    {
+        if (from.mo != plan_from || leveltime - plan_tic >= DUCK_REPLAN)
+        {
+            plan_from = from.mo;
+            plan_tic = leveltime;
+            plan_found = FindDuckSpot(player, &from, points, &num_points, &plan_tics);
+        }
+
+        // Shooting on till the time left is the time to get there; then
+        // from here (the fight has moved the player since).
+        if (plan_found && from.tics <= plan_tics + DUCK_SLACK
+         && FindDuckSpot(player, &from, points, &num_points, &tics))
+        {
+            k_vec2_t spot = points[num_points - 1];
+
+            ducking = true;
+            memcpy(duck_points, points, num_points * sizeof(*points));
+            duck_num_points = num_points;
+            duck_next = 0;
+            duck_from = from.mo;
+            duck_since = leveltime;
+            duck_calm = 0;
+            plan_from = NULL;
+            M_StringCopy(duck_what, from.name, sizeof(duck_what));
+            K_Nav_Pause(1);
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "ducking out of the %s's sight (%s in %d tics), %.0f "
+                  "units to (%.0f,%.0f)%s", from.name, from.blow, from.tics, Distance(me, spot),
+                  spot.x, spot.y, num_points > 1 ? ", round a corner" : "");
+        }
+        else if (!plan_found && from.tics <= DUCK_LATENCY + DUCK_SLACK
+              && from.mo != duck_none_from)
+        {
+            duck_none_from = from.mo;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "no cover from the %s in reach (%s in %d tics)",
+                  from.name, from.blow, from.tics);
+        }
+    }
+
+    status.ducking = ducking;
+
+    if (ducking)
+    {
+        status.duck_spot = duck_points[duck_num_points - 1];
+    }
+
+    if (ducking)
+    {
+        k_vec2_t to;
+        double dx, dy, distance, speed;
+
+        while (duck_next < duck_num_points - 1
+            && Distance(me, duck_points[duck_next]) < DUCK_WAYPOINT)
+        {
+            ++duck_next;
+        }
+
+        to = duck_points[duck_next];
+        dx = to.x - me.x;
+        dy = to.y - me.y;
+        distance = sqrt(dx * dx + dy * dy);
+        speed = duck_next < duck_num_points - 1 ? DUCK_SPEED
+              : SDL_min(DUCK_SPEED, distance * DUCK_GAIN);
+        move.x = distance > DUCK_NEAR ? dx / distance * speed : 0.0;
+        move.y = distance > DUCK_NEAR ? dy / distance * speed : 0.0;
+    }
+}
+
 void K_Combat_Reset(void)
 {
     MarkAttackStates();
@@ -3541,6 +4248,11 @@ void K_Combat_Reset(void)
     hold_skip_until = 0;
     hold_shut_area = -1;
     status.hold_area = -1;
+    ducking = false;
+    duck_from = NULL;
+    duck_none_from = NULL;
+    plan_from = NULL;
+    num_exposers = 0;
     K_Threat_Reset();
 }
 
@@ -3574,6 +4286,8 @@ void K_Combat_Tick(int driving)
         status.holding = false;
         status.hold_area = -1;
         status.creeping = false;
+        ducking = false;
+        status.ducking = false;
 
         // Not when the death ended the level (E1M8's exit floor).
         if (!status.died && gameaction != ga_completed)
@@ -3605,9 +4319,11 @@ void K_Combat_Tick(int driving)
         CountMisses(player);
         ChooseWeapon(player);
         ChooseBarrel(player);
+        UpdateExposers();
         UpdateBattle(player);
         UpdateDodge(player);
         UpdateHold(player);
+        UpdateDuck(player);
     }
     else
     {
@@ -3616,7 +4332,13 @@ void K_Combat_Tick(int driving)
 
     status.barrel = barrel_target >= 0;
 
-    if (barrel_target >= 0)
+    if (ducking)
+    {
+        M_snprintf(status.text, sizeof(status.text), "ducking out of the %s's sight%s%s",
+                   duck_what, status.target >= 0 ? ", shooting at the " : "",
+                   status.target >= 0 ? monsters[status.target].name : "");
+    }
+    else if (barrel_target >= 0)
     {
         M_snprintf(status.text, sizeof(status.text), "shooting the barrel at (%.0f,%.0f) - %s",
                    status.barrel_at.x, status.barrel_at.y, barrel_reason);
@@ -4009,6 +4731,17 @@ void K_Combat_Fire(int tic, k_command_t *command)
         return;
     }
 
+    // The rocket launcher and the BFG fire only on a fresh press
+    // (A_WeaponReady: not while attackdown): fire held on from before is
+    // let go for a tic first (Doom II MAP10: fire held on from the shotgun
+    // through the BFG picked up, it never fired, a demon biting the bot for
+    // 5 s).
+    if ((weapon->weapon == wp_missile || weapon->weapon == wp_bfg) && player->attackdown
+     && WeaponReady(player))
+    {
+        return;
+    }
+
     from.x = pose.x;
     from.y = pose.y;
     at = TargetAt(tic);
@@ -4152,7 +4885,7 @@ void K_Combat_LogSummary(void)
 
 int K_Combat_Move(double *vx, double *vy)
 {
-    if (!battle && !dodging && !holding)
+    if (!battle && !dodging && !holding && !ducking)
     {
         return 0;
     }

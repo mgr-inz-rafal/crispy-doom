@@ -67,6 +67,9 @@ typedef struct
     k_vec2_t hold_spot;     // holding: where the player stands, creeping on
     k_vec2_t hold_end;      // to where the creeping ends
     int creeping;           // holding, creeping on: nothing worth fighting
+    int ducking;            // stepping out of the sight of a blow coming (an
+                            // arch-vile's flame, a stream, a homing missile)
+    k_vec2_t duck_spot;     // ducking: to where
     int barrel;             // shooting a barrel, at barrel_at
     k_vec2_t barrel_at;
     int threats;            // projectiles and shots wound up for that could
