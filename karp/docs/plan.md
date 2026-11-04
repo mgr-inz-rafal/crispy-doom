@@ -3162,8 +3162,10 @@ Who controls the player in a fight (the user's model):
     13, 15, 19, 20 (before: those and 14, 17) - MAP15 on a baron's roll (55 where the build
     before rolled 24, same spot), MAP20 at a crusher both builds die at. 28 ducks, 5 round a
     corner, 17 times no cover. Standard sets: Doom II MAP01-05 and 10 finished (MAP10 with the
-    BFG firing: 100 health, 92 kills), E1 as before, no monsters 29/29. Left: a revenant's
-    missiles in the open (MAP06: nothing hides from one
+    BFG firing: 100 health, 92 kills), E1 as before, no monsters 29/29. Left: holds across a
+    lift (MAP20: the lift lowered by line 671, the hold short of the area beyond it outlasted
+    the lift's wait, it rose again, three times over - no hold should begin across a lift); a
+    revenant's missiles in the open (MAP06: nothing hides from one
     turning after the player there; the sidestep is all); the escape/fight flip-flop
     (MAP11: out of shells, running for a box past an arachnotron, stuck at its side); own
     rockets in the mastermind fight (E3M8: 28 and 42 from its own blasts); E4M8 stuck.
@@ -3199,6 +3201,15 @@ Who controls the player in a fight (the user's model):
   - MAP14: every goal failed at once from beside a shotgun picked up at (322,-30) - the walk-over
     line 1236 not among those tried for tag 19, a moving floor (sector 123) in the way for that
     moment (the idle retries now cut the wait to 5 s).
+  - Coasting when a goal ends (the user, MAP20: stuck in a tight corridor, no way out): the
+    walk-over line 671 crossed at speed, the brain only waiting for the lift it lowers, nav
+    stopped steering and the bot coasted on 64 units off the ledge into the channel below
+    (sector 2, 96 down, a floor that hurts 20, no way out) and burned. Wanted: brake to a stop
+    when the route ends or is cleared, not coast.
+  - MAP06 near the end (the user: sliding slowly along the walls): from (2144,-352), after a
+    teleport, about 680 units to the next teleporter took 9 s, nothing logged (no hold, duck,
+    dodge or fight); the same stretch had "stuck at (2002,-287)" earlier. Not seen again in a
+    run that took another way; to look into with a trace.
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
