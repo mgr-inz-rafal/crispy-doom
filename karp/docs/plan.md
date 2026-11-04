@@ -3184,6 +3184,28 @@ Who controls the player in a fight (the user's model):
   shoot it (MAP04's red key room: three imp fireballs, 64 health to 22, in the 2 s ride). Aim
   until the lift is about a quarter second from where the jump works, then face the jump (45
   degrees a tic: 4 tics at most).
+- **Waits on detours** (the user, E1M2 played on from E1M1: the shotgun never gone for, the bot
+  fought on into E1M3 with the pistol). Ways count their waits at 16 units a tic (floors that
+  hurt, above: MAP21's megasphere behind a floor to raise, no monsters there). The shotgun up
+  lift 109 by E1M2's start, 1039 units off, waited 204 tics: 4303, past the 3000 any item paid
+  for, so it was left - at every start of E1M2, not only the one played on to. Patched
+  (2026-11-04): a first weapon at a pistol start pays for 6000 (`FIRST_REACH`); every other item
+  behind a lift still pays the whole wait. The user: waits should cost much less, enough to keep
+  off very long ones only - a short lift as on E1M2 is a no-brainer, the more so at firepower
+  LOW (a pistol full of bullets is LOW still). The bot is no speedrunner: it survives by picking
+  up health, armour and ammo whenever it can, and the safe areas and guards keep detours out of
+  trouble. To do: a much cheaper wait (a few units a tic, or free up to a few seconds), and more
+  reach for ammo and weapons at firepower LOW.
+- **Creeping** (the user, after a few runs: a troublemaker). Seen: creeping into a jump, too slow
+  for its run-up, and failing it; creeping toward a chaingunner with no ammo and only the fist,
+  where it should run in and punch him. Ideas: creep only into an area a door, lift or other
+  barrier opens for the first time - or drop creeping altogether. Fixed meanwhile (2026-11-04):
+  creeping cut corners (E1M3, area 9: the spot crept straight through a corner's walls, the
+  player stood against them too far from it to creep on, 20 s until `HOLD_MOST`); it now creeps
+  along the route's waypoints, the player facing the corner. With that build Doom II MAP04, 05,
+  06 and 14 died where the build before finished (one run each, eight at once; MAP04 at 32.9 s,
+  killed by an imp, in both runs); not looked into - the weapon detours there were short, so
+  likely the creep.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate
@@ -3209,7 +3231,10 @@ Who controls the player in a fight (the user's model):
   - MAP06 near the end (the user: sliding slowly along the walls): from (2144,-352), after a
     teleport, about 680 units to the next teleporter took 9 s, nothing logged (no hold, duck,
     dodge or fight); the same stretch had "stuck at (2002,-287)" earlier. Not seen again in a
-    run that took another way; to look into with a trace.
+    run that took another way; to look into with a trace. Seen again (2026-11-04, the user;
+    the build before the creep change): 4:06.5 to 4:15.3, a demon targeted at 503 units,
+    nothing else logged. The same run held the full 20 s creeping into area 12 at (1728,1696)
+    (3:04-3:24), probably the corner cut fixed since.
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
