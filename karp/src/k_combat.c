@@ -480,7 +480,8 @@ extern void A_SPosAttack();
 // (within HOLD_AT), the spot creeps toward the way in and
 // CREEP_PAST beyond it along the route at CREEP_SPEED (the user: slowly, so
 // monsters round the corners there see the player one by one - not stand,
-// then rush in), and waits while there is. Over once
+// then rush in), and waits while there is; the player faces the way in,
+// the first point of the creeping's way CREEP_LOOK on. Over once
 // the area is safe, or below HOLD_RISK; once crept all the way with nothing
 // worth fighting, or after HOLD_MOST in all, the area is gone into (never
 // stuck) and not held off from again for HOLD_SKIP.
@@ -500,6 +501,8 @@ extern void A_SPosAttack();
 #define CREEP_WAIT (TICRATE / 2)
 #define CREEP_SPEED 3.0
 #define CREEP_PAST 64.0
+#define CREEP_LOOK 64.0
+#define CREEP_POINTS 32
 
 // Ducking (plan, 7.8: C4; the user: some threats are answered by getting
 // out of sight, not by dodging): an arch-vile winding up its flame (it
@@ -800,14 +803,18 @@ static boolean missile_on_way;
 static int battle_way = -1;
 
 // Holding short of an area that is not safe (HOLD_AHEAD): which, where the
-// route goes in, where the player stands (creeping on to hold_end), since
-// when, the tics with nothing worth fighting, and whether it has crept;
-// the area gone into after a hold, until when; the hold given up as its
-// door shut, its start, and until when it is taken up again from there.
+// route goes in, where the player stands (creeping on to hold_end, along
+// the way creeping goes, its point crept toward next), since when, the
+// tics with nothing worth fighting, and whether it has crept; the area
+// gone into after a hold, until when; the hold given up as its door shut,
+// its start, and until when it is taken up again from there.
 static boolean holding;
 static int hold_area;
 static k_vec2_t hold_spot;
 static k_vec2_t hold_end;
+static k_vec2_t creep_points[CREEP_POINTS];
+static int creep_num_points;
+static int creep_next;
 static int hold_since;
 static int hold_quiet;
 static boolean hold_crept;
@@ -3415,9 +3422,10 @@ static boolean FloorHurts(k_vec2_t at)
 // HOLD_BACK_MOST); past the route's start, straight on back away from the
 // way in, as far as the player could stand, in HOLD_STEP steps (Doom II
 // MAP14: a route planned at the blue door had the spot 16 units off it).
-// Returns false if the player could not stand there - or with `hurts`
-// false, not without a floor that hurts.
-static boolean HoldSpot(int point, double floor, boolean hurts, k_vec2_t *spot)
+// *ahead gets the first route point on from the spot. Returns false if the
+// player could not stand there - or with `hurts` false, not without a floor
+// that hurts.
+static boolean HoldSpot(int point, double floor, boolean hurts, k_vec2_t *spot, int *ahead)
 {
     const k_path_t *path = K_Nav_GetPath();
     const k_areamap_t *areas = K_Area_Get();
@@ -3474,19 +3482,33 @@ static boolean HoldSpot(int point, double floor, boolean hurts, k_vec2_t *spot)
     }
 
     *spot = at;
+    *ahead = i;
     return Steppable(at, floor, hurts, EDGE_MARGIN);
 }
 
-// Where creeping ends: CREEP_PAST on from route point `point` along the
-// route.
-static k_vec2_t CreepEnd(int point)
+// The way creeping goes (creep_points): along the route from route point
+// `ahead`, the first on from the spot, past route point `point` to
+// CREEP_PAST beyond it, where it ends (returned) - round the corners the
+// route turns there (E1M3: straight from the spot to the end, the spot
+// crept through a corner's walls, the player stood against them, too far
+// from it to creep on, until HOLD_MOST was up).
+static k_vec2_t CreepWay(int ahead, int point)
 {
     const k_path_t *path = K_Nav_GetPath();
     k_vec2_t at = path->points[point];
     double left = CREEP_PAST;
     int i;
 
-    for (i = point; i + 1 < path->num_points && left > 0.0; ++i)
+    creep_num_points = 0;
+    creep_next = 0;
+
+    for (i = ahead; i <= point && creep_num_points < CREEP_POINTS; ++i)
+    {
+        creep_points[creep_num_points++] = path->points[i];
+    }
+
+    for (i = point; i + 1 < path->num_points && left > 0.0 && creep_num_points < CREEP_POINTS;
+         ++i)
     {
         k_vec2_t next = path->points[i + 1];
         double length = Distance(at, next);
@@ -3495,14 +3517,50 @@ static k_vec2_t CreepEnd(int point)
         {
             at.x += (next.x - at.x) * left / SDL_max(length, 1e-6);
             at.y += (next.y - at.y) * left / SDL_max(length, 1e-6);
+            creep_points[creep_num_points++] = at;
             break;
         }
 
         left -= length;
         at = next;
+        creep_points[creep_num_points++] = at;
     }
 
-    return at;
+    return creep_points[creep_num_points - 1];
+}
+
+// What is left of the creeping: from the spot along its way to the end.
+static double CreepLeft(void)
+{
+    k_vec2_t at = hold_spot;
+    double left = 0.0;
+    int i;
+
+    for (i = creep_next; i < creep_num_points; ++i)
+    {
+        left += Distance(at, creep_points[i]);
+        at = creep_points[i];
+    }
+
+    return left;
+}
+
+// Where the player looks while holding with nothing to shoot: the way in,
+// the first point of the creeping's way CREEP_LOOK on from the spot - round
+// a corner, the corner - else its end.
+static k_vec2_t CreepLook(void)
+{
+    int i;
+
+    for (i = creep_next; i < creep_num_points; ++i)
+    {
+        if (Distance(hold_spot, creep_points[i]) >= CREEP_LOOK)
+        {
+            return creep_points[i];
+        }
+    }
+
+    return hold_end;
 }
 
 static void StopHold(const char *why)
@@ -3536,7 +3594,7 @@ static void UpdateHold(const player_t *player)
     double floor = ToMap(player->mo->floorz);
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) }, at = me, spot;
     int here = K_Area_Of(K_Map_CellAt(me.x, me.y));
-    int area = -1, point = -1;
+    int area = -1, point = -1, ahead = -1;
     boolean shut = false;
 
     // Begun from an area with no monsters inside, whatever those ahead see
@@ -3567,7 +3625,7 @@ static void UpdateHold(const player_t *player)
 
     if (holding)
     {
-        double left = Distance(hold_spot, hold_end);
+        double left = CreepLeft();
 
         // A far target, or one that cannot come, shot at on the way, holds
         // no creeping up - once judged (SIGHTED_TICS); the player at the
@@ -3600,11 +3658,29 @@ static void UpdateHold(const player_t *player)
         }
         else if (hold_quiet >= CREEP_WAIT)
         {
-            // Creeping on, slowly - never onto a floor that hurts: the
-            // creeping ends short of it, and the route crosses it.
-            double step = SDL_min(CREEP_SPEED, left);
-            k_vec2_t next = { hold_spot.x + (hold_end.x - hold_spot.x) * step / left,
-                              hold_spot.y + (hold_end.y - hold_spot.y) * step / left };
+            // Creeping on along its way, slowly - never onto a floor that
+            // hurts: the creeping ends short of it, and the route crosses
+            // it.
+            double step = CREEP_SPEED;
+            k_vec2_t next = hold_spot;
+            int k = creep_next;
+
+            while (k < creep_num_points && step > 0.0)
+            {
+                double length = Distance(next, creep_points[k]);
+
+                if (length <= step)
+                {
+                    step -= length;
+                    next = creep_points[k++];
+                }
+                else
+                {
+                    next.x += (creep_points[k].x - next.x) * step / length;
+                    next.y += (creep_points[k].y - next.y) * step / length;
+                    step = 0.0;
+                }
+            }
 
             if (!hold_crept)
             {
@@ -3616,20 +3692,22 @@ static void UpdateHold(const player_t *player)
             if (FloorHurts(next))
             {
                 hold_end = hold_spot;
+                creep_next = creep_num_points;
             }
             else
             {
                 hold_spot = next;
+                creep_next = k;
             }
         }
     }
-    else if (area >= 0 && !shut && HoldSpot(point, floor, false, &spot))
+    else if (area >= 0 && !shut && HoldSpot(point, floor, false, &spot, &ahead))
     {
         holding = true;
         status.holding = true;
         hold_area = area;
         hold_spot = spot;
-        hold_end = CreepEnd(point);
+        hold_end = CreepWay(ahead, point);
         hold_since = area == hold_shut_area && leveltime < hold_shut_until
                    ? hold_shut_since : leveltime;
         hold_quiet = 0;
@@ -3644,7 +3722,7 @@ static void UpdateHold(const player_t *player)
     status.hold_area = holding ? hold_area : -1;
     status.hold_spot = hold_spot;
     status.hold_end = hold_end;
-    status.creeping = holding && hold_quiet >= CREEP_WAIT && Distance(hold_spot, hold_end) >= 1.0;
+    status.creeping = holding && hold_quiet >= CREEP_WAIT && CreepLeft() >= 1.0;
 
     if (holding && !battle && !dodging)
     {
@@ -4426,7 +4504,8 @@ int K_Combat_Aim(int tic, double *angle)
     // Holding with nothing to shoot: watching the way in, and past it.
     if (!held && status.target < 0 && barrel_target < 0 && holding && K_Nav_Predict(tic, &pose))
     {
-        *angle = atan2(hold_end.y - pose.y, hold_end.x - pose.x);
+        at = CreepLook();
+        *angle = atan2(at.y - pose.y, at.x - pose.x);
         return 1;
     }
 

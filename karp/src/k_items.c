@@ -34,7 +34,7 @@
 //	weapons and backpacks; the health, and the ammo when ammo or firepower
 //	is LOW, however far (escape). A
 //	weapon better than the pistol, at a pistol start, goes before other
-//	items (first).
+//	items (first), and pays for a long detour.
 //
 //	What the monsters guarding an item would cost in health is taken off,
 //	weighed as health is (the user, MAP02: going for four stimpacks started
@@ -77,6 +77,14 @@
 #define BIG_WORTH 25.0
 #define REACH_MOST 3000.0
 #define REACH_ANY 1.0e6
+
+// A weapon better than the pistol, at a pistol start (first), pays for
+// FIRST_REACH of detour at least, about ten seconds' run, less the more it
+// is guarded, none from ROOM_DANGER health at risk (the user, E1M2: the
+// shotgun up a lift by the start, 1039 units off and a lift ride, about
+// 4300 units with the wait, was left over REACH_MOST, and the bot fought
+// the level and on into E1M3 with the pistol).
+#define FIRST_REACH 6000.0
 
 // Ammo there is room for is worth having, however much the player has (the
 // user: the clips and shotguns of the zombiemen and shotgun guys just killed
@@ -804,6 +812,11 @@ void K_Items_Tick(void)
               && (entry->sprite == SPR_ARM1 || entry->sprite == SPR_ARM2))
         {
             item->reach = SDL_max(item->reach, ARMOUR_REACH * (1.0 - item->danger / ROOM_DANGER));
+        }
+
+        if (item->first && item->danger < ROOM_DANGER)
+        {
+            item->reach = SDL_max(item->reach, FIRST_REACH * (1.0 - item->danger / ROOM_DANGER));
         }
 
         if (item->kind == K_ITEM_HEALTH && item->together < URGENT_HEALTH)
