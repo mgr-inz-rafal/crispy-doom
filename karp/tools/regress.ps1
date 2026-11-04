@@ -3,8 +3,8 @@
     Karp map regressions: runs the bot on several maps at once and reports how each run ended.
 
 .DESCRIPTION
-    Each map is a visible game (-autoplay -karpconsole -nomonsters -quitonexit), all started
-    together, silent (-nosound) when there are several; a single map plays with sound. crispy
+    Each map is a visible game (-autoplay -karpconsole -nomonsters -quitonexit, but see -NoQuit),
+    all started together, silent (-nosound) when there are several; a single map plays with sound. crispy
     keeps karp.log, karp.cfg and crispy-doom.cfg in the exe's folder (its config directory on
     Windows), so instances sharing one folder would overwrite each other's files: each map runs
     from its own folder holding a copy of the exe, its DLLs and the cfgs. A map still running
@@ -41,6 +41,12 @@
     Pass -karpsalt with this seed, so the bot's runs differ from the unsalted ones and from
     other seeds (the seed repeats a run). Off when not given.
 
+.PARAMETER NoQuit
+    Leave out -quitonexit: the game goes on to the next map when a level is finished, weapons
+    and ammo carried over, to watch the bot play on through an episode. The bot does not press
+    on past the intermission screen (press Space or fire), nor respawn when it dies; the time
+    limit still applies, so pass a long -Seconds. The line printed is for the first map.
+
 .PARAMETER Build
     The folder with crispy-doom.exe and its DLLs. Defaults to build\src\Release in this repo.
 
@@ -58,6 +64,9 @@
 
 .EXAMPLE
     .\karp\tools\regress.ps1 -Maps '02' -Monsters -Salt 7
+
+.EXAMPLE
+    .\karp\tools\regress.ps1 -Iwad path\to\DOOM.WAD -Maps '1 1' -Monsters -NoQuit -Seconds 3600
 #>
 # An unknown parameter is an error rather than dropped into $args: a mistyped
 # -karpsalt ran unsalted without a word.
@@ -71,6 +80,7 @@ param(
     [hashtable]$Limits = @{ '09' = 150; '13' = 150; '17' = 200; '19' = 150; '29' = 200 },
     [switch]$Monsters,
     [Nullable[uint32]]$Salt = $null,
+    [switch]$NoQuit,
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),
     [string]$Out = (Join-Path $PSScriptRoot '..\..\build\karp-regress')
 )
@@ -100,6 +110,10 @@ if ($null -ne $Salt) {
     $play += @('-karpsalt', "$Salt")
 }
 
+if (-not $NoQuit) {
+    $play += @('-quitonexit')
+}
+
 # Several games at once would only make noise; one is worth hearing.
 if ($Maps.Count -gt 1) {
     $play += @('-nosound')
@@ -123,7 +137,7 @@ foreach ($map in $Maps) {
 
     $started[$map] = Start-Process -FilePath (Join-Path $dir 'crispy-doom.exe') -WorkingDirectory $dir `
         -PassThru -ArgumentList (@('-iwad', "`"$Iwad`"", '-window', '-nomouse') + $play +
-                                 @('-autoplay', '-karpconsole', '-quitonexit', '-warp', $map))
+                                 @('-autoplay', '-karpconsole', '-warp', $map))
 }
 
 $clock = [Diagnostics.Stopwatch]::StartNew()
