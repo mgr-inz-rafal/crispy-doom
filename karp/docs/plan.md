@@ -3140,6 +3140,29 @@ Who controls the player in a fight (the user's model):
   - Barons and arch-viles: stay away from them too - though one BFG shot point blank settles it.
   - With tough monsters alive (Cyberdemon, Spider Mastermind, barons, arch-viles), keep plasma
     cells in reserve for them; the low tier monsters are cleared with low tier weapons.
+- **Shooting on a jump ride** (the user, jotted for later): a lift ride that ends in a jump
+  holds the facing on the jump's line the whole way up (`action.jump_ride`, after MAP02's run-up
+  begun facing a shotgun guy fell short), so the bot neither shoots nor fights while monsters
+  shoot it (MAP04's red key room: three imp fireballs, 64 health to 22, in the 2 s ride). Aim
+  until the lift is about a quarter second from where the jump works, then face the jump (45
+  degrees a tic: 4 tics at most).
+- **Navigation, left for later** (the user: no navigation or geometry changes while fights are
+  the focus):
+  - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate
+    in the north-east room, up small crates 16 apart, never gone for). The first small crate
+    (floor 16) and the big one (32) are 8 apart, the room's floor (0) between them in a cell
+    256 long that runs on into the room, so the thin-cell rule (`K_Map_CellFloor`) leaves it at
+    0: a drop, then a step of 32. The engine stands the player on the highest floor under its
+    box, so it steps 16 straight across. Wanted: a step across such a strip when the floors on
+    either side are within a step of each other - a crossing between the two cells, or the
+    thin-cell rule for the stretch between them only (next to the jumps, which scan gaps).
+  - E1M7 stuck in a gap; E2M8's start gap.
+  - MAP05 riding a lift up and dropping off it, over and over; MAP06 teleporting to and fro
+    between two pads.
+  - E1M8 stuck by the shotgun at (-160,864) (at (144,885), twice), fists against demons.
+  - MAP14: every goal failed at once from beside a shotgun picked up at (322,-30) - the walk-over
+    line 1236 not among those tried for tag 19, a moving floor (sector 123) in the way for that
+    moment (the idle retries now cut the wait to 5 s).
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
