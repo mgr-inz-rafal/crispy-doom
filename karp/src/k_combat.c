@@ -114,6 +114,7 @@
 #include "k_log.h"
 #include "k_salt.h"
 #include "k_sight.h"
+#include "k_specials.h"
 #include "k_threat.h"
 
 #define K_PI 3.14159265358979323846
@@ -476,7 +477,8 @@ extern void A_SPosAttack();
 // it), it is opened again and the hold taken up again, its time going on.
 // A lift on the way there, not down, starts no hold. The spot is never on
 // a floor that hurts, as no fight is (C1), and creeping stops short of
-// one. With nothing worth fighting for CREEP_WAIT, the player at the spot
+// one, and CREEP_SHORT short of a jump, a crusher or a walk-over line that
+// does something (CreepStops). With nothing worth fighting for CREEP_WAIT, the player at the spot
 // (within HOLD_AT), the spot creeps toward the way in and
 // CREEP_PAST beyond it along the route at CREEP_SPEED (the user: slowly, so
 // monsters round the corners there see the player one by one - not stand,
@@ -502,6 +504,7 @@ extern void A_SPosAttack();
 #define CREEP_SPEED 3.0
 #define CREEP_PAST 64.0
 #define CREEP_LOOK 64.0
+#define CREEP_SHORT 24.0
 #define CREEP_POINTS 32
 
 // Ducking (plan, 7.8: C4; the user: some threats are answered by getting
@@ -3486,47 +3489,91 @@ static boolean HoldSpot(int point, double floor, boolean hurts, k_vec2_t *spot, 
     return Steppable(at, floor, hurts, EDGE_MARGIN);
 }
 
-// The way creeping goes (creep_points): along the route from route point
-// `ahead`, the first on from the spot, past route point `point` to
+// Whether creeping stops short of route point k: the leg to it is no walk
+// (a jump, a teleport), or crosses what no slow step should: a crossing
+// that is not open but for a door (a jump, a crusher), or a walk-over line
+// that does something (the user: creeping into a jump, and failing it;
+// E2M4: crept over line 1113, which set the yellow key's crusher going,
+// and caught under it).
+static boolean CreepStops(const k_path_t *path, int k)
+{
+    int r;
+
+    if (path->legs[k - 1] != K_LEG_WALK)
+    {
+        return true;
+    }
+
+    for (r = path->leg_cells[k - 1]; r < path->leg_cells[k] && r < path->num_cells - 1; ++r)
+    {
+        const k_portal_t *portal = &K_Graph_Get()->portals[path->portals[r]];
+        k_crossing_t crossing = K_Graph_CanCross(path->portals[r], path->cells[r]);
+
+        if ((crossing != K_CROSS_OPEN && crossing != K_CROSS_DOOR)
+         || (portal->line >= 0 && K_Specials_WalkOver(K_Specials_LineSpecial(portal->line))))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The way creeping goes (creep_points): from the spot along the route from
+// route point `ahead`, the first on from it, past route point `point` to
 // CREEP_PAST beyond it, where it ends (returned) - round the corners the
 // route turns there (E1M3: straight from the spot to the end, the spot
 // crept through a corner's walls, the player stood against them, too far
-// from it to creep on, until HOLD_MOST was up).
-static k_vec2_t CreepWay(int ahead, int point)
+// from it to creep on, until HOLD_MOST was up) - and CREEP_SHORT short of
+// where it stops (CreepStops).
+static k_vec2_t CreepWay(k_vec2_t spot, int ahead, int point)
 {
     const k_path_t *path = K_Nav_GetPath();
-    k_vec2_t at = path->points[point];
-    double left = CREEP_PAST;
-    int i;
+    k_vec2_t at = spot;
+    double past = -1.0;     // left past `point`, once there
+    int k;
 
     creep_num_points = 0;
     creep_next = 0;
 
-    for (i = ahead; i <= point && creep_num_points < CREEP_POINTS; ++i)
+    for (k = ahead; k < path->num_points && creep_num_points < CREEP_POINTS; ++k)
     {
-        creep_points[creep_num_points++] = path->points[i];
-    }
-
-    for (i = point; i + 1 < path->num_points && left > 0.0 && creep_num_points < CREEP_POINTS;
-         ++i)
-    {
-        k_vec2_t next = path->points[i + 1];
+        k_vec2_t next = path->points[k];
         double length = Distance(at, next);
 
-        if (length >= left)
+        if (k > 0 && CreepStops(path, k))
         {
-            at.x += (next.x - at.x) * left / SDL_max(length, 1e-6);
-            at.y += (next.y - at.y) * left / SDL_max(length, 1e-6);
+            double back = SDL_min(CREEP_SHORT, length);
+
+            next.x += (at.x - next.x) * back / SDL_max(length, 1e-6);
+            next.y += (at.y - next.y) * back / SDL_max(length, 1e-6);
+            creep_points[creep_num_points++] = next;
+            break;
+        }
+
+        if (past >= 0.0 && length >= past)
+        {
+            at.x += (next.x - at.x) * past / SDL_max(length, 1e-6);
+            at.y += (next.y - at.y) * past / SDL_max(length, 1e-6);
             creep_points[creep_num_points++] = at;
             break;
         }
 
-        left -= length;
+        if (past >= 0.0)
+        {
+            past -= length;
+        }
+
         at = next;
         creep_points[creep_num_points++] = at;
+
+        if (k == point)
+        {
+            past = CREEP_PAST;
+        }
     }
 
-    return creep_points[creep_num_points - 1];
+    return creep_num_points > 0 ? creep_points[creep_num_points - 1] : spot;
 }
 
 // What is left of the creeping: from the spot along its way to the end.
@@ -3707,7 +3754,7 @@ static void UpdateHold(const player_t *player)
         status.holding = true;
         hold_area = area;
         hold_spot = spot;
-        hold_end = CreepWay(ahead, point);
+        hold_end = CreepWay(spot, ahead, point);
         hold_since = area == hold_shut_area && leveltime < hold_shut_until
                    ? hold_shut_since : leveltime;
         hold_quiet = 0;

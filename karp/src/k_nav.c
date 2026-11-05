@@ -181,9 +181,15 @@
 
 // A crusher is timed CRUSHER_LATENCY tics late (the commands already sent
 // run first), and given up on after CRUSHER_TICS waiting: its round never
-// leaves time to run under it from here.
+// leaves time to run under it from here. Where the route stops under one
+// (an item, a key), the way there, stopping, and back out from standing,
+// CRUSHER_STOP tics more for slowing down to it and setting off again. A
+// line that sets one going is stepped over to CRUSHER_STEP past it, given
+// up on after CRUSHER_TICS.
 #define CRUSHER_LATENCY 2
 #define CRUSHER_TICS (10 * TICRATE)
+#define CRUSHER_STOP 10.0
+#define CRUSHER_STEP 8.0
 
 // Further than the player can move in a tic (MAXMOVE on each axis): it
 // teleported.
@@ -271,6 +277,7 @@ typedef struct
     int presses;
     int press_tic;          // the tic of the last press
     boolean jump_ride;      // a ride that ends in a jump: facing its way
+    boolean set_off;        // a line that sets a crusher going, stepped over
 } action_t;
 
 static k_path_t path;
@@ -302,6 +309,17 @@ static int crusher_sector;
 static int crusher_past;
 static k_vec2_t crusher_exit;
 static int crusher_since;
+
+// Whether the player stands under a crusher that runs (a route planned
+// again under it runs on out: k_graph.h).
+static boolean UnderCrusher(void)
+{
+    const k_map_t *map = K_Map_Get();
+    k_pose_t pose;
+
+    return K_Map_GetPlayer(&pose) && pose.cell >= 0
+        && K_Graph_IsCrusher(map->subsectors[map->cells[pose.cell].subsector].sector);
+}
 
 static sent_t sent[SENT_SIZE];
 
@@ -989,7 +1007,7 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     k_vec2_t at = { body->x, body->y };
     // Under a crusher, facing the way: full speed, as it was timed
     // (strafing alone tops out at 13.3 units a tic).
-    const double *face = crusher_run >= 0 ? NULL : aim;
+    const double *face = crusher_run >= 0 || UnderCrusher() ? NULL : aim;
     double distance, speed, vx, vy, jump_face;
     boolean steady;
 
@@ -1572,6 +1590,30 @@ static k_vec2_t CrusherSpot(int r)
     return spot;
 }
 
+// Where to step to over a line that sets a crusher going, crossing out of
+// route cell r: CRUSHER_STEP past it along the route, so that the player
+// gets there slowly and does not run on under the crusher (E2M4: the
+// yellow key's platform 16 past the line).
+static k_vec2_t SetOffSpot(int r)
+{
+    int k = ExitPoint(r);
+    k_vec2_t spot = path.points[k];
+
+    if (k + 1 < path.num_points)
+    {
+        k_vec2_t next = path.points[k + 1];
+        double length = Distance(spot, next);
+
+        if (length > 1e-6)
+        {
+            spot.x += (next.x - spot.x) / length * SDL_min(CRUSHER_STEP, length);
+            spot.y += (next.y - spot.y) / length * SDL_min(CRUSHER_STEP, length);
+        }
+    }
+
+    return spot;
+}
+
 // The first route cell past the crusher the crossing out of route cell r
 // goes under (the route's end if it stops under it).
 static int CrusherPast(int r)
@@ -1650,8 +1692,10 @@ static void StartAction(k_crossing_t crossing, int r)
 
     action.spot.x = middle.x + nx * ACTION_DISTANCE;
     action.spot.y = middle.y + ny * ACTION_DISTANCE;
-    action.spot = action.kind == K_ACTION_CRUSHER ? CrusherSpot(r)
-                                                  : ClearSpotAlong(action.spot, action.a, action.b);
+    action.set_off = action.kind == K_ACTION_CRUSHER && !K_Graph_IsCrusher(RouteSector(r + 1));
+    action.spot = action.set_off ? SetOffSpot(r)
+                : action.kind == K_ACTION_CRUSHER ? CrusherSpot(r)
+                : ClearSpotAlong(action.spot, action.a, action.b);
     action.face = atan2(-ny, -nx);
     action.start_tics = status.tics;
     action.press_tic = -2;
@@ -1723,8 +1767,16 @@ static void FinishAction(void)
             break;
 
         case K_ACTION_CRUSHER:
-            K_Log(K_LOG_NAV, K_LOG_INFO, "the crusher (sector %d) at line %d stopped after "
-                  "%.1f s", action.sector, action.line, seconds);
+            if (action.set_off)
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "stepped over line %d, setting its crushers "
+                      "going, after %.1f s", action.line, seconds);
+            }
+            else
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "the crusher (sector %d) at line %d stopped after "
+                      "%.1f s", action.sector, action.line, seconds);
+            }
             break;
 
         default:
@@ -1792,16 +1844,44 @@ static boolean CrusherFits(k_vec2_t at, int r)
     }
 
     enter = K_Graph_RunTics(speed, SDL_max(0.0, RouteAlong(at, in) - K_CRUSHER_BOX));
-    leave = K_Graph_RunTics(speed, RouteAlong(at, out) + K_CRUSHER_BOX);
+
+    // Where the route stops under it: there, stopping, and back out the
+    // way in from standing (E2M4: the yellow key in the middle of the
+    // platform, 160 from its edges).
+    if (CrusherPast(r) >= path.num_cells)
+    {
+        double there = RouteAlong(at, out);
+
+        leave = K_Graph_RunTics(speed, there) + CRUSHER_STOP
+              + K_Graph_RunTics(0.0, there - RouteAlong(at, in) + K_CRUSHER_BOX);
+    }
+    else
+    {
+        leave = K_Graph_RunTics(speed, RouteAlong(at, out) + K_CRUSHER_BOX);
+    }
+
     return K_Graph_CrusherClear(action.sector, (int) enter + CRUSHER_LATENCY - 1,
                                 (int) ceil(leave) + CRUSHER_LATENCY + K_CRUSHER_SPARE);
 }
 
 // In front of a crusher: once a run under it fits, the crossing reads open
 // for the run (crusher_run) and the action is over; till then, to the spot
-// and waiting there.
+// and waiting there. Over a line that sets one going: to the spot past it;
+// crossed, the action is over (UpdateAction), and the crusher, running,
+// timed.
 static boolean UpdateCrusher(k_vec2_t at, double speed, int r)
 {
+    if (action.set_off)
+    {
+        if (action.tics > CRUSHER_TICS)
+        {
+            FailAction("could not step over the line");
+            return false;
+        }
+
+        return true;
+    }
+
     if (CrusherFits(at, r))
     {
         crusher_run = r;
@@ -3022,17 +3102,6 @@ int K_Nav_CarefulLeg(int leg)
 {
     return have_goal && leg >= 0 && leg < path.num_points - 1
         && (careful[leg] || careful[leg + 1]);
-}
-
-// Whether the player stands under a crusher that runs (a route planned
-// again under it runs on out: k_graph.h).
-static boolean UnderCrusher(void)
-{
-    const k_map_t *map = K_Map_Get();
-    k_pose_t pose;
-
-    return K_Map_GetPlayer(&pose) && pose.cell >= 0
-        && K_Graph_IsCrusher(map->subsectors[map->cells[pose.cell].subsector].sector);
 }
 
 int K_Nav_CanPause(void)

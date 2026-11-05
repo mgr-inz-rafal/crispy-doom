@@ -213,8 +213,8 @@ k_trigger_t K_Specials_MoverTrigger(int special)
         case 14: case 15: case 18: case 20: case 23: case 45: case 60:
         case 64: case 66: case 67: case 68: case 69: case 70: case 71:
         case 101: case 102: case 131: case 132: case 140:
-        // lifts, stairs, donut:
-        case 21: case 62: case 122: case 123: case 7: case 127: case 9:
+        // lifts, stairs, donut, a crusher:
+        case 21: case 62: case 122: case 123: case 7: case 127: case 9: case 49:
         // manual doors (the sector behind them):
         case 1: case 26: case 27: case 28: case 31: case 32: case 33:
         case 34: case 117: case 118:
@@ -231,6 +231,9 @@ k_trigger_t K_Specials_MoverTrigger(int special)
         // lifts (perpetual ones too), stairs, a ceiling that rises:
         case 10: case 88: case 120: case 121: case 53: case 87: case 8:
         case 100: case 40:
+        // crushers (a crusher stopped low is set going again, and rises to
+        // its top between crushes):
+        case 6: case 25: case 73: case 77: case 141:
             return K_TRIGGER_CROSS;
 
         // Gun switches (G1, GR: P_ShootSpecialLine): floors that rise, a
@@ -241,6 +244,36 @@ k_trigger_t K_Specials_MoverTrigger(int special)
         default:
             return K_TRIGGER_NONE;
     }
+}
+
+int K_Specials_WalkOver(int special)
+{
+    switch (special)
+    {
+        // W1:
+        case 2: case 3: case 4: case 5: case 6: case 8: case 10: case 12:
+        case 13: case 16: case 17: case 19: case 22: case 25: case 30: case 35:
+        case 36: case 37: case 38: case 39: case 40: case 44: case 52: case 53:
+        case 54: case 56: case 57: case 58: case 59: case 100: case 104: case 108:
+        case 109: case 110: case 119: case 121: case 124: case 125: case 130:
+        case 141:
+        // WR:
+        case 72: case 73: case 74: case 75: case 76: case 77: case 79: case 80:
+        case 81: case 82: case 83: case 84: case 86: case 87: case 88: case 89:
+        case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
+        case 98: case 105: case 106: case 107: case 120: case 126: case 128:
+        case 129:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+int K_Specials_CrusherStart(int special, int *fast)
+{
+    *fast = special == 6 || special == 77;
+    return special == 6 || special == 25 || special == 73 || special == 77 || special == 141;
 }
 
 int K_Specials_MoverMoves(int special)
@@ -279,6 +312,13 @@ int K_Specials_MoverMoves(int special)
         // A ceiling that rises over a floor that goes down:
         case 40:
             return K_MOVE_CEILING_UP | K_MOVE_FLOOR_DOWN;
+
+        // Crushers: one stopped low (lines 57, 74), set going again, rises
+        // to its top between crushes, and is run under (E2M2: a stop line
+        // crossed on the way back west left the corridor's crushers stopped
+        // with a ceiling down, and the way back to the blue key shut).
+        case 6: case 25: case 49: case 73: case 77: case 141:
+            return K_MOVE_CEILING_UP;
 
         // Manual doors: only a gap they narrow asks for them, never a way
         // through them from behind.

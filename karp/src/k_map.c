@@ -1359,7 +1359,8 @@ k_lineclass_t K_Map_LineClass(int index)
 int K_Map_CellAt(double x, double y)
 {
     const k_subsector_t *ss;
-    int index, i;
+    double best_thickness = 0.0;
+    int index, i, best = -1;
 
     if (!map.loaded || map.num_subsectors == 0)
     {
@@ -1376,12 +1377,26 @@ int K_Map_CellAt(double x, double y)
 
     ss = &map.subsectors[index];
 
+    // A point on the edge two cells share goes to the thicker (E1M7: split
+    // along a lamp's square, a cell 16 deep along a wall; the player picking
+    // up the shotgun there, its centre on the edge, its box touching the
+    // wall, was put in it, where every way out is narrower than the player,
+    // and no route was found from there again).
     for (i = ss->first_cell; i < ss->first_cell + ss->num_cells; ++i)
     {
-        if (PointInCell(&map.cells[i], x, y, INSIDE_TOLERANCE))
+        const k_cell_t *cell = &map.cells[i];
+        double thickness = SDL_min(cell->max.x - cell->min.x, cell->max.y - cell->min.y);
+
+        if (PointInCell(cell, x, y, INSIDE_TOLERANCE) && (best < 0 || thickness > best_thickness))
         {
-            return i;
+            best = i;
+            best_thickness = thickness;
         }
+    }
+
+    if (best >= 0)
+    {
+        return best;
     }
 
     // The engine can place a point in a hairline sliver without floor, or

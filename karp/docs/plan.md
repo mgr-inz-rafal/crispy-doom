@@ -3233,10 +3233,31 @@ Who controls the player in a fight (the user's model):
   65, whose fast crusher lines 1113-1116 (a square round it, in sector 58) set going. A hold
   short of area 40 crept on over line 1113 at 3 units a tic; the ceiling, down to the
   player's height in 36 tics, caught the bot (about 25 health, stuck 35 tics), and it got
-  the key once the ceiling rose. Left: creeping should end short of walk-over lines that do
-  something, and of crushers; and a crusher the route itself sets going (or one running,
-  with the goal under it) wants the way in and back out timed - not judged till it runs, as
-  now.
+  the key once the ceiling rose. Done:
+  - Creeping ends 24 short of a crossing that is not open but for a door (a jump, a crusher)
+    and of a walk-over line that does something (`CreepStops`; the user also saw creeping
+    into jumps, and failing them).
+  - A line that sets a crusher at rest going (`K_Specials_CrusherStart`: 6, 25, 73, 77, 141;
+    its special live, a tagged sector at rest or stopped in stasis, room under it at its top)
+    is a crusher crossing too: nav steps over it slowly, 8 past it, and times the crusher once
+    it runs. A route that stops under a crusher (an item, a key) is timed there, stopping
+    (10 tics), and back out the way in from standing.
+  - A crusher's faces count at its top, as its crossings do (the strip between line 1113 and
+    the platform, 16 wide, was too narrow while the ceiling was down; the way in was planned
+    again from all sides).
+  E2M4: stepped over line 1113, waited, ran under, the key in 3 s, no hit.
+- **Crushers stopped low** (E2M2: on the way back west, a stop line, 74, left crusher 2 in
+  stasis with 40 of headroom; the way back to the blue key was shut for good). Done: lines that
+  set a crusher going are triggers that raise its ceiling (`K_Specials_MoverTrigger`,
+  `MoverMoves`), so the brain goes and crosses line 1564 to set it going again; and a mover in
+  stasis (its thinker doing nothing) is no mover (`K_Graph_SectorMover`: the trigger goal took
+  sector 2 as moving already, stopped, waited, and gave the line up as moving nothing). E2M2
+  finished, 165 s.
+- **A start cell too thin to stand in** (the user, E1M7: stuck after picking up the shotgun at
+  (448,-1872)). Cells split along a lamp's square left one 16 deep along the wall; the player,
+  its centre on the shared edge, box touching the wall, was put in it, where every way out is
+  narrower than the player. Done: `K_Map_CellAt` gives a point on an edge two cells share to
+  the thicker. E1 1-7 and 9 finished.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate
@@ -3247,7 +3268,7 @@ Who controls the player in a fight (the user's model):
     box, so it steps 16 straight across. Wanted: a step across such a strip when the floors on
     either side are within a step of each other - a crossing between the two cells, or the
     thin-cell rule for the stretch between them only (next to the jumps, which scan gaps).
-  - E1M7 stuck in a gap; E2M8's start gap.
+  - E2M8's start gap (E1M7's gap: done, above).
   - MAP05 riding a lift up and dropping off it, over and over; MAP06 teleporting to and fro
     between two pads.
   - E1M8 stuck by the shotgun at (-160,864) (at (144,885), twice), fists against demons.

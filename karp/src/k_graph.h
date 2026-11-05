@@ -79,7 +79,9 @@ typedef enum
                             // too high): wait on it until it gets there
     K_CROSS_CRUSHER,        // under a crusher that runs for good: wait in
                             // front of it, and run under it while its
-                            // ceiling stays up (judged at its top)
+                            // ceiling stays up (judged at its top); or over
+                            // a line that sets one going, at rest now: step
+                            // over slowly
 
     // Passable, but not into the cell beyond:
     K_CROSS_TELEPORT,       // a teleport line, from its front side: the

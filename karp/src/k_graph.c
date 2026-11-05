@@ -1530,6 +1530,57 @@ static const ceiling_t *CrusherOf(const sector_t *sector)
         || ceiling->type == silentCrushAndRaise ? ceiling : NULL;
 }
 
+// A crusher stopped in stasis by a line (EV_CeilingCrushStop), or NULL.
+static const ceiling_t *StoppedCrusher(const sector_t *sector)
+{
+    int i;
+
+    for (i = 0; i < MAXCEILINGS; ++i)
+    {
+        const ceiling_t *ceiling = activeceilings[i];
+
+        if (ceiling != NULL && ceiling->sector == sector && ceiling->direction == 0
+         && (ceiling->type == crushAndRaise || ceiling->type == fastCrushAndRaise
+             || ceiling->type == silentCrushAndRaise))
+        {
+            return ceiling;
+        }
+    }
+
+    return NULL;
+}
+
+// Whether crossing a line sets going a crusher at rest now, with room for
+// the player under it at its top: a walk-over line that starts one, its
+// special live (a W1 line loses it), and a sector with its tag that nothing
+// moves, or a crusher stopped in stasis, set going again (E2M2: stopped
+// with its ceiling down).
+static boolean SetsCrusherGoing(int line_index)
+{
+    const line_t *line = &lines[line_index];
+    int fast, s;
+
+    if (!K_Specials_CrusherStart(line->special, &fast) || line->tag == 0)
+    {
+        return false;
+    }
+
+    for (s = 0; s < numsectors; ++s)
+    {
+        const sector_t *sector = &sectors[s];
+        const ceiling_t *stopped = StoppedCrusher(sector);
+        fixed_t top = stopped != NULL ? stopped->topheight : sector->ceilingheight;
+
+        if (sector->tag == line->tag && (sector->specialdata == NULL || stopped != NULL)
+         && top - sector->floorheight >= PLAYER_HEIGHT)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // A door shut, or shutting, on a timer, that opens again by itself
 // (EV_DoDoor's close30ThenOpen, lines 16 and 76: shut for 30 s;
 // P_SpawnDoorRaiseIn5Mins, sector 14): the tics until it is open the
@@ -1725,10 +1776,17 @@ static boolean OpensDoor(const line_t *line)
 // opened from two of its four faces, gaps exactly as wide as the player;
 // MAP19's three key bars, 8 units apart, are each near all of a crossing
 // between them, and counted open, the gaps looked 64 wide.
+//
+// A crusher's faces are at its top too, as the crossings under it are: the
+// player's box over its edge is in its timed run (K_CRUSHER_BOX; E2M4: the
+// strip between the line that sets the yellow key's crusher going and the
+// platform is 16 wide, too narrow while the ceiling was down, and the way
+// in was planned again and again from all sides).
 static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *standing)
 {
     sector_t *sector = side ? line->backsector : line->frontsector;
     int index = (int) (sector - sectors);
+    const ceiling_t *crusher = CrusherOf(sector);
 
     if (index == standing->sector[0] || index == standing->sector[1]
      || (side == 1 && door_walled[index] && OpensDoor(line))
@@ -1738,7 +1796,8 @@ static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *stand
         return OpenCeiling(sector);
     }
 
-    return OpeningCeiling(sector);
+    return crusher != NULL ? SDL_max(OpeningCeiling(sector), crusher->topheight)
+                           : OpeningCeiling(sector);
 }
 
 // Where a lift goes down to (EV_DoPlat): the lowest surrounding floor.
@@ -2517,6 +2576,17 @@ static k_crossing_t Judge(int portal_index, int from, double *wait, double *beyo
     {
         *wait = *beyond = TELEPORT_FREEZE;
         return K_CROSS_TELEPORT;
+    }
+
+    // Over a line that sets a crusher going, at rest now: stepped over
+    // slowly, the crusher timed once it runs (E2M4: lines 1113-1116, a
+    // square 16 round the yellow key's platform, set its fast crusher going,
+    // down to the player's height 36 tics later, too soon to get to the key
+    // and back out).
+    if (crossing == K_CROSS_OPEN && portal->line >= 0 && SetsCrusherGoing(portal->line))
+    {
+        *wait = ACTION_OVERHEAD;
+        return K_CROSS_CRUSHER;
     }
 
     return crossing;
@@ -3473,7 +3543,12 @@ k_mover_t K_Graph_SectorMover(int sector)
     const vldoor_t *door = DoorOf(s);
     const plat_t *plat = PlatOf(s);
 
-    if (s->specialdata == NULL)
+    // A crusher or lift stopped by a line keeps its thinker, doing nothing
+    // (E2M2: crusher 2, stopped low, counted as moving, and the line to set
+    // it going again was waited at, never crossed, given up as moving
+    // nothing).
+    if (s->specialdata == NULL
+     || ((const thinker_t *) s->specialdata)->function.acv == (actionf_v) NULL)
     {
         return K_MOVER_NONE;
     }

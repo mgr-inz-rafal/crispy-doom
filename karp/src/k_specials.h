@@ -68,9 +68,10 @@ void K_Specials_Build(void);
 k_trigger_t K_Specials_ExitTrigger(int special, int *secret);
 
 // Lines that move the sectors with their tag in a way that can open a way:
-// doors that open, floors, lifts, stairs, ceilings that rise; and manual
-// doors, which open the sector behind them, whatever the tag. K_TRIGGER_NONE
-// for anything else (doors that close, crushers, lights, teleporters).
+// doors that open, floors, lifts, stairs, ceilings that rise, crushers (one
+// stopped low, set going again); and manual doors, which open the sector
+// behind them, whatever the tag. K_TRIGGER_NONE for anything else (doors
+// that close, crushers stopped, lights, teleporters).
 k_trigger_t K_Specials_MoverTrigger(int special);
 
 // Doors opened by using their own line from the front (EV_VerticalDoor);
@@ -88,6 +89,14 @@ int K_Specials_MoverMoves(int special);
 
 // A line's live special: one-shot lines lose theirs once used.
 int K_Specials_LineSpecial(int line);
+
+// Walk-over lines of any kind (W1, WR, teleporters and exits too): crossing
+// one sets something off.
+int K_Specials_WalkOver(int special);
+
+// Walk-over lines that set a crusher going (EV_DoCeiling: crushAndRaise,
+// fastCrushAndRaise, silentCrushAndRaise); fast tells which.
+int K_Specials_CrusherStart(int special, int *fast);
 
 // Where a mover line sends a sector it moves, worked out from the heights
 // now: the floor and ceiling once it gets there (a door open, a floor at its
