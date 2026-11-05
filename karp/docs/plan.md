@@ -3258,6 +3258,36 @@ Who controls the player in a fight (the user's model):
   its centre on the shared edge, box touching the wall, was put in it, where every way out is
   narrower than the player. Done: `K_Map_CellAt` gives a point on an edge two cells share to
   the thicker. E1 1-7 and 9 finished.
+- **E2M8's start** (the bot never left the start room). Each face of the pillar by the start
+  builds a stair of three strips 16 deep up to an alcove 32 high, whose door line lets the
+  player out; down, the last strip is too shallow to stand in, the way to the door line too
+  narrow, and the fix looked for opened gaps only (a floor down, a ceiling up). Done: a gap
+  narrowed by a floor too high to step onto beside it is also fixed by raising the floor
+  beyond (`FixFor`). The bot presses line 20, climbs, crosses line 17 and is out in 3 s; the
+  cyberdemon fight is left for its own work (dies to it, or to its own rockets).
+- **Melee** (the user: the fist brought up and put away again a second later, the switches
+  costing the time to shoot and leaving the player open). A melee weapon rated nothing just
+  out of reach and something just in it, so a monster stepping to and fro across its reach
+  switched it in and out; it came up against monsters that do not stay in reach; a rocket
+  launcher too close rated nothing, so the fist was all that "could hurt" (E2M8: the fist for
+  the cyberdemon 104 off); and on a tie the fist came first in the table. Done, the user's
+  three weapons:
+  - the chainsaw for demons, spectres, lost souls, and a cacodemon or pain elemental with no
+    other awake monster within 512 (it keeps them in pain, hardly able to attack): twice its
+    damage (it saves ammo), never less for their health, brought up 16 inside its reach, kept
+    while they stay within 128; worth 60 as an item (was 15), a detour worth taking;
+  - the berserk fist for zombiemen and imps only, 16 inside its reach (a miss lets anything
+    tougher answer hard);
+  - the bare fist only when nothing else can fire and no ammo lies in reach.
+  With nothing else to fire, the chainsaw and the berserk fist go against anything. On a tie
+  a weapon that shoots wins. E1: the chainsaw up for a spectre at 78, kept, the spectre dead;
+  E2M4: the berserk fist for a cacodemon only with the ammo gone.
+- **Rockets that hurt the bot** (the user, jotted for later): E1M9 at 1:58.5, 63 health off
+  its own rocket - brought up for an imp 985 off, fired as a shot on the way at an imp 637 off
+  that could not come at the player, the burst near the player (a wall or a corner it walked
+  by); smaller ones on E1M3 (8), E1M5 (4, 4), E1M6 (3), and E2M8's last 19. To review: the
+  rocket's path checked from where the player will be as it walks on, walls and corners near
+  the muzzle, and no rockets as shots on the way.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate
@@ -3268,7 +3298,7 @@ Who controls the player in a fight (the user's model):
     box, so it steps 16 straight across. Wanted: a step across such a strip when the floors on
     either side are within a step of each other - a crossing between the two cells, or the
     thin-cell rule for the stretch between them only (next to the jumps, which scan gaps).
-  - E2M8's start gap (E1M7's gap: done, above).
+  - E1M7's gap and E2M8's start: done, above.
   - MAP05 riding a lift up and dropping off it, over and over; MAP06 teleporting to and fro
     between two pads.
   - E1M8 stuck by the shotgun at (-160,864) (at (144,885), twice), fists against demons.

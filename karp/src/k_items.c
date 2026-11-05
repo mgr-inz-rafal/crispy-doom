@@ -187,7 +187,10 @@ static double danger_here;
 static const int clip_ammo[NUMAMMO] = { 10, 4, 20, 1 };
 static const double ammo_worth[NUMAMMO] = { 0.15, 0.8, 0.2, 2.0 };
 
-// What having a weapon is worth, besides its ammo.
+// What having a weapon is worth, besides its ammo. The chainsaw as much as
+// the plasma rifle: it keeps demons, spectres, lost souls and a lone
+// cacodemon or pain elemental in pain, and saves the ammo they would take
+// (the user: a detour worth taking).
 static const double weapon_worth[NUMWEAPONS] =
 {
     0.0,    // fist
@@ -197,7 +200,7 @@ static const double weapon_worth[NUMWEAPONS] =
     40.0,   // rocket launcher
     60.0,   // plasma rifle
     80.0,   // BFG
-    15.0,   // chainsaw
+    60.0,   // chainsaw
     60.0,   // super shotgun
 };
 

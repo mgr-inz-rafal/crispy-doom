@@ -98,8 +98,10 @@
 #define LINE_USES_TICS (30 * TICRATE)
 #define IDLE_TICS (5 * TICRATE)
 
-// A door that leaves less headroom than the player's height is shut.
+// A door that leaves less headroom than the player's height is shut; a
+// floor more than STEP_UP higher is a step it does not climb (P_TryMove).
 #define PLAYER_HEIGHT 56.0
+#define STEP_UP 24.0
 
 // A barrel in the way (plan, 7.3) goes off with its chain: the barrels under
 // BARREL_CHAIN apart that see each other, up to MAX_CHAIN. Any of them may be
@@ -1322,10 +1324,30 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
             return true;
         }
 
+        // Narrowed by a floor too high to step onto beside it: the floor
+        // beyond raised to within a step of it opens it too (E2M8: three
+        // strips 16 deep up to an alcove 32 high, the last too shallow to
+        // stand in while it was down; the stairs a pillar face builds raise
+        // them 8, 16 and 24, and the way to the alcove's door line was never
+        // looked for).
+        wants[1] = OPENING_MOVES;
+
+        for (i = 0; i < narrowing; ++i)
+        {
+            double to_floor, to_ceiling, floor, ceiling;
+
+            K_Map_SectorHeights(to_sector, &to_floor, &to_ceiling);
+            K_Map_SectorHeights(sectors_[i], &floor, &ceiling);
+
+            if (floor - to_floor > STEP_UP)
+            {
+                wants[1] |= K_MOVE_FLOOR_UP;
+            }
+        }
+
         sectors_[0] = from_sector;
         wants[0] = OPENING_MOVES;
         sectors_[1] = to_sector;
-        wants[1] = OPENING_MOVES;
     }
     else if (crossing == K_CROSS_STEP)
     {

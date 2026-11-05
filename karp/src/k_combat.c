@@ -287,8 +287,32 @@ extern void A_SPosAttack();
 // monster with more than MELEE_HEALTH left: a baron or a cacodemon takes
 // many blows, the player standing in reach of its own (the user: the fist
 // brought up against a baron of hell, ammo full).
+//
+// Three weapons, three uses (the user: the fist up and away again a second
+// later, the monster out of reach, the switches costing the time to shoot
+// and leaving the player open; E2M8: the fist up for the cyberdemon 104 off,
+// rockets too close, bullets gone):
+// - the chainsaw is for what it keeps in pain, hardly able to attack: those
+//   that bite only (a demon, a spectre, a lost soul), and a cacodemon or a
+//   pain elemental with no other awake monster within SAW_ALONE of the
+//   player. Against them it rates SAW_GAIN times its damage (it saves the
+//   ammo), never less for their health, and is brought up MELEE_IN inside
+//   its reach and kept up while they stay within MELEE_KEEP - they come
+//   back for the next bite;
+// - the berserk fist is for the weakest, zombiemen and imps, MELEE_IN inside
+//   its reach: aimed badly, a punch that misses lets anything tougher answer
+//   hard;
+// - the bare fist is useless but when nothing else can fire and no ammo lies
+//   in reach to be fetched.
+// With nothing else to fire, the chainsaw and the berserk fist go against
+// anything. Not for a weapon in hand that cannot fire for now (rockets too
+// close). On a tie, a weapon that shoots wins.
 #define FIST_SHARE 0.25
 #define MELEE_HEALTH 200
+#define MELEE_IN 16.0
+#define MELEE_KEEP 128.0
+#define SAW_ALONE 512.0
+#define SAW_GAIN 2.0
 
 // Rockets (the user: the rocket launcher was a suicide on most levels). The
 // blast reaches BLAST less the larger of the x and y distances, less the
@@ -1983,15 +2007,106 @@ static boolean Bunched(const k_monster_t *monster)
     return false;
 }
 
+// Whether the monster is what the chainsaw is for (SAW_ALONE).
+static boolean SawFor(const k_monster_t *monster)
+{
+    int i;
+
+    if (BitesOnly(monster->type))
+    {
+        return true;
+    }
+
+    if (monster->type != MT_HEAD && monster->type != MT_PAIN)
+    {
+        return false;
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (&monsters[i] != monster && monsters[i].awake && monsters[i].distance < SAW_ALONE
+         && Kind(monsters[i].type)->cost > 0.0)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Whether ammo for a weapon held lies in reach, to be fetched (k_items.h).
+static boolean AmmoLying(void)
+{
+    int i;
+
+    for (i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+
+        if (item->present && item->reach > 0.0 && item->worth > 0.0
+         && (item->kind == K_ITEM_AMMO || item->kind == K_ITEM_WEAPON))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether melee is worth having up against the monster: the chainsaw
+// against what it is for, the berserk fist against the weakest, in reach -
+// well in (MELEE_IN) to be brought up, the chainsaw within MELEE_KEEP to be
+// kept in hand - or else only when no other weapon can fire, and, for the
+// bare fist, no ammo lies in reach.
+static boolean MeleeWorth(const player_t *player, const weapon_t *weapon,
+                          const k_monster_t *monster, boolean in_hand)
+{
+    double edge = monster->distance - monster->radius;
+    boolean punches = weapon->weapon == wp_fist && player->powers[pw_strength];
+    int i;
+
+    if (weapon->weapon == wp_chainsaw && SawFor(monster)
+     && edge <= (in_hand ? MELEE_KEEP : weapon->reach - MELEE_IN))
+    {
+        return true;
+    }
+
+    if (punches && (monster->type == MT_POSSESSED || monster->type == MT_TROOP)
+     && edge <= weapon->reach - (in_hand ? 0.0 : MELEE_IN))
+    {
+        return true;
+    }
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        if (weapons[i].reach <= 0.0 && Selectable(player, &weapons[i])
+         && CanFire(player, &weapons[i]))
+        {
+            return false;
+        }
+    }
+
+    return weapon->weapon == wp_chainsaw || punches || !AmmoLying();
+}
+
 // Rating, less for the last resorts: the pistol where it is not right, the
 // bare fist always, any melee against a tough monster, rockets at one weak
-// monster alone; none for rockets at a lost soul.
+// monster alone; none for rockets at a lost soul, nor for melee where it is
+// not worth it (MeleeWorth); more for the chainsaw against what it is for.
 static double Preference(const player_t *player, const weapon_t *weapon,
-                         const k_monster_t *monster, boolean pistol_right)
+                         const k_monster_t *monster, boolean pistol_right, boolean in_hand)
 {
     double rating = Rating(player, weapon, monster);
 
-    if (weapon->weapon == wp_pistol && !pistol_right)
+    if (weapon->reach > 0.0 && !MeleeWorth(player, weapon, monster, in_hand))
+    {
+        rating = 0.0;
+    }
+    else if (weapon->weapon == wp_chainsaw && SawFor(monster))
+    {
+        rating *= SAW_GAIN;
+    }
+    else if (weapon->weapon == wp_pistol && !pistol_right)
     {
         rating *= PISTOL_SHARE;
     }
@@ -2033,24 +2148,38 @@ static void ChooseWeapon(const player_t *player)
 
     monster = &monsters[status.target];
     pistol_right = PistolRight(player, monster);
+    current = WeaponOf(player->pendingweapon != wp_nochange ? player->pendingweapon
+                                                           : player->readyweapon);
 
+    // On a tie, a weapon that shoots over one that must be in reach (the
+    // bare fist and the pistol, both last resorts, rate alike).
     for (i = 0; i < arrlen(weapons); ++i)
     {
         double rating = Selectable(player, &weapons[i])
-                      ? Preference(player, &weapons[i], monster, pistol_right) : 0.0;
+                      ? Preference(player, &weapons[i], monster, pistol_right,
+                                   &weapons[i] == current)
+                      : 0.0;
 
-        if (rating > best_rating)
+        if (rating > best_rating
+         || (rating > 0.0 && rating >= best_rating && best != NULL && best->reach > 0.0
+             && weapons[i].reach <= 0.0))
         {
             best_rating = rating;
             best = &weapons[i];
         }
     }
 
-    current = WeaponOf(player->pendingweapon != wp_nochange ? player->pendingweapon
-                                                           : player->readyweapon);
-    current_rating = current != NULL ? Preference(player, current, monster, pistol_right)
+    current_rating = current != NULL ? Preference(player, current, monster, pistol_right, true)
                                      : 0.0;
     can_hurt = best_rating > 0.0 || current_rating > 0.0;
+
+    // The chainsaw stays up while what it is for stays near, out of reach a
+    // moment (MELEE_KEEP).
+    if (current != NULL && current->weapon == wp_chainsaw && SawFor(monster)
+     && monster->distance - monster->radius <= MELEE_KEEP)
+    {
+        best = current;
+    }
 
     if (best != NULL && best != current
      && !(current != NULL && current_rating > 0.0
