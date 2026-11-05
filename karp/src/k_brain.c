@@ -522,10 +522,15 @@ static boolean OnStack(goal_type_t type, int param)
 }
 
 // Whether a goal may go on the stack: not one that failed, not one already
-// there (it would wait for itself), and not too deep.
+// there (it would wait for itself), and not too deep. While fixes_stacked,
+// one already there counts: a detour on is measured through the fixes
+// pushed for it (ConsiderItems).
+static boolean fixes_stacked;
+
 static boolean Allowed(goal_type_t type, int param)
 {
-    return depth < MAX_GOALS && !IsFailed(type, param) && !OnStack(type, param);
+    return depth < MAX_GOALS && !IsFailed(type, param)
+        && (fixes_stacked || !OnStack(type, param));
 }
 
 // How many times a line was chosen lately: the count starts over
@@ -2907,8 +2912,15 @@ static boolean ConsiderItems(goal_t *goal)
         double on_detour, on_way = 1.0e9, on_damage;
         boolean on_fixed;
 
+        // Through the fixes pushed for it, which are on the stack (E2M5:
+        // walking to line 389 for the box of shells behind the door it
+        // opens, the door's fix was not Allowed, being there, the box
+        // counted as out of reach, the shells won - and the box the next
+        // second, for 12 s).
+        fixes_stacked = true;
         ItemDetour(start, player.cell, on->spot, end, remaining_way, remaining_damage, true,
                    &on_detour, &on_way, &on_damage, &on_fixed, NULL);
+        fixes_stacked = false;
 
         if (best_way + REPLACE_MARGIN >= on_way)
         {

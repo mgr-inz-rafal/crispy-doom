@@ -33,6 +33,7 @@ typedef enum
     K_ACTION_RIDE,          // on a lift, waiting for it to rise
     K_ACTION_USE,           // pressing the switch at the goal
     K_ACTION_SHOOT,         // shooting the gun switch at the goal
+    K_ACTION_CRUSHER,       // in front of a crusher, waiting to run under it
 } k_navaction_t;
 
 // What to do at the goal.
@@ -154,7 +155,8 @@ void K_Nav_BuildCommand(int tic, const double *aim, k_command_t *command);
 
 // Fights (k_combat.h, battle mode): whether nav can leave its route now -
 // not while working a door, lift or switch past walking up to it (but for
-// a door pressed already, or shut on a timer), nor while running a jump.
+// a door pressed already, or shut on a timer, or a crusher waited for),
+// nor while running a jump or under a crusher.
 int K_Nav_CanPause(void);
 
 // Waiting at a door, lift or switch, walked up to it (not running a jump):

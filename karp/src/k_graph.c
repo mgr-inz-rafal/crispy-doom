@@ -173,8 +173,13 @@ static const char *crossing_names[K_NUM_CROSSINGS] =
 {
     "open", "wall", "blocking line", "step too high", "no headroom",
     "locked door", "too narrow", "solid thing", "jump not possible", "door", "lift",
-    "lift ride", "teleporter", "jump",
+    "lift ride", "crusher", "teleporter", "jump",
 };
+
+// The player's run (p_user.c, p_mobj.c): forward at 50 thrusts 1.5625 map
+// units a tic each tic, and friction keeps 0.90625 of the momentum.
+#define RUN_THRUST (50.0 * 2048.0 / 65536.0)
+#define RUN_FRICTION (0xe800 / 65536.0)
 
 // Per sector: a mover ran last tic (K_Graph_Tick).
 static unsigned char *moving_sectors;
@@ -189,7 +194,7 @@ static unsigned char *door_sectors;
 static unsigned char *door_walled;      // a door with a one-sided line: set in a wall
 static unsigned char *lift_sectors;
 static unsigned char *lift_turns;       // per sector, K_Graph_LiftTurnedBack
-static k_vec2_t *door_min, *door_max;   // per door sector, its bounding box
+static k_vec2_t *sector_min, *sector_max;   // per sector, its bounding box
 
 // Per line: the teleporter it belongs to, -1 if none.
 static int *line_teleports;
@@ -1010,15 +1015,15 @@ static void FindMoverSectors(const k_map_t *map)
         }
     }
 
-    free(door_min);
-    free(door_max);
-    door_min = malloc(count * sizeof(*door_min));
-    door_max = malloc(count * sizeof(*door_max));
+    free(sector_min);
+    free(sector_max);
+    sector_min = malloc(count * sizeof(*sector_min));
+    sector_max = malloc(count * sizeof(*sector_max));
 
     for (s = 0; s < count; ++s)
     {
-        door_min[s].x = door_min[s].y = HUGE_VAL;
-        door_max[s].x = door_max[s].y = -HUGE_VAL;
+        sector_min[s].x = sector_min[s].y = HUGE_VAL;
+        sector_max[s].x = sector_max[s].y = -HUGE_VAL;
     }
 
     for (i = 0; i < numlines; ++i)
@@ -1030,17 +1035,19 @@ static void FindMoverSectors(const k_map_t *map)
         {
             s = side ? line->back_sector : line->front_sector;
 
-            if (s >= 0 && door_sectors[s])
+            if (s < 0)
             {
-                door_min[s].x = SDL_min(door_min[s].x, SDL_min(line->v1.x, line->v2.x));
-                door_min[s].y = SDL_min(door_min[s].y, SDL_min(line->v1.y, line->v2.y));
-                door_max[s].x = SDL_max(door_max[s].x, SDL_max(line->v1.x, line->v2.x));
-                door_max[s].y = SDL_max(door_max[s].y, SDL_max(line->v1.y, line->v2.y));
+                continue;
+            }
 
-                if (line->back_sector < 0)
-                {
-                    door_walled[s] = 1;
-                }
+            sector_min[s].x = SDL_min(sector_min[s].x, SDL_min(line->v1.x, line->v2.x));
+            sector_min[s].y = SDL_min(sector_min[s].y, SDL_min(line->v1.y, line->v2.y));
+            sector_max[s].x = SDL_max(sector_max[s].x, SDL_max(line->v1.x, line->v2.x));
+            sector_max[s].y = SDL_max(sector_max[s].y, SDL_max(line->v1.y, line->v2.y));
+
+            if (door_sectors[s] && line->back_sector < 0)
+            {
+                door_walled[s] = 1;
             }
         }
     }
@@ -1505,6 +1512,24 @@ static const vldoor_t *DoorOf(const sector_t *sector)
     return NULL;
 }
 
+// A crusher that runs for good (EV_DoCeiling's crushAndRaise,
+// fastCrushAndRaise, silentCrushAndRaise), or NULL: one stopped by a line
+// (P_DeactivateInStasisCeiling) keeps its thinker, doing nothing.
+static const ceiling_t *CrusherOf(const sector_t *sector)
+{
+    const thinker_t *thinker = sector->specialdata;
+    const ceiling_t *ceiling;
+
+    if (thinker == NULL || thinker->function.acp1 != (actionf_p1) T_MoveCeiling)
+    {
+        return NULL;
+    }
+
+    ceiling = (const ceiling_t *) thinker;
+    return ceiling->type == crushAndRaise || ceiling->type == fastCrushAndRaise
+        || ceiling->type == silentCrushAndRaise ? ceiling : NULL;
+}
+
 // A door shut, or shutting, on a timer, that opens again by itself
 // (EV_DoDoor's close30ThenOpen, lines 16 and 76: shut for 30 s;
 // P_SpawnDoorRaiseIn5Mins, sector 14): the tics until it is open the
@@ -1564,11 +1589,13 @@ static fixed_t OpeningCeiling(sector_t *sector)
 
 // The ceiling of a sector the player stands in: standing in a door means
 // it is open - a door shut on a timer too, waited for on the way in (E1M6:
-// sector 187, no line opens it, but line 206's timer).
+// sector 187, no line opens it, but line 206's timer). Under a crusher, it
+// is at its top: the player runs under it while it is (K_CROSS_CRUSHER).
 static fixed_t OpenCeiling(sector_t *sector)
 {
     fixed_t top = OpeningCeiling(sector);
     const vldoor_t *door = DoorOf(sector);
+    const ceiling_t *crusher = CrusherOf(sector);
 
     if (door_sectors[sector - sectors])
     {
@@ -1580,7 +1607,42 @@ static fixed_t OpenCeiling(sector_t *sector)
         top = SDL_max(top, door->topheight);
     }
 
+    if (crusher != NULL)
+    {
+        top = SDL_max(top, crusher->topheight);
+    }
+
     return top;
+}
+
+// What a crusher's round leaves to run under it (EV_DoCeiling: from its top
+// down to 8 over its floor and back, at CEILSPEED, twice that for a fast
+// one): the tics its ceiling is the player's height or more over the floor,
+// less those the player's box spends under it, running from K_CRUSHER_BACK
+// short of it across its depth (the narrower side of its bounding box), and
+// K_CRUSHER_SPARE. The usual wait for that: half the rest of the round on
+// average, then the run. -1 if the run never fits (E2M2: four crushers
+// across a corridor, 64 and 128 deep, open 16 and 40 tics of 64 and 88).
+static double CrusherWait(int sector, const ceiling_t *crusher)
+{
+    double speed = crusher->type == fastCrushAndRaise ? 2.0 : 1.0;
+    double floor = sectors[sector].floorheight / (double) FRACUNIT;
+    double top = crusher->topheight / (double) FRACUNIT;
+    double bottom = crusher->bottomheight / (double) FRACUNIT;
+    double open = 2.0 * (top - floor - PLAYER_HEIGHT / (double) FRACUNIT) / speed;
+    double round = 2.0 * (top - bottom) / speed;
+    double depth = SDL_min(sector_max[sector].x - sector_min[sector].x,
+                           sector_max[sector].y - sector_min[sector].y);
+    double under = K_Graph_RunTics(0.0, K_CRUSHER_BACK + depth + K_CRUSHER_BOX)
+                 - K_Graph_RunTics(0.0, K_CRUSHER_BACK - K_CRUSHER_BOX);
+    double slack = open - under - K_CRUSHER_SPARE;
+
+    if (slack <= 0.0 || round <= 0.0)
+    {
+        return -1.0;
+    }
+
+    return SDL_max(0.0, round - slack) * SDL_max(0.0, round - slack) / (2.0 * round) + under;
 }
 
 int K_Graph_IsDoor(int sector)
@@ -1628,8 +1690,8 @@ static double BoxGap(k_vec2_t at, k_vec2_t min, k_vec2_t max)
 // both ends tell.
 static boolean NearDoor(const standing_t *standing, int sector)
 {
-    return BoxGap(standing->a, door_min[sector], door_max[sector]) < standing->reach
-        && BoxGap(standing->b, door_min[sector], door_max[sector]) < standing->reach;
+    return BoxGap(standing->a, sector_min[sector], sector_max[sector]) < standing->reach
+        && BoxGap(standing->b, sector_min[sector], sector_max[sector]) < standing->reach;
 }
 
 // Whether using the line opens the door behind it: a manual door line,
@@ -2099,6 +2161,7 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, doubl
     int from_sector = map->subsectors[map->cells[from].subsector].sector;
     int to_sector = map->subsectors[map->cells[to].subsector].sector;
     const line_t *line = NULL;
+    const ceiling_t *crusher_b;
     sector_t *a, *b;
     fixed_t floor_a, ceiling_a, floor_b, ceiling_b;
 
@@ -2135,13 +2198,21 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, doubl
     floor_b = b->floorheight;
     ceiling_b = b->ceilingheight;
 
-    // Standing in a door means it is open.
+    // Standing in a door means it is open; under a crusher, it is up.
     ceiling_a = OpenCeiling(a);
 
     if (to_sector == from_sector)
     {
         floor_b = floor_a;
         ceiling_b = ceiling_a;
+    }
+
+    // A crusher beyond is judged at its top, and timed (K_CROSS_CRUSHER).
+    crusher_b = to_sector != from_sector ? CrusherOf(b) : NULL;
+
+    if (crusher_b != NULL)
+    {
+        ceiling_b = SDL_max(ceiling_b, crusher_b->topheight);
     }
 
     // In a cell too thin to stand in beside a far higher floor, the player
@@ -2293,6 +2364,17 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, doubl
         }
 
         return K_CROSS_HEADROOM;
+    }
+
+    // Into a crusher from outside it: waited for in front of it and run
+    // under while it is up, if a run fits in what its round leaves. From
+    // under one, the way out is open: the run goes on (E2M2: the corridor of
+    // crushers set going by line 1564 on the way in; judged by the heights
+    // of the moment, the way through was blocked, and every goal failed).
+    if (crusher_b != NULL && CrusherOf(a) == NULL)
+    {
+        *wait = CrusherWait(to_sector, crusher_b);
+        return *wait >= 0.0 ? K_CROSS_CRUSHER : K_CROSS_HEADROOM;
     }
 
     return K_CROSS_OPEN;
@@ -2787,7 +2869,8 @@ int K_Graph_Passable(k_crossing_t crossing)
 {
     return crossing == K_CROSS_OPEN || crossing == K_CROSS_DOOR
         || crossing == K_CROSS_LIFT || crossing == K_CROSS_RIDE
-        || crossing == K_CROSS_TELEPORT || crossing == K_CROSS_JUMP;
+        || crossing == K_CROSS_CRUSHER || crossing == K_CROSS_TELEPORT
+        || crossing == K_CROSS_JUMP;
 }
 
 int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found)
@@ -3291,6 +3374,92 @@ int K_Graph_MovingSector(void)
     }
 
     return -1;
+}
+
+int K_Graph_IsCrusher(int sector)
+{
+    return sector >= 0 && sector < numsectors && CrusherOf(&sectors[sector]) != NULL;
+}
+
+// T_MoveCeiling and T_MovePlane, a tic at a time: down to the bottom, a
+// crushAndRaise back at CEILSPEED (it crawls at an eighth while it crushes
+// something), up to the top, and down again.
+int K_Graph_CrusherClear(int sector, int from, int to)
+{
+    const sector_t *s = &sectors[sector];
+    const ceiling_t *crusher = CrusherOf(s);
+    fixed_t need = s->floorheight + PLAYER_HEIGHT;
+    fixed_t ceiling = s->ceilingheight, speed;
+    int direction, t;
+
+    if (crusher == NULL)
+    {
+        return ceiling >= need;
+    }
+
+    speed = crusher->speed;
+    direction = crusher->direction;
+
+    for (t = 0; t <= to; ++t)
+    {
+        if (t >= from && ceiling < need)
+        {
+            return false;
+        }
+
+        if (direction == 1)
+        {
+            if (ceiling + speed > crusher->topheight)
+            {
+                ceiling = crusher->topheight;
+                direction = -1;
+            }
+            else
+            {
+                ceiling += speed;
+            }
+        }
+        else if (direction == -1)
+        {
+            if (ceiling - speed < crusher->bottomheight)
+            {
+                ceiling = crusher->bottomheight;
+                direction = 1;
+
+                if (crusher->type != fastCrushAndRaise)
+                {
+                    speed = CEILSPEED;
+                }
+            }
+            else
+            {
+                ceiling -= speed;
+            }
+        }
+    }
+
+    return true;
+}
+
+double K_Graph_RunTics(double speed, double distance)
+{
+    double travelled = 0.0;
+    int t;
+
+    for (t = 0; t < 10 * TICRATE; ++t)
+    {
+        double step = speed + RUN_THRUST;
+
+        if (travelled + step >= distance)
+        {
+            return t + (distance - travelled) / step;
+        }
+
+        travelled += step;
+        speed = step * RUN_FRICTION;
+    }
+
+    return t;
 }
 
 double K_Graph_TimerDoor(int sector)

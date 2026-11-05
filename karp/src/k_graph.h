@@ -77,6 +77,9 @@ typedef enum
                             // line from this side, then step on
     K_CROSS_RIDE,           // off a lift that is too low (or, coming down,
                             // too high): wait on it until it gets there
+    K_CROSS_CRUSHER,        // under a crusher that runs for good: wait in
+                            // front of it, and run under it while its
+                            // ceiling stays up (judged at its top)
 
     // Passable, but not into the cell beyond:
     K_CROSS_TELEPORT,       // a teleport line, from its front side: the
@@ -154,7 +157,8 @@ k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 // middle as possible.
 k_vec2_t K_Graph_PortalPoint(int portal, int from_cell);
 
-// Open, passable after an action (a door, a lift), a teleporter or a jump.
+// Open, passable after an action (a door, a lift) or a wait (a crusher), a
+// teleporter or a jump.
 int K_Graph_Passable(k_crossing_t crossing);
 
 // Whether going through the cell from one stretch of its border to another
@@ -297,6 +301,29 @@ void K_Graph_LiftRidden(int sector);
 // A sector whose floor, ceiling, door or lift is on its way somewhere, or
 // -1 if none. Perpetual lifts and crushers, which never stop, do not count.
 int K_Graph_MovingSector(void);
+
+// Crushers (K_CROSS_CRUSHER): nav waits K_CRUSHER_BACK short of one, along
+// the route, and runs under it once its ceiling will stay up all the way
+// through. The player's box is under it from K_CRUSHER_BOX short of where
+// the route goes in (its radius, more for a slanting way in) to
+// K_CRUSHER_BOX past where it comes out, and the ceiling stays up
+// K_CRUSHER_SPARE tics more.
+#define K_CRUSHER_BACK 96.0
+#define K_CRUSHER_BOX 23.0
+#define K_CRUSHER_SPARE 3
+
+// Whether a crusher that runs for good holds the sector (not one stopped:
+// in stasis it does nothing).
+int K_Graph_IsCrusher(int sector);
+
+// Whether a crusher's ceiling stays the player's height or more over its
+// floor through tics `from` to `to` from now, as T_MoveCeiling moves it;
+// whether the sector's is now, if no crusher holds it.
+int K_Graph_CrusherClear(int sector, int from, int to);
+
+// Tics the player takes to run `distance` along a straight way, setting off
+// at `speed` along it, thrusting fully forward (p_user.c, p_mobj.c).
+double K_Graph_RunTics(double speed, double distance);
 
 #ifdef __cplusplus
 }

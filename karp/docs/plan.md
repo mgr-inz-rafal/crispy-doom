@@ -3206,6 +3206,37 @@ Who controls the player in a fight (the user's model):
   06 and 14 died where the build before finished (one run each, eight at once; MAP04 at 32.9 s,
   killed by an imp, in both runs); not looked into - the weapon detours there were short, so
   likely the creep.
+- **Crushers** (the user, E2M2: the bot stopped for good at a corridor of four crushers). Line
+  1564 sets crushers 2, 21, 23, 46 and 48 going (tag 16, fast) as the bot walks in; judged by
+  the heights of the moment, the corridor was a wall whenever a ceiling was down, the route
+  went round by the blue door, and every goal failed. Done:
+  - A crossing into a crusher that runs for good (`K_CROSS_CRUSHER`, k_graph.c) is judged at
+    its top, with a wait for the pathfinder: half the rest of its round once a run under it
+    from 96 short is taken off what it leaves open (its depth from its bounding box); none
+    if the run never fits. Crossings under one or out of it are judged at its top too.
+  - Nav (`K_ACTION_CRUSHER`): stops 96 short of it along the route, facing it, and runs once
+    the ceiling, worked out tic by tic as `T_MoveCeiling` moves it
+    (`K_Graph_CrusherClear`), stays the player's height up from when its box gets under it to
+    when it is out, timed from where it stands and how fast it goes (`K_Graph_RunTics`), 2
+    tics late, 3 to spare; at speed it runs on without stopping if that fits already. Facing
+    the way while running; nothing pauses the route under a crusher (fights, dodges, holds).
+    Given up after 10 s of waiting.
+  E2M2 finished (144 s, 188 health): waited for two crushers, ran straight under three, no
+  hit. E2M1-5 finished; no-monsters Doom II 29/29.
+- **A detour swapped every second** (the user, E2M5 at 2:30: the bot turned back from the
+  exit and went to and fro). The box of shells behind a door opened by walk-over line 389
+  replaced the shells nearer; the next second, walking to the line, the box counted as out of
+  reach - its fix, the door, was not `Allowed`, being on the stack already - so the shells
+  won back, and so on for 12 s. Done: the detour on is measured through the fixes pushed for
+  it.
+- **A crusher sprung by creeping** (the user, E2M4 at 3:20). The yellow key lies in sector
+  65, whose fast crusher lines 1113-1116 (a square round it, in sector 58) set going. A hold
+  short of area 40 crept on over line 1113 at 3 units a tic; the ceiling, down to the
+  player's height in 36 tics, caught the bot (about 25 health, stuck 35 tics), and it got
+  the key once the ceiling rose. Left: creeping should end short of walk-over lines that do
+  something, and of crushers; and a crusher the route itself sets going (or one running,
+  with the goal under it) wants the way in and back out timed - not judged till it runs, as
+  now.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate

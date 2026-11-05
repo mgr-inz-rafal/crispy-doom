@@ -28,6 +28,13 @@
 //	Gun switches are worked the same way, but shot: with a hitscan weapon,
 //	brought up first if need be, and only once it is ready to fire.
 //
+//	Crushers that run for good: the player stops K_CRUSHER_BACK short of
+//	one, facing it, and runs under it once its ceiling will stay up from
+//	when the player's box gets under it to when it is out, timed from where
+//	it stands and how fast it goes (K_Graph_CrusherClear, K_Graph_RunTics);
+//	at speed, it goes on without stopping if the timing works already.
+//	Nothing pauses the route under one.
+//
 //	Teleporters: the player runs across the line, and the route goes on
 //	from the destination. No slowing down: a teleport stops the player
 //	anyway, and freezes it for a moment, which the prediction knows.
@@ -172,6 +179,12 @@
 // waited at, for up to BUSY_TICS, and pressed once the sector stops.
 #define BUSY_TICS (15 * TICRATE)
 
+// A crusher is timed CRUSHER_LATENCY tics late (the commands already sent
+// run first), and given up on after CRUSHER_TICS waiting: its round never
+// leaves time to run under it from here.
+#define CRUSHER_LATENCY 2
+#define CRUSHER_TICS (10 * TICRATE)
+
 // Further than the player can move in a tic (MAXMOVE on each axis): it
 // teleported.
 #define TELEPORT_JUMP 64.0
@@ -280,6 +293,15 @@ static action_t action;
 static int dry_point = -1;
 static double dry_back;
 static int dry_since;
+
+// Running under a crusher: the route crossing into it, which reads open
+// meanwhile, -1 when not; the crusher, the route cell past it, where the
+// route comes out from under it, and since when (status.tics).
+static int crusher_run = -1;
+static int crusher_sector;
+static int crusher_past;
+static k_vec2_t crusher_exit;
+static int crusher_since;
 
 static sent_t sent[SENT_SIZE];
 
@@ -489,9 +511,12 @@ static int ExitPoint(int r)
     return FirstPointIn(r + 1) - 1;
 }
 
+// The crossing out of route cell r - open into the crusher being run under.
 static k_crossing_t CrossingOut(int r)
 {
-    return K_Graph_CanCross(path.portals[r], path.cells[r]);
+    k_crossing_t crossing = K_Graph_CanCross(path.portals[r], path.cells[r]);
+
+    return crossing == K_CROSS_CRUSHER && r == crusher_run ? K_CROSS_OPEN : crossing;
 }
 
 // Whether the route leaves cell r by teleporter, as planned: the leg
@@ -962,7 +987,9 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     int target = status.target;
     int last = path.num_points - 1;
     k_vec2_t at = { body->x, body->y };
-    const double *face = aim;
+    // Under a crusher, facing the way: full speed, as it was timed
+    // (strafing alone tops out at 13.3 units a tic).
+    const double *face = crusher_run >= 0 ? NULL : aim;
     double distance, speed, vx, vy, jump_face;
     boolean steady;
 
@@ -1190,18 +1217,20 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
 
     if (action.phase == PHASE_APPROACH)
     {
-        // Face the line on the way, if it is close.
+        // Face the line on the way, if it is close; a crusher all the way.
         SteerToStop(body, action.spot,
-                    Distance(at, action.spot) < 96.0 ? &action.face : aim, command);
+                    Distance(at, action.spot) < 96.0 || action.kind == K_ACTION_CRUSHER
+                    ? &action.face : aim, command);
         return;
     }
 
     // Waiting for a door or lift, or riding one, the facing is free until
     // the next press; not on a ride that ends in a jump, nor at a gun switch
-    // (fire is held facing it).
+    // (fire is held facing it), nor in front of a crusher (the run under it
+    // starts at full speed).
     SteerToHold(body, action.spot, aim != NULL && action.phase == PHASE_WAIT
-                                   && !action.jump_ride
-                                   && action.kind != K_ACTION_SHOOT ? aim : &action.face,
+                                   && !action.jump_ride && action.kind != K_ACTION_SHOOT
+                                   && action.kind != K_ACTION_CRUSHER ? aim : &action.face,
                 command);
 
     // Fire is held long enough for any weapon to see it: the chainsaw reads
@@ -1388,7 +1417,8 @@ static void Fail(const char *problem)
 
 static void ActionText(void)
 {
-    static const char *kinds[] = { "", "door", "lift", "lift ride", "switch", "gun switch" };
+    static const char *kinds[] = { "", "door", "lift", "lift ride", "switch", "gun switch",
+                                   "crusher" };
 
     if (action.line >= 0)
     {
@@ -1504,6 +1534,66 @@ static k_vec2_t ClearSpotAlong(k_vec2_t spot, k_vec2_t a, k_vec2_t b)
     return spot;
 }
 
+// The sector of route cell r.
+static int RouteSector(int r)
+{
+    const k_map_t *map = K_Map_Get();
+
+    return map->subsectors[map->cells[path.cells[r]].subsector].sector;
+}
+
+// Where to wait for the crusher at the crossing out of route cell r:
+// K_CRUSHER_BACK back along the route from it, walked, not back under
+// another crusher (E2M2's are 160 to 224 apart).
+static k_vec2_t CrusherSpot(int r)
+{
+    int k = ExitPoint(r);
+    k_vec2_t spot = path.points[k];
+    double left = K_CRUSHER_BACK;
+
+    while (k > 0 && left > 0.0 && path.legs[k - 1] == K_LEG_WALK
+        && !K_Graph_IsCrusher(RouteSector(path.leg_cells[k - 1])))
+    {
+        k_vec2_t before = path.points[k - 1];
+        double length = Distance(spot, before);
+
+        if (length >= left)
+        {
+            spot.x += (before.x - spot.x) * left / length;
+            spot.y += (before.y - spot.y) * left / length;
+            break;
+        }
+
+        left -= length;
+        spot = before;
+        --k;
+    }
+
+    return spot;
+}
+
+// The first route cell past the crusher the crossing out of route cell r
+// goes under (the route's end if it stops under it).
+static int CrusherPast(int r)
+{
+    int sector = RouteSector(r + 1);
+    int past = r + 1;
+
+    while (past < path.num_cells && RouteSector(past) == sector)
+    {
+        ++past;
+    }
+
+    return past;
+}
+
+// Where the route comes out from under the crusher it goes under from route
+// cell r up to route cell past.
+static int CrusherExitPoint(int past)
+{
+    return past < path.num_cells ? ExitPoint(past - 1) : path.num_points - 1;
+}
+
 // The crossing out of route cell r needs a door or lift.
 static void StartAction(k_crossing_t crossing, int r)
 {
@@ -1532,7 +1622,8 @@ static void StartAction(k_crossing_t crossing, int r)
 
     memset(&action, 0, sizeof(action));
     action.kind = crossing == K_CROSS_DOOR ? K_ACTION_DOOR
-                : crossing == K_CROSS_LIFT ? K_ACTION_LIFT : K_ACTION_RIDE;
+                : crossing == K_CROSS_LIFT ? K_ACTION_LIFT
+                : crossing == K_CROSS_CRUSHER ? K_ACTION_CRUSHER : K_ACTION_RIDE;
     action.route_cell = r;
     action.line = portal->line;
     action.a = portal->a;
@@ -1559,7 +1650,8 @@ static void StartAction(k_crossing_t crossing, int r)
 
     action.spot.x = middle.x + nx * ACTION_DISTANCE;
     action.spot.y = middle.y + ny * ACTION_DISTANCE;
-    action.spot = ClearSpotAlong(action.spot, action.a, action.b);
+    action.spot = action.kind == K_ACTION_CRUSHER ? CrusherSpot(r)
+                                                  : ClearSpotAlong(action.spot, action.a, action.b);
     action.face = atan2(-ny, -nx);
     action.start_tics = status.tics;
     action.press_tic = -2;
@@ -1603,6 +1695,10 @@ static void StartAction(k_crossing_t crossing, int r)
             }
             break;
 
+        // Logged when it waits, or runs.
+        case K_ACTION_CRUSHER:
+            break;
+
         default:
             K_Log(K_LOG_NAV, K_LOG_INFO, "riding the lift (sector %d) to the way off",
                   action.sector);
@@ -1624,6 +1720,11 @@ static void FinishAction(void)
         case K_ACTION_LIFT:
             K_Log(K_LOG_NAV, K_LOG_INFO, "lift at line %d down after %.1f s",
                   action.line, seconds);
+            break;
+
+        case K_ACTION_CRUSHER:
+            K_Log(K_LOG_NAV, K_LOG_INFO, "the crusher (sector %d) at line %d stopped after "
+                  "%.1f s", action.sector, action.line, seconds);
             break;
 
         default:
@@ -1651,6 +1752,84 @@ static void FailAction(const char *what)
     K_Log(K_LOG_NAV, K_LOG_WARN, "%s", problem);
     EndAction();
     Fail(problem);
+}
+
+// How far the player has to go along the route to route point k.
+static double RouteAlong(k_vec2_t at, int k)
+{
+    double along;
+    int j;
+
+    if (k < status.target)
+    {
+        return Distance(at, path.points[k]);
+    }
+
+    along = Distance(at, path.points[status.target]);
+
+    for (j = status.target; j < k; ++j)
+    {
+        along += Distance(path.points[j], path.points[j + 1]);
+    }
+
+    return along;
+}
+
+// Whether a run under the crusher at the crossing out of route cell r,
+// begun now at the player's speed along the way, is out before its ceiling
+// comes down (K_CRUSHER_BOX, K_CRUSHER_SPARE), CRUSHER_LATENCY tics late.
+static boolean CrusherFits(k_vec2_t at, int r)
+{
+    int in = ExitPoint(r), out = CrusherExitPoint(CrusherPast(r));
+    k_vec2_t ahead = path.points[SDL_min(status.target, in)];
+    double length = Distance(at, ahead), speed = 0.0, enter, leave;
+    k_pose_t pose;
+
+    if (K_Map_GetPlayer(&pose) && length > 1e-6)
+    {
+        speed = SDL_max(0.0, (pose.momx * (ahead.x - at.x) + pose.momy * (ahead.y - at.y))
+                             / length);
+    }
+
+    enter = K_Graph_RunTics(speed, SDL_max(0.0, RouteAlong(at, in) - K_CRUSHER_BOX));
+    leave = K_Graph_RunTics(speed, RouteAlong(at, out) + K_CRUSHER_BOX);
+    return K_Graph_CrusherClear(action.sector, (int) enter + CRUSHER_LATENCY - 1,
+                                (int) ceil(leave) + CRUSHER_LATENCY + K_CRUSHER_SPARE);
+}
+
+// In front of a crusher: once a run under it fits, the crossing reads open
+// for the run (crusher_run) and the action is over; till then, to the spot
+// and waiting there.
+static boolean UpdateCrusher(k_vec2_t at, double speed, int r)
+{
+    if (CrusherFits(at, r))
+    {
+        crusher_run = r;
+        crusher_sector = action.sector;
+        crusher_past = CrusherPast(r);
+        crusher_exit = path.points[CrusherExitPoint(crusher_past)];
+        crusher_since = status.tics;
+        K_Log(K_LOG_NAV, K_LOG_INFO, "running under the crusher (sector %d) at line %d%s",
+              action.sector, action.line, action.phase == PHASE_WAIT ? ", after waiting" : "");
+        EndAction();
+        return true;
+    }
+
+    if (action.phase == PHASE_APPROACH
+     && ((Distance(at, action.spot) < SPOT_RADIUS && speed < 1.5)
+         || action.tics > APPROACH_TICS))
+    {
+        SetPhase(PHASE_WAIT);
+        K_Log(K_LOG_NAV, K_LOG_INFO, "waiting at (%.0f,%.0f) for the crusher (sector %d) at "
+              "line %d to rise", action.spot.x, action.spot.y, action.sector, action.line);
+    }
+    else if (action.phase == PHASE_WAIT && action.tics > CRUSHER_TICS)
+    {
+        FailAction("the crusher never leaves time to run under it");
+        return false;
+    }
+
+    return true;
 }
 
 // At the goal: press, or shoot, the switch the player was sent to.
@@ -1830,6 +2009,11 @@ static boolean UpdateAction(k_vec2_t at, double speed)
 
     action.mover = mover;
 
+    if (action.kind == K_ACTION_CRUSHER)
+    {
+        return UpdateCrusher(at, speed, r);
+    }
+
     switch (action.phase)
     {
         case PHASE_APPROACH:
@@ -1989,6 +2173,7 @@ static void StartRoute(void)
 {
     MarkCareful();
     dry_point = -1;
+    crusher_run = -1;
     unstick_tics = 0;
     status.target = 1;
     status.route_cell = 0;
@@ -2089,6 +2274,15 @@ static boolean Progress(k_vec2_t at, const k_pose_t *pose, boolean teleported)
         M_snprintf(why, sizeof(why), "off the route in cell %d at (%.0f,%.0f)",
                    cell, at.x, at.y);
         return Replan(at, why);
+    }
+
+    // Out from under the crusher, its box too.
+    if (crusher_run >= 0 && status.route_cell >= crusher_past
+     && Distance(at, crusher_exit) > K_CRUSHER_BOX)
+    {
+        K_Log(K_LOG_NAV, K_LOG_INFO, "out from under the crusher (sector %d) after %.1f s",
+              crusher_sector, (double) (status.tics - crusher_since) / TICRATE);
+        crusher_run = -1;
     }
 
     limit = TargetLimit();
@@ -2563,6 +2757,7 @@ void K_Nav_Reset(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    crusher_run = -1;
     unstick_tics = 0;
     paused = false;
     memset(&status, 0, sizeof(status));
@@ -2808,6 +3003,7 @@ void K_Nav_Clear(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    crusher_run = -1;
     unstick_tics = 0;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
@@ -2828,16 +3024,30 @@ int K_Nav_CarefulLeg(int leg)
         && (careful[leg] || careful[leg + 1]);
 }
 
+// Whether the player stands under a crusher that runs (a route planned
+// again under it runs on out: k_graph.h).
+static boolean UnderCrusher(void)
+{
+    const k_map_t *map = K_Map_Get();
+    k_pose_t pose;
+
+    return K_Map_GetPlayer(&pose) && pose.cell >= 0
+        && K_Graph_IsCrusher(map->subsectors[map->cells[pose.cell].subsector].sector);
+}
+
 int K_Nav_CanPause(void)
 {
     // At a door shut on a timer, or one pressed already, there is nothing
     // to lose: it opens all the same, and the wait is begun again after (a
-    // hold backs off a door as it rises: k_combat.c).
+    // hold backs off a door as it rises: k_combat.c). Nor in front of a
+    // crusher: it is timed again after. Under one, the run goes on.
     return status.state != K_NAV_DRIVING
         || ((action.kind == K_ACTION_NONE || action.phase == PHASE_APPROACH
+             || action.kind == K_ACTION_CRUSHER
              || (action.kind == K_ACTION_DOOR
                  && (K_Graph_TimerDoor(action.sector) >= 0.0 || action.phase == PHASE_WAIT)))
-            && jump_phase == JUMP_NONE && !OnJump(status.target));
+            && jump_phase == JUMP_NONE && !OnJump(status.target)
+            && crusher_run < 0 && !UnderCrusher());
 }
 
 int K_Nav_Waiting(void)
