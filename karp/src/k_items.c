@@ -30,9 +30,9 @@
 //	Some items are worth breaking a fight off for, close by (urgent):
 //	health when LOW or CRITICAL (not a lone health bonus), a weapon the
 //	player lacks, and the ammo running out - for a strong weapon while
-//	firepower is LOW (k_condition.h), any while ammo is - from ammo,
-//	weapons and backpacks; the health, and the ammo when ammo or firepower
-//	is LOW, however far (escape). A
+//	firepower is LOW or CRITICAL (k_condition.h), any while ammo is LOW -
+//	from ammo, weapons and backpacks; the health, and the ammo when ammo is
+//	LOW or firepower CRITICAL, however far (escape). A
 //	weapon better than the pistol, at a pistol start, goes before other
 //	items (first), and pays for a long detour.
 //
@@ -356,18 +356,19 @@ static boolean WeaponItem(spritenum_t sprite, weapontype_t *weapon)
     }
 }
 
-// Ammo running out that matters: firepower is LOW (k_condition.h: no strong
-// weapon held can fire), and the ammo fires a strong weapon held (the user,
-// Doom II MAP03: out of shells, with bullets left for the pistol - ammo not
-// LOW - the bot walked past the shotguns the shotgun guys dropped, and up a
-// lift to the imps with the pistol). Not the best weapon's ammo while
-// another strong weapon fires (MAP10: cells below a BFG shot, the shotgun
-// loaded, were gone for 6467 units out of the way, any detour paying).
+// Ammo running out that matters: firepower is LOW or CRITICAL (k_condition.h:
+// no strong weapon held has more than a few fights' ammo left, or can fire),
+// and the ammo fires a strong weapon held (the user, Doom II MAP03: out of
+// shells, with bullets left for the pistol - ammo not LOW - the bot walked
+// past the shotguns the shotgun guys dropped, and up a lift to the imps with
+// the pistol). Not the best weapon's ammo while another strong weapon fires
+// (MAP10: cells below a BFG shot, the shotgun loaded, were gone for 6467
+// units out of the way, any detour paying).
 static boolean Wanted(const player_t *player, ammotype_t ammo)
 {
     int w;
 
-    if (ammo == am_noammo || K_Condition_Get()->firepower != K_NEED_LOW)
+    if (ammo == am_noammo || K_Condition_Get()->firepower == K_NEED_OK)
     {
         return false;
     }
@@ -569,8 +570,8 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
 
 // Whether the item gives the ammo that is running out (Wanted; while ammo is
 // LOW, any for a weapon held): ammo, a weapon, a backpack. A strong weapon,
-// while firepower is LOW, held or not: it brings its ammo - but for a pistol
-// start, where weapons go first anyway (k_items.h: first).
+// while firepower is LOW or CRITICAL, held or not: it brings its ammo - but
+// for a pistol start, where weapons go first anyway (k_items.h: first).
 static boolean RunningOut(const player_t *player, const entry_t *entry, boolean low)
 {
     ammotype_t ammo;
@@ -586,7 +587,7 @@ static boolean RunningOut(const player_t *player, const entry_t *entry, boolean 
     {
         return weapon != wp_chainsaw
             && (low || (K_Condition_Strong(weapon) && !PistolOnly(player)
-                        && K_Condition_Get()->firepower == K_NEED_LOW));
+                        && K_Condition_Get()->firepower != K_NEED_OK));
     }
 
     if (entry->sprite != SPR_BPAK)
@@ -830,7 +831,7 @@ void K_Items_Tick(void)
         item->escape = item->urgent
                     && (item->kind == K_ITEM_HEALTH
                         || (entry->running_out && (condition->ammo == K_NEED_LOW
-                                                   || condition->firepower == K_NEED_LOW)));
+                                                   || condition->firepower == K_NEED_CRITICAL)));
     }
 }
 

@@ -34,14 +34,21 @@
 static const int ammo_low[NUMAMMO] = { 20, 5, 40, 3 };     // clip, shell, cell, misl
 static const int ammo_ok[NUMAMMO] = { 30, 8, 60, 5 };
 
-// Firepower is LOW when no strong weapon held (K_Condition_Strong) has its
-// ammo at the LOW mark: the pistol, the fist or the chainsaw is what the
-// player fights with, however many bullets it has (the user, Doom II MAP10:
-// out of shells, cells below a BFG shot, bullets plenty - ammo not LOW - the
-// bot fought lost souls, demons and a pain elemental with the pistol, the
-// shotguns the shotgun guys dropped lying by). OK again once one has its
-// ammo at the OK mark (MAP06: a shotgun picked up, 8 shells, was not
-// enough, and the bot broke off a fight for more).
+// Firepower is CRITICAL when no strong weapon held (K_Condition_Strong) has
+// its ammo at the CRITICAL mark: the pistol, the fist or the chainsaw is
+// what the player fights with, however many bullets it has (the user, Doom
+// II MAP10: out of shells, cells below a BFG shot, bullets plenty - ammo not
+// LOW - the bot fought lost souls, demons and a pain elemental with the
+// pistol, the shotguns the shotgun guys dropped lying by). Back above it
+// once one has its ammo at the CRITICAL_OK mark (MAP06: a shotgun picked
+// up, 8 shells, was not enough, and the bot broke off a fight for more).
+// LOW the same way at higher marks: running short, a few fights left (the
+// user, E2M5: with 7 shells, firepower OK, the bot ran past 4 shells, and
+// later fought on with the pistol - "even more aggressive collecting ammo").
+static const int firepower_critical[NUMAMMO] = { 20, 5, 40, 3 };
+static const int firepower_critical_ok[NUMAMMO] = { 30, 8, 60, 5 };
+static const int firepower_low[NUMAMMO] = { 40, 10, 60, 5 };
+static const int firepower_ok[NUMAMMO] = { 60, 16, 100, 8 };
 
 static k_conditionstatus_t status;
 static boolean judged;
@@ -99,28 +106,36 @@ static k_need_t JudgeAmmo(const player_t *player, k_need_t was)
     return above_ok ? K_NEED_OK : K_NEED_LOW;
 }
 
-static k_need_t JudgeFirepower(const player_t *player, k_need_t was)
+// Whether some strong weapon held has its ammo at the mark.
+static boolean StrongAt(const player_t *player, const int *mark)
 {
-    boolean at_low = false, above_ok = false;
     int w;
 
     for (w = 0; w < NUMWEAPONS; ++w)
     {
-        ammotype_t ammo = weaponinfo[w].ammo;
-
-        if (player->weaponowned[w] && K_Condition_Strong(w))
+        if (player->weaponowned[w] && K_Condition_Strong(w)
+         && player->ammo[weaponinfo[w].ammo] >= mark[weaponinfo[w].ammo])
         {
-            at_low |= player->ammo[ammo] >= ammo_low[ammo];
-            above_ok |= player->ammo[ammo] >= ammo_ok[ammo];
+            return true;
         }
     }
 
-    if (was == K_NEED_OK)
+    return false;
+}
+
+static k_need_t JudgeFirepower(const player_t *player, k_need_t was)
+{
+    if (!StrongAt(player, was == K_NEED_CRITICAL ? firepower_critical_ok : firepower_critical))
     {
-        return at_low ? K_NEED_OK : K_NEED_LOW;
+        return K_NEED_CRITICAL;
     }
 
-    return above_ok ? K_NEED_OK : K_NEED_LOW;
+    if (!StrongAt(player, was == K_NEED_OK ? firepower_low : firepower_ok))
+    {
+        return K_NEED_LOW;
+    }
+
+    return K_NEED_OK;
 }
 
 static k_need_t JudgeHealth(int health, k_need_t was)
@@ -172,7 +187,7 @@ void K_Condition_Tick(void)
 
     status.condition = status.health == K_NEED_CRITICAL ? K_CONDITION_CRITICAL
                      : status.health == K_NEED_LOW ? K_CONDITION_LOW_HEALTH
-                     : status.ammo == K_NEED_LOW || status.firepower == K_NEED_LOW
+                     : status.ammo == K_NEED_LOW || status.firepower != K_NEED_OK
                      ? K_CONDITION_LOW_AMMO
                      : K_CONDITION_COMFY;
 

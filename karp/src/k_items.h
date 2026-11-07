@@ -56,11 +56,11 @@ typedef struct
                             // health when LOW or CRITICAL (a stimpack's worth
                             // at least, with those beside it), a weapon the
                             // player lacks, and the ammo for a strong weapon
-                            // while firepower is LOW (any, while ammo is
-                            // LOW), from ammo, a weapon or a backpack
+                            // while firepower is LOW or CRITICAL (any, while
+                            // ammo is LOW), from ammo, a weapon or a backpack
     int escape;             // urgent, and worth leaving a fight for however
                             // far: the health, when LOW or CRITICAL, and the
-                            // ammo when ammo or firepower is LOW
+                            // ammo when ammo is LOW or firepower CRITICAL
     int first;              // a weapon better than the pistol while nothing
                             // better is held (a pistol start): goes before
                             // other items, but for health when CRITICAL

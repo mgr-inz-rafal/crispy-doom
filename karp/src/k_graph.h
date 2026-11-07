@@ -231,7 +231,8 @@ int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found);
 // step onto or too low to fit under) or standing block, up to reach; reach
 // if none is nearer, 0 off the floor. Distances are measured as the engine
 // collides the player's square box: the larger of the x and y distances,
-// so a box of radius r overlaps what is nearer than r.
+// so a box of radius r overlaps what is nearer than r. A door is open only
+// where the point is in it: else as it is now.
 double K_Graph_Clearance(k_vec2_t at, double reach);
 
 // Where the player can stand to pick up a thing of radius 20 lying at `at`

@@ -18,7 +18,7 @@ typedef enum
 {
     K_NEED_OK,
     K_NEED_LOW,
-    K_NEED_CRITICAL,        // health only
+    K_NEED_CRITICAL,        // health and firepower only
 } k_need_t;
 
 // From the lowest priority to the top.
@@ -33,8 +33,9 @@ typedef enum
 typedef struct
 {
     k_need_t ammo;
-    k_need_t firepower;     // LOW: no strong weapon held can fire, the
-                            // pistol is the best the player has
+    k_need_t firepower;     // CRITICAL: no strong weapon held can fire,
+                            // the pistol is the best the player has; LOW:
+                            // running short of that
     k_need_t health;
     k_need_t armour;
     k_condition_t condition;    // the worst of the needs; armour alone does

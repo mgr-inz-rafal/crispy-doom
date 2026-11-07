@@ -69,6 +69,11 @@ static k_areamap_t areamap;
 static int area_capacity;
 static int cell_capacity;
 
+// Per portal, what it is to the areas (JoiningPortals), for the map
+// generation the areas belong to.
+static unsigned char *portal_joins;
+static int num_portal_joins;
+
 // Per area: its sample cells; and the next area to look at.
 static int (*samples)[SAMPLES];
 static int *num_samples;
@@ -465,13 +470,16 @@ void K_Area_Build(void)
     if (map->num_cells == 0)
     {
         areamap.generation = map->generation;
+        num_portal_joins = 0;
         return;
     }
 
     joins = JoiningPortals(map, graph);
     count = Grow(map, graph, joins, areamap.area_of);
     MergeSmall(map, graph, joins, areamap.area_of, count);
-    free(joins);
+    free(portal_joins);
+    portal_joins = joins;
+    num_portal_joins = graph->num_portals;
 
     // Numbered anew without the areas merged away, in the order of their
     // first cells.
@@ -694,6 +702,12 @@ int K_Area_Of(int cell)
 {
     return areamap.generation == K_Map_Get()->generation && cell >= 0
         && cell < K_Map_Get()->num_cells ? areamap.area_of[cell] : -1;
+}
+
+int K_Area_OpenFloor(int portal)
+{
+    return areamap.generation == K_Map_Get()->generation && portal >= 0
+        && portal < num_portal_joins && portal_joins[portal] == JOINS;
 }
 
 int K_Area_Safe(int area)

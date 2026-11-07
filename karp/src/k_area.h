@@ -69,6 +69,11 @@ int K_Area_Of(int cell);
 // what a lone zombieman would cost.
 int K_Area_Safe(int area);
 
+// Whether the floor goes on across a portal as one room's: no door or lift,
+// no narrow opening. An area border there only cuts a large open space into
+// pieces (SPAN).
+int K_Area_OpenFloor(int portal);
+
 #ifdef __cplusplus
 }
 #endif

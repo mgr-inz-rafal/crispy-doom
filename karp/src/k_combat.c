@@ -329,9 +329,16 @@ extern void A_SPosAttack();
 // for INVULN_LEFT tics more at least. And rockets are dear: against a
 // monster with no more than ROCKET_HEALTH left and alone (no other within
 // BUNCHED of it, where the blast would get it too) they rate ROCKET_SHARE
-// of their damage - no rocket for a zombieman or an imp (the user).
+// of their damage - no rocket for a zombieman or an imp (the user). The
+// player's own run along the rocket's way counts (RocketGain): the rocket
+// gains only ROCKET_SPEED less that on it, so every burst is nearer by that
+// share - at a full run a fifth as far (the user, E2M6: 64 health off its
+// own rocket; E1M9: shots on the way at imps and zombiemen 400 to 500 off,
+// the player running after each rocket at 13 to 16 a tic and caught in the
+// burst, on the imp, a barrel or a ledge - once killed).
 #define ROCKET_RADIUS 11.0
 #define ROCKET_SPEED 20.0
+#define MISSILE_SPAWN 32.0
 #define ROCKET_SAFE (BLAST + PLAYER_RADIUS + 48.0)
 #define ROCKET_MIN (ROCKET_SAFE * 1.4142)
 #define SOUL_CLEAR 384.0
@@ -485,7 +492,12 @@ extern void A_SPosAttack();
 // area, which was then not safe, and the bot walked in to fight it at 65
 // units) - when it is about to enter, within HOLD_START along it, an area
 // that is not safe with HOLD_RISK or more of monsters inside (AreaRisk),
-// the route waits - begun no further off, so the route walks the player up
+// through a narrow way (a door or lift, a narrow opening: over open floor
+// there is no way in for them to come through one by one, and room to move
+// aside in - the user, E2M9: held in the soulsphere's pit in the middle of
+// an open room, short of another piece of it, the bot was surrounded; not
+// begun on an island either, OnIsland), the route waits - begun no further
+// off, so the route walks the player up
 // to it, not a straight line (Doom II MAP04: begun 290 short of the spot,
 // the bot walked to it over a floor that hurts, 40 health) - and is kept,
 // out to HOLD_AHEAD, as the monsters come and make the player's own
@@ -727,6 +739,7 @@ static boolean can_hurt;            // some weapon in hand can hurt the target
 static int last_switch;             // leveltime of the last switch pressed
 static const mobj_t *shot_mo;       // what the last press read was fired at
 static int shot_tic = -1;           // and the tic its shot leaves (lead)
+static k_vec2_t shot_at;            // where it was last seen
 static int unclear_tic;             // the area was last not clear (UpdateClear)
 static int last_health = -1;
 
@@ -1404,14 +1417,44 @@ static boolean SoulNear(void)
     return false;
 }
 
-// The damage a shot of the weapon would do, on average, to a thing of the
-// radius at the distance: 0 if it cannot fire, the thing is out of a melee
-// weapon's reach, a barrel is beside the player (a blow could set it off),
-// or a rocket could hurt the player too (ROCKET_MIN, SOUL_CLEAR).
-static double ShotDamage(const player_t *player, const weapon_t *weapon, double distance,
-                         double radius)
+// What share of its flight a rocket fired along the unit way (ux, uy) gains
+// on the player: 1 standing or running off, less the faster it runs along.
+// In a fight, as it runs now; on the way, as the route runs on after the
+// shot, at RUN_SPEED toward the next waypoint (E1M9: fired at a standstill,
+// the player then ran on at 16 a tic behind the rocket into its burst).
+#define RUN_SPEED 16.0
+
+static double RocketGain(const player_t *player, double ux, double uy)
 {
-    double damage = weapon->damage, hit = 1.0;
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    double run = ToMap(player->mo->momx) * ux + ToMap(player->mo->momy) * uy;
+
+    if (!battle && !holding && !dodging && !ducking && path != NULL
+     && nav->state == K_NAV_DRIVING && nav->target >= 0 && nav->target < path->num_points)
+    {
+        double dx = path->points[nav->target].x - ToMap(player->mo->x);
+        double dy = path->points[nav->target].y - ToMap(player->mo->y);
+        double length = sqrt(dx * dx + dy * dy);
+
+        if (length > 1e-6)
+        {
+            run = SDL_max(run, RUN_SPEED * (dx * ux + dy * uy) / length);
+        }
+    }
+
+    return (ROCKET_SPEED - SDL_max(0.0, SDL_min(run, ROCKET_SPEED - 1.0))) / ROCKET_SPEED;
+}
+
+// The damage a shot of the weapon would do, on average, to a thing of the
+// radius at the distance (at `at`, if not NULL): 0 if it cannot fire, the
+// thing is out of a melee weapon's reach, a barrel is beside the player (a
+// blow could set it off), or a rocket could hurt the player too (ROCKET_MIN,
+// the player's run toward the thing counted - RocketGain; SOUL_CLEAR).
+static double ShotDamage(const player_t *player, const weapon_t *weapon, double distance,
+                         double radius, const k_vec2_t *at)
+{
+    double damage = weapon->damage, hit = 1.0, gain = 1.0;
 
     if (!CanFire(player, weapon))
     {
@@ -1432,8 +1475,14 @@ static double ShotDamage(const player_t *player, const weapon_t *weapon, double 
     }
     else if (weapon->flies)
     {
+        if (at != NULL && distance > 1e-6)
+        {
+            gain = RocketGain(player, (at->x - ToMap(player->mo->x)) / distance,
+                              (at->y - ToMap(player->mo->y)) / distance);
+        }
+
         if (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
-         && (distance - radius - ROCKET_RADIUS < ROCKET_MIN || SoulNear()))
+         && (distance - radius - ROCKET_RADIUS < ROCKET_MIN / gain || SoulNear()))
         {
             return 0.0;
         }
@@ -1461,7 +1510,7 @@ static double ShotDamage(const player_t *player, const weapon_t *weapon, double 
 // it counting (and a half: not all hits land as hoped).
 static double Rating(const player_t *player, const weapon_t *weapon, const k_monster_t *monster)
 {
-    return SDL_min(ShotDamage(player, weapon, monster->distance, monster->radius),
+    return SDL_min(ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at),
                    monster->health * 1.5) / weapon->tics;
 }
 
@@ -1980,7 +2029,7 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
         if (weapon->weapon != wp_pistol
          && !(weapon->weapon == wp_fist && !player->powers[pw_strength])
          && Selectable(player, weapon)
-         && ShotDamage(player, weapon, monster->distance, monster->radius) > 0.0)
+         && ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at) > 0.0)
         {
             return false;
         }
@@ -2183,7 +2232,7 @@ static void ChooseWeapon(const player_t *player)
 
     if (best != NULL && best != current
      && !(current != NULL && current_rating > 0.0
-          && ShotDamage(player, current, monster->distance, monster->radius) >= monster->health)
+          && ShotDamage(player, current, monster->distance, monster->radius, &monster->at) >= monster->health)
      && ((current_rating <= 0.0 && leveltime - last_switch >= SWITCH_TICS)
          || (best_rating > current_rating * SWITCH_GAIN
              && leveltime - last_switch
@@ -2211,7 +2260,7 @@ static double BarrelShot(const player_t *player, const weapon_t *weapon, double 
         return 0.0;
     }
 
-    return weapon->taps ? weapon->damage : ShotDamage(player, weapon, distance, BARREL_RADIUS);
+    return weapon->taps ? weapon->damage : ShotDamage(player, weapon, distance, BARREL_RADIUS, NULL);
 }
 
 // Whether the weapon pops a barrel at the distance in BARREL_SHOTS shots.
@@ -2378,7 +2427,7 @@ static double ShotWorth(const player_t *player)
 
     monster = &monsters[status.target];
     return Kind(monster->type)->cost
-         * SDL_min(1.0, ShotDamage(player, weapon, monster->distance, monster->radius)
+         * SDL_min(1.0, ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at)
                         / SDL_max(monster->health, 1));
 }
 
@@ -3105,14 +3154,112 @@ static void EndBattle(const player_t *player, const char *why)
     }
 }
 
+// An island: the dry floor the player can walk to from its cell without
+// stepping onto a floor that hurts fits within ISLAND_SPAN either way, in
+// ISLAND_CELLS cells at the most, and such a floor lies round it - not a
+// small room shut all round. Looked at again when the player's cell
+// changes.
+#define ISLAND_SPAN 192.0
+#define ISLAND_CELLS 32
+
+static boolean CellHurts(int cell)
+{
+    const k_map_t *map = K_Map_Get();
+
+    return K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0;
+}
+
+static boolean OnIsland(int cell)
+{
+    static int last_cell = -1;
+    static unsigned int last_generation;
+    static boolean last_island;
+    const k_map_t *map = K_Map_Get();
+    const k_graph_t *graph = K_Graph_Get();
+    int queue[ISLAND_CELLS];
+    int head = 0, tail = 0, k, i;
+    boolean slime = false, island = true;
+    k_vec2_t min, max;
+
+    if (cell == last_cell && map->generation == last_generation)
+    {
+        return last_island;
+    }
+
+    last_cell = cell;
+    last_generation = map->generation;
+
+    if (cell < 0 || cell >= map->num_cells || CellHurts(cell))
+    {
+        last_island = false;
+        return false;
+    }
+
+    min = map->cells[cell].min;
+    max = map->cells[cell].max;
+    queue[tail++] = cell;
+
+    while (head < tail && island)
+    {
+        int at = queue[head++];
+
+        for (k = 0; k < graph->link_count[at] && island; ++k)
+        {
+            const k_link_t *link = &graph->links[graph->first_link[at] + k];
+            const k_cell_t *next = &map->cells[link->neighbor];
+
+            if (K_Graph_CanCross(link->portal, at) != K_CROSS_OPEN)
+            {
+                continue;
+            }
+
+            if (CellHurts(link->neighbor))
+            {
+                slime = true;
+                continue;
+            }
+
+            for (i = 0; i < tail && queue[i] != link->neighbor; ++i)
+            {
+            }
+
+            if (i < tail)
+            {
+                continue;
+            }
+
+            min.x = SDL_min(min.x, next->min.x);
+            min.y = SDL_min(min.y, next->min.y);
+            max.x = SDL_max(max.x, next->max.x);
+            max.y = SDL_max(max.y, next->max.y);
+            island = tail < ISLAND_CELLS && max.x - min.x <= ISLAND_SPAN
+                  && max.y - min.y <= ISLAND_SPAN;
+
+            if (island)
+            {
+                queue[tail++] = link->neighbor;
+            }
+        }
+    }
+
+    last_island = island && slime;
+    return last_island;
+}
+
 // No fight is fought on a floor that hurts (the user, Doom II MAP15: fights
 // in the middle of large lava pits): none is begun there, and one going on
 // is broken off at once; the route goes on, taking the player off it,
 // shooting on the way. A fight begun on dry floor keeps off such floors
-// (Steppable).
+// (Steppable). Nor on an island (OnIsland) - the fight could not step off
+// it (the user, E2M9: the soulsphere's pit, 128 across in a ring of slime
+// in the middle of an open room; the fight begun there stayed there, the
+// monsters coming from all sides, and "a skilled player would move aside
+// and shoot from a distance"): the route takes the player off it too.
 static void UpdateBattle(const player_t *player)
 {
     boolean burning = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    boolean island = !burning && OnIsland(K_Map_CellAt(ToMap(player->mo->x),
+                                                       ToMap(player->mo->y)));
     boolean fight;
 
     // Out of reach of the shots (behind bars, too high for the aim):
@@ -3128,16 +3275,18 @@ static void UpdateBattle(const player_t *player)
     // Going for health, CRITICAL, or dashing for a weapon or ammo: no fight
     // is started, and one going on is broken off at once; the player shoots
     // on the way.
-    fight = WorthFighting() && !escape && !burning;
+    fight = WorthFighting() && !escape && !burning && !island;
     calm = fight ? 0 : calm + 1;
 
     if (!battle && fight && K_Nav_CanPause())
     {
         StartBattle(player);
     }
-    else if (battle && (escape || burning))
+    else if (battle && (escape || burning || island))
     {
-        EndBattle(player, escape ? escape_why : "the floor hurts, going on to dry floor");
+        EndBattle(player, escape ? escape_why
+                        : burning ? "the floor hurts, going on to dry floor"
+                        : "a floor that hurts all round, going on off it");
     }
     else if (battle && calm >= BATTLE_CALM)
     {
@@ -3462,10 +3611,11 @@ static double AreaRisk(int area)
 
 // Where the route ahead goes into an area that is not safe, with HOLD_RISK
 // at stake, within `reach` along it from me, no lift before it that is not
-// down, passing over area `except`, and with `only` not -1 over all others:
-// the area, the point it goes in at, and that point's index; -1 if none.
-// *shut tells whether a door before it is shut, or closing; one rising, or
-// open at the top, is as good as open.
+// down, through a narrow way - a door or lift, a narrow opening, not just on
+// over open floor (K_Area_OpenFloor) - passing over area `except`, and with
+// `only` not -1 over all others: the area, the point it goes in at, and that
+// point's index; -1 if none. *shut tells whether a door before it is shut,
+// or closing; one rising, or open at the top, is as good as open.
 static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t *at,
                        int *point, boolean *shut)
 {
@@ -3475,7 +3625,8 @@ static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t
     const k_areamap_t *areas = K_Area_Get();
     k_vec2_t from = me;
     double along = 0.0;
-    int i, was = -1;
+    int i, k, was = -1, crossed;
+    boolean narrow = false;
 
     *shut = false;
 
@@ -3483,6 +3634,8 @@ static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t
     {
         return -1;
     }
+
+    crossed = SDL_max(nav->route_cell, 0);
 
     // Leg i runs from point i in route cell leg_cells[i].
     for (i = SDL_max(nav->target, 1); i < path->num_points - 1; ++i)
@@ -3497,6 +3650,15 @@ static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t
         {
             return -1;
         }
+
+        // The crossings on to it from the player's route cell: portal k
+        // leads from route cell k to k + 1.
+        for (k = crossed; k < r && k < path->num_cells - 1; ++k)
+        {
+            narrow |= !K_Area_OpenFloor(path->portals[k]);
+        }
+
+        crossed = SDL_max(crossed, r);
 
         if (area < 0 || r == was)
         {
@@ -3526,7 +3688,7 @@ static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t
             continue;
         }
 
-        if (area != except && (only < 0 || area == only)
+        if (narrow && area != except && (only < 0 || area == only)
          && !K_Area_Safe(area) && AreaRisk(area) >= HOLD_RISK
          && !(area == hold_skip_area && leveltime < hold_skip_until))
         {
@@ -3793,7 +3955,7 @@ static void UpdateHold(const player_t *player)
     }
     else if (!holding && !escape && here >= 0
           && (areas->areas[here].monsters == 0 || areas->areas[here].passage)
-          && !dodging && K_Nav_CanPause()
+          && !dodging && K_Nav_CanPause() && !OnIsland(K_Map_CellAt(me.x, me.y))
           && (!K_Nav_Waiting() || K_Nav_GetStatus()->action == K_ACTION_DOOR))
     {
         area = UnsafeAhead(me, HOLD_START, -1, -1, &at, &point, &shut);
@@ -4640,7 +4802,10 @@ static k_vec2_t TargetAt(int tic)
 // A press read whose shot has not left yet, at what is no longer aimed at:
 // the aim holds on it until the shot leaves (the user, E1M7: the bot
 // pressed fire at a barrel and dropped it the next tic, and the shotgun's
-// pellets left three tics later along the route).
+// pellets left three tics later along the route) - on where it was last
+// seen once it is dead or gone (E1M9: the target killed by the rocket
+// before, the aim swung 33 degrees in a rocket's wind-up, and the rocket
+// left into a wall 93 off).
 static boolean HeldAim(int tic, k_vec2_t *at)
 {
     int i;
@@ -4655,20 +4820,19 @@ static boolean HeldAim(int tic, k_vec2_t *at)
 
     if (i >= 0)
     {
-        *at = monsters[i].at;
-        return true;
+        shot_at = monsters[i].at;
     }
 
     for (i = 0; i < num_barrels; ++i)
     {
         if (barrels[i].mo == shot_mo && barrels[i].live)
         {
-            *at = barrels[i].at;
-            return true;
+            shot_at = barrels[i].at;
         }
     }
 
-    return false;
+    *at = shot_at;
+    return true;
 }
 
 int K_Combat_Aim(int tic, double *angle)
@@ -4734,31 +4898,31 @@ static boolean LineOfFire(const player_t *player, k_vec2_t from, double facing,
                        from.y + sin(facing) * reach, monster->z, monster->z + monster->height);
 }
 
-// Whether a rocket fired along the facing at the target would burst
-// ROCKET_SAFE off the player as the blast measures it (the larger of the x
-// and y distances): at the target's front, nearer by what it closes in
-// during the flight; or at another monster it would meet first; with no
-// wall within its radius either side of its path, as far as a burst there
-// would still be too near. And no lost soul within SOUL_CLEAR.
-static boolean RocketSafe(const player_t *player, k_vec2_t from, double facing,
-                          const k_monster_t *target, double distance)
+// Whether a rocket fired along the facing at what lies `distance` off (of
+// the radius, its middle at height `middle`; the target, or NULL) would
+// burst ROCKET_SAFE off the player as the blast measures it (the larger of
+// the x and y distances): `burst` along, or at another monster it would meet
+// first; with no wall within its radius either side of its path, as far as
+// a burst there would still be too near - each nearer by the player's own
+// run after it (RocketGain). The path is looked at climbing to the middle,
+// as the engine aims it, and flat from where it leaves the player: with
+// nothing found along the facing to aim at, the engine fires it level
+// (P_SpawnPlayerMissile; E1M9: at an imp up on a ledge, level into the
+// ledge's face 120 off, the player running after it).
+static boolean RocketClear(const player_t *player, k_vec2_t from, double facing,
+                           double distance, double radius, double burst, double middle,
+                           const k_monster_t *target)
 {
     double ux = cos(facing), uy = sin(facing);
     double axis = SDL_max(fabs(ux), fabs(uy));
     double gun = GunHeight(player->mo);
-    double closing = -(target_velocity.x * (target->at.x - from.x)
-                     + target_velocity.y * (target->at.y - from.y)) / SDL_max(distance, 1.0);
-    double burst = distance - target->radius - ROCKET_RADIUS
-                 - SDL_max(0.0, closing) * distance / ROCKET_SPEED;
-    double reach = SDL_min(SDL_max(distance - target->radius, distance * 0.5),
-                           ROCKET_SAFE / axis + ROCKET_RADIUS);
-    double middle = target->z + target->height * 0.5;
+    double spawn = ToMap(player->mo->z) + MISSILE_SPAWN;
+    double gain = RocketGain(player, ux, uy);
+    double reach = SDL_min(SDL_max(distance - radius, distance * 0.5),
+                           ROCKET_SAFE / (axis * gain) + ROCKET_RADIUS);
     int i, side;
 
-    if (SoulNear())
-    {
-        return false;
-    }
+    burst *= gain;
 
     for (i = 0; i < num_monsters; ++i)
     {
@@ -4769,7 +4933,7 @@ static boolean RocketSafe(const player_t *player, k_vec2_t from, double facing,
         if (monster != target && along > 0.0 && along < distance
          && across < monster->radius + ROCKET_RADIUS)
         {
-            burst = SDL_min(burst, along - monster->radius - ROCKET_RADIUS);
+            burst = SDL_min(burst, (along - monster->radius - ROCKET_RADIUS) * gain);
         }
     }
 
@@ -4785,13 +4949,30 @@ static boolean RocketSafe(const player_t *player, k_vec2_t from, double facing,
         double z = gun + (middle - gun) * reach / SDL_max(distance, 1.0);
 
         if (!K_Sight_Aim(from.x + ox, from.y + oy, gun, from.x + ox + ux * reach,
-                         from.y + oy + uy * reach, z - 4.0, z + 4.0))
+                         from.y + oy + uy * reach, z - 4.0, z + 4.0)
+         || !K_Sight_Aim(from.x + ox, from.y + oy, spawn + 4.0, from.x + ox + ux * reach,
+                         from.y + oy + uy * reach, spawn, spawn + 8.0))
         {
             return false;
         }
     }
 
     return true;
+}
+
+// RocketClear at the target: bursting at its front, nearer by what it closes
+// in during the flight. And no lost soul within SOUL_CLEAR.
+static boolean RocketSafe(const player_t *player, k_vec2_t from, double facing,
+                          const k_monster_t *target, double distance)
+{
+    double closing = -(target_velocity.x * (target->at.x - from.x)
+                     + target_velocity.y * (target->at.y - from.y)) / SDL_max(distance, 1.0);
+
+    return !SoulNear()
+        && RocketClear(player, from, facing, distance, target->radius,
+                       distance - target->radius - ROCKET_RADIUS
+                       - SDL_max(0.0, closing) * distance / ROCKET_SPEED,
+                       target->z + target->height * 0.5, target);
 }
 
 // Whether a shot along the facing could set off a barrel whose chain would
@@ -4870,13 +5051,15 @@ static boolean ChainNearAt(int chain, k_vec2_t at)
 
 // The press is read (the weapon is ready for it): the aim holds on what it
 // is fired at until the shot leaves (HeldAim).
-static void Pressed(const player_t *player, const weapon_t *weapon, const mobj_t *mo, int tic)
+static void Pressed(const player_t *player, const weapon_t *weapon, const mobj_t *mo,
+                    k_vec2_t at, int tic)
 {
     if (WeaponReady(player))
     {
         ++status.shots;
         shot_mo = mo;
         shot_tic = tic + weapon->lead;
+        shot_at = at;
     }
 }
 
@@ -4921,7 +5104,15 @@ static void FireAtBarrel(const player_t *player, const k_pose_t *pose, int tic,
     ShotLeaves(pose, weapon, barrel->at, &leaves, &leaves_facing);
 
     if (fabs(Wrap(atan2(barrel->at.y - from.y, barrel->at.x - from.x) - facing)) > tolerance
-     || (weapon->taps && !WeaponReady(player))
+     || ((weapon->taps || weapon->weapon == wp_missile) && !WeaponReady(player))
+     || (weapon->weapon == wp_missile && player->attackdown)
+     || (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
+         && (!RocketClear(player, from, facing, distance, BARREL_RADIUS,
+                          distance - BARREL_RADIUS - ROCKET_RADIUS,
+                          barrel->z + BARREL_HEIGHT * 0.5, NULL)
+             || !RocketClear(player, leaves, leaves_facing, Distance(leaves, barrel->at),
+                             BARREL_RADIUS, Distance(leaves, barrel->at) - BARREL_RADIUS
+                             - ROCKET_RADIUS, barrel->z + BARREL_HEIGHT * 0.5, NULL)))
      || ChainNearAt(barrel->chain, leaves)
      || BarrelAtRisk(player, from, facing, weapon, barrel->at, weapon->taps)
      || BarrelAtRisk(player, leaves, leaves_facing, weapon, barrel->at, weapon->taps)
@@ -4934,7 +5125,7 @@ static void FireAtBarrel(const player_t *player, const k_pose_t *pose, int tic,
     }
 
     command->attack = 1;
-    Pressed(player, weapon, barrel->mo, tic);
+    Pressed(player, weapon, barrel->mo, barrel->at, tic);
 }
 
 void K_Combat_Fire(int tic, k_command_t *command)
@@ -4990,9 +5181,17 @@ void K_Combat_Fire(int tic, k_command_t *command)
     // (A_WeaponReady: not while attackdown): fire held on from before is
     // let go for a tic first (Doom II MAP10: fire held on from the shotgun
     // through the BFG picked up, it never fired, a demon biting the bot for
-    // 5 s).
+    // 5 s). The rocket launcher is pressed only when ready, never held on:
+    // held, A_ReFire fires again at the end of the shot, a press not looked
+    // at where that rocket leaves, and with no aim held for it (E1M9: one
+    // left 33 degrees off, the target dead, into a wall 93 off - killed).
     if ((weapon->weapon == wp_missile || weapon->weapon == wp_bfg) && player->attackdown
      && WeaponReady(player))
+    {
+        return;
+    }
+
+    if (weapon->weapon == wp_missile && !WeaponReady(player))
     {
         return;
     }
@@ -5023,7 +5222,7 @@ void K_Combat_Fire(int tic, k_command_t *command)
     }
 
     command->attack = 1;
-    Pressed(player, weapon, target_mo, tic);
+    Pressed(player, weapon, target_mo, at, tic);
 }
 
 double K_Combat_Danger(double x, double y, double floor)

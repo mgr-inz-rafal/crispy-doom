@@ -3282,12 +3282,68 @@ Who controls the player in a fight (the user's model):
   With nothing else to fire, the chainsaw and the berserk fist go against anything. On a tie
   a weapon that shoots wins. E1: the chainsaw up for a spectre at 78, kept, the spectre dead;
   E2M4: the berserk fist for a cacodemon only with the ammo gone.
-- **Rockets that hurt the bot** (the user, jotted for later): E1M9 at 1:58.5, 63 health off
-  its own rocket - brought up for an imp 985 off, fired as a shot on the way at an imp 637 off
-  that could not come at the player, the burst near the player (a wall or a corner it walked
-  by); smaller ones on E1M3 (8), E1M5 (4, 4), E1M6 (3), and E2M8's last 19. To review: the
-  rocket's path checked from where the player will be as it walks on, walls and corners near
-  the muzzle, and no rockets as shots on the way.
+- **Rockets that hurt the bot** (the user: E1M9 at 1:58.5, 63 health off its own rocket;
+  E2M6, 64). Traced with the rocket's spawn and burst logged (E1M9, E2M4-6, salts 443 and 71:
+  before, own rockets for 38, 57, 32 - killed -, 67, 37, 42 and 84 - killed): three causes.
+  - The player ran after its rocket: shots on the way at 400-500 off, the player running on
+    at 13-16 a tic behind a rocket at 20, so any burst - the target, a barrel, a ledge - was
+    near it. Done: the rocket gains only 20 less the player's run along its way on it
+    (`RocketGain`; on the way, the route's heading at full run; in a fight, the run now), every
+    burst distance and the wall check's reach scaled by that; the weapon choice too.
+  - The wind-up: the rocket leaves 8 tics after the press; held fire refired it from
+    A_ReFire unchecked, and the aim held on a target only while it lived (one left 33 degrees
+    off, the target dead, into a wall 93 off). Done: the launcher is pressed only from its
+    ready state, and the held aim keeps the last place of what was shot at.
+  - Level flight: with nothing found along the facing, the engine fires level; the wall check
+    climbed toward an imp up on a ledge, the rocket flew into the ledge's face 120 off. Done:
+    the path is checked climbing and level. And rockets at barrels go through the same check.
+  After: no own-rocket hit in the same 8 games.
+- **Barrel chains pushed** (E1M9, salt 71): a chain shot on purpose (400, 448, 496 along a
+  corridor); the blasts pushed the last barrel to 560, 77 from the player, 67 health. The chain
+  is judged where the barrels stand; a blast's thrust moves the next one toward the player.
+  To look at: the chain's far end judged with room for that push.
+- **Escape into a monster in the way** (E1M9, default salt): at CRITICAL health running for a
+  far medikit, a spectre in a doorway on the way; no fight while escaping, the bot pushed
+  against it ("stuck ... stepping aside") until it died. To look at: an escape that is stuck
+  on a monster fights it.
+- **Switches and lifts** (the Episode 2 regression):
+  - E2M6's exit switch at the back of an alcove exactly as wide as the player, 24 deep: the
+    use spot in its mouth, which the player fits only dead centre; stuck 20 short, 43 from the
+    switch - inside use range - the goal failed and was tried again for minutes. Done: stuck
+    on the last leg within use range of the switch, it is pressed from there.
+  - E2M5's lift 199 rises to door 1115 at its far end: with the door shut the ride read as a
+    step 132 high, so the route failed as soon as the lift was down, and the lift went back up
+    without the player, over and over (earlier runs got on by luck). Done: for a ride, a door at
+    the top the player opens from the lift is judged open; once up, the ride ends and the
+    door is worked.
+- **Episode 2 run-through** (the user, salt 443, E2M1 on into E2M9 by the secret exit; E2M9's
+  monsters all killed):
+  - E2M9 stuck at the exit rooms: the yellow key lies behind the red door (line 132, a door
+    sector 8 deep), and its pickup spot was put in front of the door - a spot's box reaching
+    into a door counted it open, so the way there crossed no door and the bot pushed against
+    it for two minutes. Done: for a spot to stand at (`K_Graph_Clearance`) a door is open only
+    where the spot is in it; the key is now behind the red door, which needs the red key, so
+    the bot gets the blue and red keys first (E2M9 without monsters: 16 s). And the stuck
+    count started over at every step aside (up to 72 units, the reset was at 64 away), so the
+    goal never failed: it now starts over only 64 further along the way.
+  - E2M5, 0:53: with 7 or 9 shells the firepower was OK (LOW below 5), 4 shells were passed and
+    the bot later fought with the pistol ("even more aggressive collecting ammo"). Done:
+    firepower is LOW below 10 shells (40 bullets for the chaingun, 60 cells, 5 rockets; OK from
+    16, 60, 100, 8) - the strong weapons' ammo is then worth any detour unguarded and a dash in
+    a fight; the old marks are CRITICAL, which breaks fights off for ammo however far.
+  - E2M9 A: out of plasma and shells, the bot held short of three barons with the pistol for 20
+    s - the rocket launcher, 534 off, lay beyond them; the chaingun at (-448,128) behind it was
+    never taken. Done: of the items that go first (escapes, a first weapon), the soonest in hand
+    counts the monsters inside the areas on the way there, the route's too, 100 units a point
+    of health (`WayThrough`); in a fight four are looked at by route, not two.
+  - E2M9 B: the soulsphere's pit (sector 0, 128 square, 48 down in a ring of slime 64 wide in
+    the middle of an open room): the fight begun there stayed there - every step out was onto
+    the slime - then a hold began in the pit, short of another piece of the same open room,
+    cacodemons and barons coming from all sides (164 health down to 65). Done: a hold needs a
+    narrow way into the area ahead (a door or lift, a narrow opening - `K_Area_OpenFloor`), and
+    no fight or hold begins on an island (dry floor within 192 either way, slime round it); the
+    route takes the player off it first, shooting on the way. Left for C4: where to stand in an
+    open room (backing off to keep distance, edges and corners).
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate

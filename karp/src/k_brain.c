@@ -131,7 +131,8 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // Items worth a detour (k_items.h, plan 7.5) are looked for every
 // ITEM_CHECK_TICS while the player follows a route, the ITEM_ROUTES most
 // promising by worth and distance looked at by route (MAX_ITEM_ROUTES when
-// health is CRITICAL, any detour then being worth it); one with no open way
+// health is CRITICAL, any detour then being worth it, and in a fight, where
+// the nearest may lie beyond the monsters - GoesFirst); one with no open way
 // there, or none on from it, is not looked at again for ITEM_SKIP_TICS. The
 // distance is as the crow flies, or twice that from the route within
 // ROUTE_AHEAD ahead if less: an item by the route ahead costs a step aside,
@@ -154,9 +155,10 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // chaingun on the way to the key, behind a switch and a lift, was gone for
 // over a shotgun back by the start, a 465-unit run, and the bot fought with
 // the pistol for 20 s; at 23 health, a berserk 5322 units off over a
-// medikit near, and the bot died on the way). One already gone for gives way
-// to another only when the other's way there is REPLACE_MARGIN shorter, or
-// the two would flip.
+// medikit near, and the bot died on the way); the monsters inside the areas
+// on the way there count DAMAGE_WAY a point of health (WayThrough). One
+// already gone for gives way to another only when the other's way there is
+// REPLACE_MARGIN shorter, so counted, or the two would flip.
 #define FIRST_SCORE 1.0e6
 #define REPLACE_MARGIN 256.0
 
@@ -381,12 +383,15 @@ static k_path_t probe;              // routes looked at while scratch is in use
 static k_path_t fix_probe;          // routes to and from a fix an item is behind
 
 // Areas (k_area.h) the route left goes through, marked route_stamp; those a
-// detour has counted already, marked risk_stamp.
+// detour has counted already, marked risk_stamp; those the way to an item
+// has, through_stamp.
 static int *route_marks;
 static int *risk_marks;
+static int *through_marks;
 static int marks_size;
 static int route_stamp;
 static int risk_stamp;
+static int through_stamp;
 
 // The player's health over the last FALL_TICS, -1 where not known yet;
 // and when falling back may be looked at again.
@@ -2370,7 +2375,7 @@ static boolean GoesFirst(const k_item_t *item, boolean critical)
 
 // Whether something worth leaving a fight for (k_items.h: escape) lies in
 // reach: health, when LOW or CRITICAL; but for health CRITICAL, ammo when
-// ammo or firepower is LOW. *health tells which.
+// ammo is LOW or firepower CRITICAL. *health tells which.
 static boolean EscapeFor(boolean critical, boolean *health)
 {
     boolean ammo = false;
@@ -2459,8 +2464,10 @@ static void MarkRouteAreas(const k_path_t *path, int from)
         marks_size = K_Area_Get()->num_areas * 2;
         route_marks = realloc(route_marks, marks_size * sizeof(*route_marks));
         risk_marks = realloc(risk_marks, marks_size * sizeof(*risk_marks));
+        through_marks = realloc(through_marks, marks_size * sizeof(*through_marks));
         memset(route_marks, 0, marks_size * sizeof(*route_marks));
         memset(risk_marks, 0, marks_size * sizeof(*risk_marks));
+        memset(through_marks, 0, marks_size * sizeof(*through_marks));
     }
 
     ++route_stamp;
@@ -2501,6 +2508,31 @@ static double WayRisk(const k_path_t *path, int skip)
     return risk;
 }
 
+// What the monsters inside the areas a way goes through would cost, the
+// route's and the item's own too, but for the area `own` (the player's: met
+// whichever way it goes) and those counted already for this way
+// (through_marks).
+static double WayThrough(const k_path_t *path, int own)
+{
+    double through = 0.0;
+    int i;
+
+    for (i = 0; i < path->num_cells; ++i)
+    {
+        int area = K_Area_Of(path->cells[i]);
+
+        if (area < 0 || area >= marks_size || area == own || through_marks[area] == through_stamp)
+        {
+            continue;
+        }
+
+        through_marks[area] = through_stamp;
+        through += K_Area_Get()->areas[area].inside;
+    }
+
+    return through;
+}
+
 // The extra way an item takes: there and on to where the route goes, less
 // the way left; the way there (the work at a fix counted); and the health
 // the floors take there and on, less what they take on the way left. Ways
@@ -2508,21 +2540,24 @@ static double WayRisk(const k_path_t *path, int skip)
 // one fix the brain knows (FIX_WORK) is counted through it, and fixed set.
 // risk, if not NULL, gets what the monsters in the areas the detour goes
 // through and the route does not would cost (WayRisk; not on the way to a
-// fix). Returns false if there is no way there, or none on.
+// fix); through, if not NULL, what those on the way there would cost, the
+// route's too (WayThrough; 0 through a fix: never in a fight). Returns
+// false if there is no way there, or none on.
 static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
                           double remaining, double remaining_damage, boolean fixes,
                           double *detour, double *way, double *damage, boolean *fixed,
-                          double *risk)
+                          double *risk, double *through)
 {
     goal_type_t type = GOAL_GOTO;
     int param = -1, want, portal, from, key_door, count, i;
     int spot_area = K_Area_Of(K_Map_CellAt(spot.x, spot.y));
     boolean later;
-    double there = -1.0, there_damage = 0.0, there_risk = 0.0;
+    double there = -1.0, there_damage = 0.0, there_risk = 0.0, there_through = 0.0;
     goal_t fix;
 
     *fixed = false;
     ++risk_stamp;
+    ++through_stamp;
     K_Path_Find(&probe, start, cell, spot);
 
     if (probe.result == K_PATH_FOUND)
@@ -2535,6 +2570,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
         there = probe.length + probe.wait * WAIT_WAY;
         there_damage = probe.damage;
         there_risk = WayRisk(&probe, spot_area);
+        there_through = WayThrough(&probe, K_Area_Of(cell));
     }
     else if (fixes && probe.result == K_PATH_BLOCKED
           && RouteFix(&probe, &type, &param, &want, &portal, &from, &later, &key_door)
@@ -2580,6 +2616,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
             {
                 there = to_fix + fix_probe.length + fix_probe.wait * WAIT_WAY + FIX_WORK;
                 there_damage = to_fix_damage + fix_probe.damage;
+                there_through = 0.0;
             }
         }
 
@@ -2605,6 +2642,11 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
     if (risk != NULL)
     {
         *risk = there_risk + WayRisk(&probe, spot_area);
+    }
+
+    if (through != NULL)
+    {
+        *through = there_through;
     }
 
     return true;
@@ -2660,12 +2702,12 @@ static boolean ConsiderItems(goal_t *goal)
     const k_path_t *path = K_Nav_GetPath();
     boolean critical = K_Condition_Get()->health == K_NEED_CRITICAL;
     boolean fighting = K_Combat_GetStatus()->battle;
-    int routes = critical ? MAX_ITEM_ROUTES : ITEM_ROUTES;
+    int routes = critical || fighting ? MAX_ITEM_ROUTES : ITEM_ROUTES;
     int order[MAX_ITEM_ROUTES];
     double order_score[MAX_ITEM_ROUTES];
     int found = 0, best = -1;
     double best_slack = 0.0, best_detour = 0.0, best_way = 0.0, best_damage = 0.0;
-    double best_risk = 0.0;
+    double best_risk = 0.0, best_cost = 0.0, best_through = 0.0;
     double remaining_way = 0.0, remaining_damage = 0.0, remaining_cost = 0.0;
     boolean best_fixed = false, best_first = false, best_suit = false, suits = false;
     const k_item_t *chosen;
@@ -2702,8 +2744,8 @@ static boolean ConsiderItems(goal_t *goal)
     // (k_items.h: escape): that one is dropped, with the fixes pushed for it,
     // and health looked for once the goal below is planned again (MAP10: an
     // armour bonus behind a gun switch kept the bot fighting at 20 health, a
-    // medikit in reach, until it died). So does the ammo when ammo or
-    // firepower is LOW, but for health CRITICAL (MAP10: out of shells, the
+    // medikit in reach, until it died). So does the ammo when ammo is LOW or
+    // firepower CRITICAL, but for health CRITICAL (MAP10: out of shells, the
     // shotguns dropped beside the bot were passed for a cell charge 2000
     // off, and the bot fought on with the pistol). When LOW, not one that
     // goes first itself (GoesFirst: a weapon at a pistol start, that ammo);
@@ -2745,8 +2787,9 @@ static boolean ConsiderItems(goal_t *goal)
         }
         else
         {
-            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - %s LOW, ammo goes first", name,
-                  K_Condition_Get()->firepower == K_NEED_LOW ? "firepower" : "ammo");
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - %s, ammo goes first", name,
+                  K_Condition_Get()->firepower == K_NEED_CRITICAL ? "firepower CRITICAL"
+                                                                  : "ammo LOW");
         }
 
         if (goals[i].param < item_skip_size)
@@ -2856,11 +2899,11 @@ static boolean ConsiderItems(goal_t *goal)
         const k_item_t *item = K_Items_Get(order[k]);
         double reach = ItemReach(item, fighting);
         boolean first = GoesFirst(item, critical);
-        double detour, way, damage, risk;
+        double detour, way, damage, risk, through, cost;
         boolean fixed;
 
         if (!ItemDetour(start, player.cell, item->spot, end, remaining_way, remaining_damage,
-                        !fighting, &detour, &way, &damage, &fixed, &risk))
+                        !fighting, &detour, &way, &damage, &fixed, &risk, &through))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
@@ -2880,15 +2923,24 @@ static boolean ConsiderItems(goal_t *goal)
 
         detour += (damage + risk) * DAMAGE_WAY;
 
+        // Of those that go first, the soonest in hand, the monsters inside
+        // the areas on the way there counted too, the route's as well: the
+        // run leaves it (the user, E2M9: out of plasma and shells, the bot
+        // held short of three barons with the pistol for 20 s, the rocket
+        // launcher beyond them 534 off, a chaingun behind it clear).
+        cost = way + through * DAMAGE_WAY;
+
         if (detour <= reach
          && (best < 0 || (first && !best_first)
-             || (first && best_first && way < best_way)
+             || (first && best_first && cost < best_cost)
              || (!first && !best_first && reach - detour > best_slack)))
         {
             best = order[k];
             best_slack = reach - detour;
             best_detour = detour;
             best_way = way;
+            best_cost = cost;
+            best_through = through;
             best_damage = damage;
             best_risk = risk;
             best_fixed = fixed;
@@ -2915,6 +2967,8 @@ static boolean ConsiderItems(goal_t *goal)
         best_slack = remaining_cost - cost;
         best_detour = detour;
         best_way = way;
+        best_cost = way;
+        best_through = 0.0;
         best_damage = 0.0;
         best_risk = 0.0;
         best_fixed = false;
@@ -2931,27 +2985,33 @@ static boolean ConsiderItems(goal_t *goal)
     if (detour_at >= 0)
     {
         const k_item_t *on = K_Items_Get(goals[detour_at].param);
-        double on_detour, on_way = 1.0e9, on_damage;
+        double on_detour, on_way = 1.0e9, on_damage, on_through = 0.0;
         boolean on_fixed;
 
         // Through the fixes pushed for it, which are on the stack (E2M5:
         // walking to line 389 for the box of shells behind the door it
         // opens, the door's fix was not Allowed, being there, the box
         // counted as out of reach, the shells won - and the box the next
-        // second, for 12 s).
+        // second, for 12 s). The monsters on the way counted, as above.
         fixes_stacked = true;
         ItemDetour(start, player.cell, on->spot, end, remaining_way, remaining_damage, true,
-                   &on_detour, &on_way, &on_damage, &on_fixed, NULL);
+                   &on_detour, &on_way, &on_damage, &on_fixed, NULL, &on_through);
         fixes_stacked = false;
 
-        if (best_way + REPLACE_MARGIN >= on_way)
+        if (best_cost + REPLACE_MARGIN >= on_way + on_through * DAMAGE_WAY)
         {
             return false;
         }
 
         GoalName(&goals[detour_at], name, sizeof(name));
 
-        if (on_way < 1.0e9)
+        if (on_way < 1.0e9 && (best_through >= 0.5 || on_through >= 0.5))
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - the %s is the better way, %.0f units "
+                  "and %.0f health at risk on it against %.0f and %.0f", name,
+                  K_Items_Get(best)->name, best_way, best_through, on_way, on_through);
+        }
+        else if (on_way < 1.0e9)
         {
             K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - the %s is in hand sooner, %.0f units "
                   "against %.0f", name, K_Items_Get(best)->name, best_way, on_way);
@@ -3040,7 +3100,7 @@ static boolean RunWaits(const goal_t *goal, const k_item_t *item)
 
 // Fleeing (plan, 7.4), and dashes: while the goal on top is an item worth
 // breaking a fight off for (k_items.h: urgent) - health when LOW or
-// CRITICAL, and ammo when ammo or firepower is LOW, wherever it is
+// CRITICAL, and ammo when ammo is LOW or firepower CRITICAL, wherever it is
 // (escape); a weapon the player lacks, or the ammo running out, from when it
 // comes within FIGHT_REACH until it is picked up, while no monster is within
 // DASH_CLEAR -
@@ -3094,7 +3154,8 @@ static void UpdateEscape(void)
 
         M_snprintf(why, sizeof(why), "%s, going for the %s",
                    item->kind != K_ITEM_HEALTH
-                   ? (K_Condition_Get()->firepower == K_NEED_LOW ? "firepower LOW" : "ammo LOW")
+                   ? (K_Condition_Get()->firepower == K_NEED_CRITICAL ? "firepower CRITICAL"
+                                                                      : "ammo LOW")
                    : K_Condition_Get()->health == K_NEED_CRITICAL ? "health CRITICAL"
                    : "health LOW", item->name);
         K_Combat_Escape(why);

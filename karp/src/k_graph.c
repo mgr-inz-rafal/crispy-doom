@@ -1719,7 +1719,8 @@ double K_Graph_OpeningCeiling(int sector)
 // Where the player is, for judging doors: in up to two sectors (-1 for
 // none), its centre somewhere on the segment from a to b. A door set in a
 // wall nearer than reach all along it is open; with reach PLAYER_RADIUS
-// (the player's own box) any door is (FaceCeiling).
+// (the player's own box) any door is (FaceCeiling). With reach 0 only a
+// door it stands in is: a spot to stand at (K_Graph_Clearance).
 typedef struct
 {
     int sector[2];
@@ -1782,6 +1783,12 @@ static boolean OpensDoor(const line_t *line)
 // strip between the line that sets the yellow key's crusher going and the
 // platform is 16 wide, too narrow while the ceiling was down, and the way
 // in was planned again and again from all sides).
+//
+// For a spot to stand at (reach 0), a door counts as open only where the
+// spot is in it: the way there crosses no other door, so nothing opens
+// one the box only reaches into (E2M9: the yellow key behind a red door 8
+// deep was touched from in front of it, the door shut, and the bot pushed
+// against it for good).
 static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *standing)
 {
     sector_t *sector = side ? line->backsector : line->frontsector;
@@ -1789,7 +1796,7 @@ static fixed_t FaceCeiling(const line_t *line, int side, const standing_t *stand
     const ceiling_t *crusher = CrusherOf(sector);
 
     if (index == standing->sector[0] || index == standing->sector[1]
-     || (side == 1 && door_walled[index] && OpensDoor(line))
+     || (standing->reach > 0.0 && side == 1 && door_walled[index] && OpensDoor(line))
      || (door_sectors[index] && (door_walled[index] || standing->reach <= PLAYER_RADIUS)
          && NearDoor(standing, index)))
     {
@@ -2301,13 +2308,25 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, doubl
         fixed_t speed;
         fixed_t top = RisingTop(a, &speed);
         fixed_t off = floor_b - MAX_STEP_UP;
+        fixed_t ride_ceiling = ceiling_b;
 
         // On a floor that will rise to within reach (a lift that is down
         // or coming back up, a floor on its way up, Doom II MAP03's strip
         // to the teleporter): wait on it. The player steps off as soon as
         // the step is low enough, so that is where it is judged; further
-        // up there is only less headroom.
-        if (off <= top && Headroom(off, ceiling_a, floor_b, ceiling_b))
+        // up there is only less headroom. A door at the top that the player
+        // opens from here is judged open: up there it is a door crossing
+        // (E2M5: lift 199 rises to door 1115 at its far end; with the door
+        // shut the ride read as a step 132 high, so the route failed as
+        // soon as the lift was down, and the lift went back up without the
+        // player, over and over).
+        if (line != NULL && door_sectors[to_sector] && line->frontsector == a
+         && line->backsector == b && OpensDoor(line))
+        {
+            ride_ceiling = SDL_max(ceiling_b, OpenCeiling(b));
+        }
+
+        if (off <= top && Headroom(off, ceiling_a, floor_b, ride_ceiling))
         {
             const plat_t *plat = PlatOf(a);
 
@@ -3097,9 +3116,9 @@ static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
 }
 
 // K_Graph_ObstaclesNear for a player standing in the given cell, and the
-// standing blocks too if asked.
+// standing blocks too if asked; doors as standing_t takes door_reach.
 static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *found,
-                           int max, boolean with_blocks)
+                           int max, boolean with_blocks, double door_reach)
 {
     const k_map_t *map = K_Map_Get();
     k_vec2_t min = { at.x - reach, at.y - reach };
@@ -3120,7 +3139,7 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
     standing.sector[0] = map->subsectors[map->cells[cell].subsector].sector;
     standing.sector[1] = -1;
     standing.a = standing.b = at;
-    standing.reach = PLAYER_RADIUS;     // only a door the box is in
+    standing.reach = door_reach;
     CellRange(min, max_, &x0, &y0, &x1, &y1);
 
     for (y = y0; y <= y1; ++y)
@@ -3230,8 +3249,9 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
 int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
                           int max)
 {
+    // Only a door the box is in.
     return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max,
-                           false);
+                           false, PLAYER_RADIUS);
 }
 
 double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
@@ -3298,7 +3318,7 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
 {
     k_nearline_t found[MAX_NEAR_LINES];
     int cell = K_Map_CellAt(at.x, at.y);
-    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true);
+    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0);
     double clearance = reach;
     int i;
 

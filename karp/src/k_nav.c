@@ -84,7 +84,10 @@
 
 // Stuck: moved less than STUCK_DISTANCE in STUCK_TICS tics. After
 // MAX_STUCK replans in a row the goal fails; the count starts over once
-// the player gets UNSTUCK_DISTANCE away from where it last got stuck.
+// the player gets UNSTUCK_DISTANCE further along the way than where it
+// last got stuck. Not just away from there: stepping aside goes up to 72
+// units, and the count started over at every step (E2M9: two minutes
+// pushing against a shut door at "1/3", the goal never failing).
 #define STUCK_TICS 35
 #define STUCK_DISTANCE 8.0
 #define MAX_STUCK 3
@@ -334,7 +337,7 @@ static boolean paused;
 static k_vec2_t history[STUCK_TICS];
 static int history_count;
 static int history_next;
-static k_vec2_t stuck_at;
+static double stuck_remaining;     // the way left where it last got stuck
 static int unstick_tics;    // stepping aside, UNSTICK_TICS
 static k_vec2_t unstick_dir;
 static k_vec2_t last_at;    // after the previous tic
@@ -1912,8 +1915,24 @@ static boolean UpdateCrusher(k_vec2_t at, double speed, int r)
     return true;
 }
 
-// At the goal: press, or shoot, the switch the player was sent to.
-static void StartUseAction(void)
+// How far a point is from the nearest point of a line.
+static double LineDistance(k_vec2_t at, const k_line_t *line)
+{
+    double dx = line->v2.x - line->v1.x, dy = line->v2.y - line->v1.y;
+    double length2 = dx * dx + dy * dy;
+    double t = length2 > 0.0 ? ((at.x - line->v1.x) * dx + (at.y - line->v1.y) * dy) / length2
+                             : 0.0;
+    k_vec2_t nearest;
+
+    t = SDL_max(0.0, SDL_min(1.0, t));
+    nearest.x = line->v1.x + dx * t;
+    nearest.y = line->v1.y + dy * t;
+    return Distance(at, nearest);
+}
+
+// At the goal, or held off it within reach (spot): press, or shoot, the
+// switch the player was sent to.
+static void StartUseAction(k_vec2_t spot)
 {
     const k_line_t *line = &K_Map_Get()->lines[status.goal_line];
     k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
@@ -1925,8 +1944,8 @@ static void StartUseAction(void)
     action.line = status.goal_line;
     action.a = line->v1;
     action.b = line->v2;
-    action.spot = goal;
-    action.face = atan2(middle.y - goal.y, middle.x - goal.x);
+    action.spot = spot;
+    action.face = atan2(middle.y - spot.y, middle.x - spot.x);
     action.start_tics = status.tics;
     action.press_tic = -2;
 
@@ -2058,6 +2077,15 @@ static boolean UpdateAction(k_vec2_t at, double speed)
                    K_Graph_CrossingName(crossing), path.points[status.target].x,
                    path.points[status.target].y);
         return Replan(at, why);
+    }
+
+    // A ride up to a shut door (K_Graph_Passable takes it open at the top):
+    // up there, the ride is over and the door is worked (E2M5: lift 199 up
+    // to door 1115 at its far end, waited on 9 s until "the lift does not
+    // rise").
+    if (action.kind == K_ACTION_RIDE && crossing == K_CROSS_DOOR)
+    {
+        FinishAction();
     }
 
     if (action.kind == K_ACTION_NONE)
@@ -2726,7 +2754,7 @@ k_navstate_t K_Nav_Tick(void)
     {
         if (status.goal_kind == K_GOAL_USE_LINE || status.goal_kind == K_GOAL_SHOOT_LINE)
         {
-            StartUseAction();
+            StartUseAction(goal);
         }
         else if (cross_first)
         {
@@ -2749,7 +2777,7 @@ k_navstate_t K_Nav_Tick(void)
         }
     }
 
-    if (status.stuck > 0 && Distance(at, stuck_at) > UNSTUCK_DISTANCE)
+    if (status.stuck > 0 && status.remaining < stuck_remaining - UNSTUCK_DISTANCE)
     {
         status.stuck = 0;
     }
@@ -2778,7 +2806,23 @@ k_navstate_t K_Nav_Tick(void)
             return status.state;
         }
 
-        stuck_at = at;
+        // Held off the spot for a switch on the last leg, but within reach of
+        // the switch: pressed from here (E2M6: the exit switch at the back of
+        // an alcove as wide as the player, 24 deep, the spot in its mouth,
+        // where the player fits only dead centre; stuck 20 units short and 43
+        // from the switch, the goal failed and was tried again for minutes).
+        if (action.kind == K_ACTION_NONE && status.target == path.num_points - 1
+         && (status.goal_kind == K_GOAL_USE_LINE || status.goal_kind == K_GOAL_SHOOT_LINE)
+         && LineDistance(at, &K_Map_Get()->lines[status.goal_line]) < USE_REACH)
+        {
+            K_Log(K_LOG_NAV, K_LOG_INFO, "held %.0f units off the spot for the switch at line %d "
+                  "- pressing it from here", Distance(at, goal), status.goal_line);
+            StartUseAction(at);
+            history_count = 0;
+            history_next = 0;
+            status.remaining = Remaining(at);
+            return status.state;
+        }
 
         if (++status.stuck > MAX_STUCK)
         {
@@ -2799,6 +2843,7 @@ k_navstate_t K_Nav_Tick(void)
         }
 
         unstick_tics = step ? UNSTICK_TICS : 0;
+        stuck_remaining = Remaining(at);
     }
 
     status.remaining = Remaining(at);
