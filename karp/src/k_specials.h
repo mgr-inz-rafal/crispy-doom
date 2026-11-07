@@ -94,6 +94,13 @@ int K_Specials_LineSpecial(int line);
 // one sets something off.
 int K_Specials_WalkOver(int special);
 
+// Whether crossing a walk-over line shuts a sector with its tag: a door that
+// closes, a ceiling that comes down to 8 over the floor, a floor that goes up
+// to 8 under the ceiling. Not a door the player opens by hand (one of its
+// lines is a manual door, with no key it lacks): it walks up and opens it.
+// With sector -1, whether it shuts any.
+int K_Specials_LineShuts(int line, int sector);
+
 // Walk-over lines that set a crusher going (EV_DoCeiling: crushAndRaise,
 // fastCrushAndRaise, silentCrushAndRaise); fast tells which.
 int K_Specials_CrusherStart(int special, int *fast);

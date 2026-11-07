@@ -270,6 +270,54 @@ int K_Specials_WalkOver(int special)
     }
 }
 
+int K_Specials_LineShuts(int line, int sector)
+{
+    const line_t *l = &lines[line];
+    int i;
+
+    switch (l->special)
+    {
+        // Doors that close (W1, WR; the 30 s ones open again after), blazing
+        // ones too; ceilings that crush (lowerAndCrush); floors that crush
+        // (raiseFloorCrush):
+        case 3: case 16: case 75: case 76: case 107: case 110:
+        case 44: case 72:
+        case 56: case 94:
+            break;
+
+        default:
+            return false;
+    }
+
+    if (l->tag == 0)
+    {
+        return false;
+    }
+
+    if (sector < 0)
+    {
+        return true;
+    }
+
+    if (sectors[sector].tag != l->tag)
+    {
+        return false;
+    }
+
+    for (i = 0; i < K_Specials_TriggerCount(sector); ++i)
+    {
+        int special = lines[K_Specials_TriggerLine(sector, i)].special;
+        int key = K_Specials_LockKey(special);
+
+        if (K_Specials_ManualDoor(special) && (key < 0 || K_Specials_HasKey(key)))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 int K_Specials_CrusherStart(int special, int *fast)
 {
     *fast = special == 6 || special == 77;

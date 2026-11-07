@@ -29,6 +29,9 @@
 //	from one cell into another (K_Path_SetEnterCost: the danger of the area
 //	entered); the length stays the way walked.
 //
+//	A walk-over line that would shut a door or bars the route goes through
+//	further on costs SHUT_PENALTY to cross, and the route is planned again.
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -40,11 +43,23 @@
 #include "m_misc.h"
 
 #include "k_path.h"
+#include "k_specials.h"
 
 // Added per blocked crossing, unless the brain says otherwise. More than
 // any open route on a map can cost, so a route with fewer blocked
 // crossings always wins.
 #define BLOCKED_PENALTY 1.0e7
+
+// Crossing a walk-over line that shuts a sector the route goes through
+// further on (K_Specials_LineShuts) costs SHUT_PENALTY: the route is planned
+// again with every crossing of that line so, up to MAX_SHUT_SEARCHES times
+// (E3M4: line 491 opens the bars line 703 closes, the four meeting at a
+// point; the way back to the bars from the rooms past them crossed 703, and
+// the bot shut them on itself until every goal behind them failed). More
+// than any open route costs, but less than a blocked crossing the brain can
+// fix (k_brain.c: FIXABLE_COST): past the line, opening it again is one.
+#define SHUT_PENALTY 1.0e5
+#define MAX_SHUT_SEARCHES 4
 
 // A door or lift costs the distance the player could run (16.7 units a
 // tic) while waiting for it.
@@ -110,6 +125,12 @@ static unsigned int search;
 static heapitem_t *heap;
 static int heap_size;
 static int heap_capacity;
+
+// Per portal: == shut_mark, its line shuts the way on (SHUT_PENALTY), for
+// this K_Path_Find.
+static unsigned int *shut_marks;
+static int shut_capacity;
+static unsigned int shut_mark;
 
 static k_blockcost_t block_cost;
 static k_pinchcost_t pinch_cost;
@@ -592,6 +613,11 @@ static boolean Search(k_path_t *path)
                 step += WAIT_COST * wait;
             }
 
+            if (shut_marks[link->portal] == shut_mark)
+            {
+                step += SHUT_PENALTY;
+            }
+
             // The way through the cell, from where the node came in.
             if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->b, &pinch))
             {
@@ -666,6 +692,61 @@ static void Reconstruct(k_path_t *path)
         path->portals[i] = node / 2;
         path->cells[i + 1] = NodeCell(node);
     }
+}
+
+// A new K_Path_Find: no crossing shuts the way on yet.
+static void PrepareShut(void)
+{
+    if (graph->num_portals > shut_capacity)
+    {
+        shut_capacity = graph->num_portals;
+        free(shut_marks);
+        shut_marks = calloc(shut_capacity, sizeof(*shut_marks));
+        shut_mark = 0;
+    }
+
+    if (++shut_mark == 0)
+    {
+        memset(shut_marks, 0, shut_capacity * sizeof(*shut_marks));
+        shut_mark = 1;
+    }
+}
+
+// The first walk-over line the route crosses that shuts a sector with a cell
+// further on the route (SHUT_PENALTY), not marked yet: every crossing of it
+// is marked. Returns whether there was one.
+static boolean MarkShutting(const k_path_t *path)
+{
+    int i, j, p;
+
+    for (i = 0; i < path->num_cells - 1; ++i)
+    {
+        int line = graph->portals[path->portals[i]].line;
+
+        if (line < 0 || shut_marks[path->portals[i]] == shut_mark
+         || !K_Specials_LineShuts(line, -1))
+        {
+            continue;
+        }
+
+        for (j = i + 1; j < path->num_cells; ++j)
+        {
+            if (K_Specials_LineShuts(line, map->subsectors[map->cells[path->cells[j]].subsector].sector))
+            {
+                for (p = 0; p < graph->num_portals; ++p)
+                {
+                    if (graph->portals[p].line == line)
+                    {
+                        shut_marks[p] = shut_mark;
+                    }
+                }
+
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 static void CellHeights(int cell, double *floor, double *ceiling);
@@ -963,8 +1044,10 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
     else
     {
         boolean found;
+        int n;
 
         PrepareNodes();
+        PrepareShut();
         health_cost = HEALTH_COST;
         found = Search(path);
 
@@ -973,6 +1056,20 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
         {
             PrepareNodes();
             health_cost = HEALTH_COST_DEADLY;
+            found = Search(path);
+        }
+
+        // One that shuts its own way on: again, round the line that does.
+        for (n = 0; found && n < MAX_SHUT_SEARCHES; ++n)
+        {
+            Reconstruct(path);
+
+            if (!MarkShutting(path))
+            {
+                break;
+            }
+
+            PrepareNodes();
             found = Search(path);
         }
 

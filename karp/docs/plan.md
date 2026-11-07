@@ -3344,6 +3344,22 @@ Who controls the player in a fight (the user's model):
     no fight or hold begins on an island (dry floor within 192 either way, slime round it); the
     route takes the player off it first, shooting on the way. Left for C4: where to stand in an
     open room (backing off to keep distance, edges and corners).
+- **Episode 3 run-through** (the user, salt 443, E3M1 on):
+  - E3M4 stuck at the bars to the yellow key: two sets of bars, sector 147 (opened by walk-over
+    line 492) and sector 146 (opened by WR line 491, closed by WR line 703), with four lines
+    meeting at (960,-1600) in front of them. After a detour past door 141 (shells, armour), the
+    way back to the bars crossed 703 and shut 146 again; line 491 was then crossed while 146 was
+    still closing, which the engine ignores (`EV_DoDoor` skips a sector already moving), counted
+    as not working; the third time the line was used up and every goal behind the bars failed
+    (without monsters it got through on the second try). Done: a route that crosses a
+    walk-over line shutting a sector the route goes through further on (`K_Specials_LineShuts`:
+    doors that close, crushing ceilings and floors; not a door the player opens by hand) is
+    planned again with every crossing of that line costing 1e5 (`k_path.c`: SHUT_PENALTY), so
+    the way back to the bars goes round by 491, 492 and 495; and a walk-over line crossed while
+    its sector was still moving is crossed again once it stops, without counting as failed.
+    Not done: a pass right by the point where the lines meet sets off all four in whatever order
+    the engine finds them; routes cross lines at their portals' middles, which keeps clear of
+    it (the waypoint corner cut of 24 leaves 4 to 16 units here).
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate

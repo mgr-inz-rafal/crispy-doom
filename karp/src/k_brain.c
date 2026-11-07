@@ -2229,6 +2229,18 @@ static boolean UpdateTrigger(goal_t *goal)
 
         goal->settling = false;
         K_Map_SectorHeights(goal->param, &goal->floor, &goal->ceiling);
+
+        // A walk-over line crossed meanwhile set nothing off: crossed again
+        // (E3M4: line 491 crossed as the bars it opens were closing, counted
+        // as not working, twice; the third time every goal behind them
+        // failed).
+        if (goal->used)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "crossed line %d as sector %d was still moving - "
+                  "crossing it again", goal->chosen.line, goal->param);
+            goal->planned = false;
+            return true;
+        }
     }
 
     K_Map_SectorHeights(goal->param, &floor, &ceiling);
