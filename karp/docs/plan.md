@@ -3360,6 +3360,51 @@ Who controls the player in a fight (the user's model):
     Not done: a pass right by the point where the lines meet sets off all four in whatever order
     the engine finds them; routes cross lines at their portals' middles, which keeps clear of
     it (the waypoint corner cut of 24 leaves 4 to 16 units here).
+- **Keeping tough monsters off** (the user, 2026-11-08: a baron fought point blank, not in an
+  open space nor a cramped one, cornered the bot against a wall and clawed it to death; another,
+  in a cramped place, it could hardly step aside from, and then a demon in its way killed it
+  while the bot brought up the rocket launcher and the shotgun again at once; "a baron shot
+  from a long way off, even with the shotgun, is easy" - stay away from barons, arch-viles, to
+  some extent cacodemons, something gradual). Seen in the logs too: E3M3, running for shells
+  at firepower CRITICAL, a fight with a baron begun and broken off eight times in 4 s, the run
+  taking the bot into its claws (35, 25); E3M4, at 39 health, a fight with a demon 50 off broken
+  off for health bonuses beside it, stuck on the demon; E3M3 and E3M9, the rocket launcher up
+  for imps 650 to 800 off, or for the cyberdemon, and away again within a second or two for the
+  shotgun or the pistol (E3M9, the user: the bullets gone on the cyberdemon and cacodemons with
+  the pistol, the red key's room of hitscanners gone into with rockets only). Done (`k_combat.c`,
+  folded into the fight's per-way score, `ChooseMove`):
+  - Each kind keeps the player its own distance off when it can come at the player (`kind_t`:
+    keep; 192 as before for the weak ones and lost souls): demons, spectres, cacodemons 256;
+    hell knights, revenants, arachnotrons, pain elementals 320; barons, mancubi, arch-viles
+    384; the Cyberdemon and the spider mastermind 512 - monsters fire less the further off,
+    least past 264 with blows and 392 without (`P_CheckMissileRange`). The push is 2 for each
+    192 nearer than that, so the tougher the kind, the further and harder.
+  - Nearer than its own distance it presses the player: no leash while pressed, where the
+    fight began moving along; each way scores more for the room on along it to back off further
+    (out to 160), so a cornered player slips along the wall and round, not into the corner. No
+    step in a fight crosses a walk-over line that does something. Logged: "backing off from the
+    baron of hell, 184 units off - kept 384 off"; the console: "..., backing off".
+  - Rockets: rated in a fight as if the player stood (it does not run at the target with them
+    wanted; fired only as it really runs); wanted, or the only gun but the pistol against what
+    they are for (tough or bunched), they keep the target 64 beyond where they stop, and no way
+    goes toward it; kept in hand while it is too near for a moment, unless within 192; brought
+    up only with room (the target 64 beyond, no other monster that can come at the player that
+    near), never for one weak monster alone while another gun can fire.
+  - A run for an item held for a room of monsters ahead stays held while the fight goes on; and
+    no run for an item turns away from an awake monster within 96 (192 once fighting).
+  - The target of a melee weapon (the chainsaw against what it is for, the berserk fist against
+    zombiemen and imps) is not backed off from.
+  Runs, salt 443, against the build before: E3M1-7, E3M9 and E1M8 finished 7 of 9 both (before:
+  E3M6 and E3M9 died; after: E3M6 to the same crusher or floor, E3M9 later, 228 s against 216);
+  E3M3 in 97 s against 197; E1M8's two barons killed in 26 s without a hit from them; the
+  E3M9 cyberdemon fight with no pistol in it once the launcher was up. Doom II MAP01-06, 10,
+  13, 15, 19: 5 of 10 both (MAP04 now, MAP06 before). Tried and dropped: no pistol against a
+  monster with more than 300 left - with nothing to hurt the cyberdemon no fight began, so
+  nothing kept the bot off it, and it walked its route in the cyberdemon's sight and died to
+  the splash (E3M9, 103 s). Left: keeping off a monster with no weapon that hurts it (plan
+  7.2: fight or avoid - get out of its sight); the dash for a weapon still flip-flops with
+  fights (E3M3: 15 broken off for the shotgun in 15 s, a monster in and out of 128); the fight
+  ending as a baron backed off from goes out of sight, the route then walking back at it.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate

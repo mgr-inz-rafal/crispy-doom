@@ -122,8 +122,8 @@ int K_Combat_MonstersWithin(double reach);
 
 // The area with monsters inside, not safe, that the route goes into ahead
 // (within 512 along it, past doors shut or not, not the player's own) -
-// the one held short of while holding; -1 if none. A run for an item waits
-// while there is one.
+// the one held short of while holding, and once found, kept while a fight
+// goes on; -1 if none. A run for an item waits while there is one.
 int K_Combat_MonstersAhead(void);
 
 // Set by the brain while it goes for health with health CRITICAL, or dashes

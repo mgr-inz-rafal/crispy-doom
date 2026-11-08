@@ -3085,8 +3085,9 @@ static boolean ConsiderItems(goal_t *goal)
 // for there and held short of as on any way, not run into (E2M5: at
 // firepower LOW the bot ran for a box of shells past three imps in a
 // corridor, clawed; Doom II MAP14: a hold that had killed five was broken
-// off for a medikit among the monsters held short of). Not for health at
-// CRITICAL: worth any risk. Logged once a run.
+// off for a medikit among the monsters held short of) - until the fight
+// for it is over. Not for health at CRITICAL: worth any risk. Logged once a
+// run.
 static boolean RunWaits(const goal_t *goal, const k_item_t *item)
 {
     char name[64];
