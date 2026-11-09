@@ -170,9 +170,14 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // only while no monster the player can see is within DASH_CLEAR: through
 // monsters close by, the fight comes first (the user, Doom II MAP02: dashing
 // for a super shotgun, the bot walked into a room of zombiemen and shotgun
-// guys 40 to 90 off, fighting none of them, and died).
+// guys 40 to 90 off, fighting none of them, and died). Stopped so, the dash
+// waits until none is within DASH_FREE, or the fight begun is over (E3M3: a
+// dash for the shotgun broke a fight off and began it again 7 times in 15 s,
+// imps and demons coming in and out of DASH_CLEAR as the fight backed off
+// them and the run turned back toward them).
 #define FIGHT_REACH 400.0
 #define DASH_CLEAR 128.0
+#define DASH_FREE 384.0
 
 // Out of a fight, an item behind one fix the brain knows - barrels in the
 // way, a door or bars a switch or walk-over line opens; never a key - is
@@ -404,6 +409,8 @@ static char status[K_LOG_LINE_LEN * 2];
 static int item_check_tic;              // when to look for items next
 static boolean was_critical;            // health was CRITICAL at the last look
 static int dashing = -1;                // the item fights are broken off for
+static boolean dash_held;               // its dash stopped for a monster close
+static boolean dash_fought;             // by (DASH_FREE), and a fight begun
 static int run_waited = -1;             // the item whose run waited, logged
 static int *item_skip;                  // per item: not looked at before this
 static int item_skip_size;
@@ -3116,7 +3123,7 @@ static boolean RunWaits(const goal_t *goal, const k_item_t *item)
 // CRITICAL, and ammo when ammo is LOW or firepower CRITICAL, wherever it is
 // (escape); a weapon the player lacks, or the ammo running out, from when it
 // comes within FIGHT_REACH until it is picked up, while no monster is within
-// DASH_CLEAR -
+// DASH_CLEAR (DASH_FREE once one was) -
 // combat starts no fight and breaks off the one going on; the player runs
 // for it, shooting on the way at what it sees - but not while its way goes
 // into a room of monsters ahead (RunWaits). The item may have fixes on
@@ -3180,10 +3187,30 @@ static void UpdateEscape(void)
            + (item->at.y - player.y) * (item->at.y - player.y)) <= FIGHT_REACH)
     {
         dashing = goal->param;
+        dash_held = false;
+        dash_fought = false;
     }
 
-    if (dashing == goal->param && K_Combat_MonstersWithin(DASH_CLEAR) == 0
-     && !RunWaits(goal, item))
+    // Stopped for a monster close by, until none is within DASH_FREE or the
+    // fight begun meanwhile is over.
+    if (dashing == goal->param)
+    {
+        if (K_Combat_MonstersWithin(DASH_CLEAR) > 0)
+        {
+            dash_fought |= dash_held && K_Combat_GetStatus()->battle;
+            dash_held = true;
+        }
+        else if (dash_held)
+        {
+            dash_fought |= K_Combat_GetStatus()->battle;
+            dash_held = K_Combat_MonstersWithin(DASH_FREE) > 0
+                     && !(dash_fought && !K_Combat_GetStatus()->battle);
+        }
+
+        dash_fought &= dash_held;
+    }
+
+    if (dashing == goal->param && !dash_held && !RunWaits(goal, item))
     {
         M_snprintf(why, sizeof(why), "going for the %s", item->name);
         K_Combat_Escape(why);
@@ -3458,6 +3485,8 @@ void K_Brain_Reset(void)
     was_critical = false;
     idling = false;
     dashing = -1;
+    dash_held = false;
+    dash_fought = false;
     run_waited = -1;
     hold_since = 0;
     hold_at.x = hold_at.y = 1.0e9;

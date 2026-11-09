@@ -126,6 +126,13 @@ int K_Combat_MonstersWithin(double reach);
 // goes on; -1 if none. A run for an item waits while there is one.
 int K_Combat_MonstersAhead(void);
 
+// Whether the weapon (weapontype_t), with ammo, would kill in time a monster
+// awake that the player is outgunned by - one the guns and rounds it holds
+// cannot kill (k_combat.c: hopeless), which is not fought but kept off; 0
+// when there is none. Its ammo and the weapon are then running out
+// (k_items.h).
+int K_Combat_Beats(int weapon);
+
 // Set by the brain while it goes for health with health CRITICAL, or dashes
 // for a weapon or ammo close by, with why ("health CRITICAL, going for
 // health"); NULL when not: no fight is started, one going on is broken off,

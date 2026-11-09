@@ -21,10 +21,18 @@
 //	shot should kill the target. The pistol is the last resort: for
 //	monsters with little health sniped at from far off, not closing in,
 //	with the area clear, and when nothing better can hurt the target; the
-//	bare fist comes after it, and melee is for weak monsters only. Nav
+//	bare fist comes after it, and melee is for weak monsters only. Rockets
+//	and cells are kept for the tough monsters left (barons, arch-viles,
+//	mancubi, the Cyberdemon, the spider mastermind) while there are no more
+//	than their health takes: the weaker ones get the other guns. Nav
 //	faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
+//
+//	Fight or avoid (plan, 7.3): a monster the guns and rounds held cannot
+//	kill - too few, or too slow - is no target; one in sight near is kept
+//	off, out of its sight, with nothing shot at it, and what would kill it
+//	is gone for (K_Combat_Beats).
 //
 //	Pistol and chaingun shots stray only when the trigger is held through
 //	a shot (P_GunShot is accurate while refire is 0): far off they are
@@ -50,8 +58,10 @@
 //	first), and strafes side to side near where the fight began, backing
 //	off from monsters that come close - the tougher the kind, the further
 //	it is kept off: a baron is shot from afar, the player backing off as
-//	far as it takes, toward room to back off further - never over a drop,
-//	onto a floor that hurts, or over a walk-over line that does something.
+//	far as it takes, toward room to back off further, and pressed hard
+//	where there is none, retreating to open floor nearby - never over a
+//	drop, onto a floor that hurts, or over a walk-over line that does
+//	something.
 //	Once nothing has been worth shooting for a second, nav
 //	plans its route again from where the player is. A target that has not
 //	lost health for a while (out of reach of the shots) is left alone for
@@ -240,6 +250,40 @@ extern void A_SPosAttack();
 #define MOVE_LOOK 32.0
 #define MOVE_WAYS 16
 
+// Retreating (the user, E3M9: barons fought in a cramped room, a bigger room
+// nearby; E3M4 too, a baron's balls from 90 off, too near to step aside
+// from; E3M9, teleported among three cacodemons, their balls from 60 to 100
+// off): pressed hard - a monster RETREAT_PRESS times KEEP_AWAY or more
+// inside its own distance - for RETREAT_AFTER, off open floor (a wall within
+// RETREAT_OPEN), backing off does not work where the player is (a wall, a
+// corner, a small room). Not by one that only bites: it follows the player
+// anywhere, and a run from it is a run with it at the back (E3M5: a demon
+// 74 off kept up with the retreat, biting, from 100 to dead in 2 s; backing
+// off, the player shoots it). It retreats to open floor: the middle of a cell
+// with no wall within RETREAT_OPEN, RETREAT_GAIN further from what presses
+// it than the player is, walked to through open crossings within
+// RETREAT_REACH, the way and the spot never nearer to any awake monster than
+// RETREAT_CLEAR (than the player is, if nearer: E3M5, retreating from a
+// demon past three imps, clawed and burned from 84 to 15); the nearest,
+// what other monsters would see of it counted (Exposure). The fight goes
+// on, shooting on the way; a step that
+// something flying would hit is left to the fight's own move. Over once
+// there (RETREAT_NEAR), once nothing has pressed for RETREAT_CALM, or after
+// RETREAT_MOST; not again for RETREAT_AGAIN, nor looked for again for
+// RETREAT_LOOK when none was found.
+#define RETREAT_PRESS 0.5
+#define RETREAT_AFTER (TICRATE / 2)
+#define RETREAT_OPEN 128.0
+#define RETREAT_GAIN 128.0
+#define RETREAT_REACH 768.0
+#define RETREAT_CLEAR 128.0
+#define RETREAT_NEAR 32.0
+#define RETREAT_CALM (TICRATE / 2)
+#define RETREAT_MOST (4 * TICRATE)
+#define RETREAT_AGAIN (3 * TICRATE)
+#define RETREAT_LOOK TICRATE
+#define RETREAT_POINTS 32
+
 // Open floor is floor with no wall within OPEN_REACH.
 #define OPEN_REACH 64.0
 
@@ -386,6 +430,60 @@ extern void A_SPosAttack();
 #define BUNCHED 96.0
 #define ROCKET_SHARE 0.25
 #define ROCKET_ROOM 64.0
+
+// Tiers, by spawn health: the weak ones - zombiemen, shotgun guys,
+// chaingunners, SS, imps, lost souls, demons, spectres - have WEAK_HEALTH or
+// less; the tough ones - mancubi, arch-viles, barons, the spider mastermind,
+// the Cyberdemon - TOUGH_HEALTH or more; revenants, cacodemons, pain
+// elementals, hell knights and arachnotrons are between.
+#define WEAK_HEALTH 150
+#define TOUGH_HEALTH 600
+
+// Rockets and cells are kept for the tough monsters (the user: with tough
+// monsters alive, keep plasma cells in reserve for them; the low tier
+// monsters are cleared with low tier weapons): while what the rocket
+// launcher, the plasma rifle and the BFG held could do with the rounds there
+// are for them (FLIES_HIT of their damage a round) is no more than the health
+// of the tough monsters alive in the level - nor than RESERVE_SHARE of what
+// they could do with as many as the player can carry - those weapons rate
+// nothing against a weak monster while another gun can fire, the pistol
+// too, nor against one between while another gun but the pistol can.
+// Above that, they are for anything, as before.
+#define RESERVE_SHARE 0.5
+
+// Hopeless (plan 7.3 point 3, fight or avoid; the user, E3M9: the shells
+// spent on the cyberdemon with the shotgun, then the bullets with the
+// pistol, and the red key's room of hitscanners gone into with rockets
+// only): a monster that is not weak the guns held cannot kill - the rounds
+// there are would not take HOPELESS_SHARE of the health it has left (the
+// target of a fight on, HOPELESS_KEEP: it flips at the edge; a wounded
+// cacodemon with a little less than its health in hand, kept off and
+// passed, bit the bot from 81 to 21 - most of the way is worth fighting, the
+// damage rolls and the pain go the player's way often enough), or none of
+// them would kill it within HOPELESS_TICS of firing on. A round counts from
+// as far as a fight keeps the monster off (kind_t: keep): a projectile's
+// FLIES_HIT of its damage (a big, slow target, kept where rockets fire), a
+// bullet's or a pellet's as the spread and range allow (HitShare). Melee
+// never counts; invulnerable for INVULN_LEFT more, nothing is hopeless.
+// A hopeless monster is no target - no round is spent on it - and one
+// awake in sight within its kind's distance (AVOID_PAST beyond it once kept
+// off), whether it can come at the player or shoots from where it stands,
+// is kept off: a standoff, battle mode
+// with nothing to shoot, the route waiting while the player backs off it
+// toward room, out of its sight (Exposure), until it is out of sight or off
+// for BATTLE_CALM. Kept off AVOID_MOST in all, it is passed for AVOID_SKIP,
+// the route going on (never stuck: it may stand where the route goes) - but
+// kept off still within CLOSE_REACH, in reach of its blows. While
+// one met awake in sight stays awake, the ammo and weapons that would kill
+// it in time are wanted (K_Combat_Beats; k_items.h: running out).
+#define HOPELESS_SHARE 0.5
+#define HOPELESS_KEEP 0.25
+#define HOPELESS_TICS (60 * TICRATE)
+#define FLIES_HIT 0.8
+#define AVOID_PAST 128.0
+#define AVOID_MOST (10 * TICRATE)
+#define AVOID_SKIP (10 * TICRATE)
+#define MAX_HOPELESS 16
 
 // Monsters that cannot come at the player (the user: monsters shut in for
 // good behind bars, fought for ammo the bot needed later): judged by the
@@ -784,6 +882,8 @@ static k_vec2_t target_last;        // where it was then
 static k_vec2_t target_velocity;    // smoothed, units per tic
 static int wanted = -1;             // the weapon wanted, -1 if none
 static boolean can_hurt;            // some weapon in hand can hurt the target
+                                    // (one not weak: from where a fight keeps
+                                    // it, it being no hopeless one)
 static int last_switch;             // leveltime of the last switch pressed
 static const mobj_t *shot_mo;       // what the last press read was fired at
 static int shot_tic = -1;           // and the tic its shot leaves (lead)
@@ -831,6 +931,20 @@ static int strafe_tics;             // until it turns the other way
 static k_vec2_t move;               // the velocity wanted
 static boolean pressed;             // a monster presses the player (KEEP_PUSH)
 static const mobj_t *pressed_mo;    // the one last logged as pressing
+static int presser = -1;            // this tic's, by place in the list, and
+static double press;                // by how many KEEP_AWAY inside its distance
+
+// Retreating to open floor (RETREAT_OPEN): the way there (the spot last),
+// the point gone for, since when, the tics with nothing pressing; the tics
+// pressed hard in a row, and when it may be looked for again.
+static boolean retreating;
+static k_vec2_t retreat_points[RETREAT_POINTS];
+static int retreat_num_points;
+static int retreat_next;
+static int retreat_since;
+static int retreat_calm;
+static int hard_pressed;
+static int retreat_again;
 
 // The walk-over lines near the player this tic that do something, which no
 // step in a fight crosses (Trips).
@@ -845,6 +959,23 @@ static int ahead_area = -1;
 // weapon or ammo close by (K_Combat_Escape), and why.
 static boolean escape;
 static char escape_why[64];
+
+// Rockets and cells kept for the tough monsters (RESERVE_SHARE).
+static boolean reserve;
+
+// Hopeless monsters (HOPELESS_SHARE): this tic, by place in the list, and per
+// weapon whether it would kill one awake in time (K_Combat_Beats); those
+// logged as hopeless; the one kept off this tic (by place, -1 if none), the
+// one kept off last and for how long in all, and the one passed, until when.
+static boolean *hopeless;
+static int hopeless_capacity;
+static boolean beats[NUMWEAPONS];
+static const mobj_t *hopeless_logged[MAX_HOPELESS];
+static int avoid = -1;
+static const mobj_t *avoid_mo;
+static int avoid_tics;
+static const mobj_t *passed_mo;
+static int passed_until;
 
 // Barrels in the level, live ones and those about to blow up. Barrels that
 // would set each other off share a chain; a chain with a barrel within
@@ -1517,6 +1648,30 @@ static double RateGain(const player_t *player, double ux, double uy)
     return battle ? 1.0 : RocketGain(player, ux, uy);
 }
 
+// The share of a bullet's or a pellet's damage that lands on a thing of the
+// radius at the distance: as the spread allows (none when tapped far off),
+// less and less beyond the weapon's range.
+static double HitShare(const weapon_t *weapon, double distance, double radius)
+{
+    double hit = 1.0;
+
+    if (!(weapon->taps && distance > TAP_DISTANCE))
+    {
+        double half = atan2(radius, distance) * 180.0 / K_PI;
+
+        hit = SDL_min(1.0, half / weapon->spread);
+    }
+
+    if (weapon->range > 0.0 && distance > weapon->range)
+    {
+        double share = weapon->range / distance;
+
+        hit *= SDL_max(0.25, share * share);
+    }
+
+    return hit;
+}
+
 // The damage a shot of the weapon would do, on average, to a thing of the
 // radius at the distance (at `at`, if not NULL): 0 if it cannot fire, the
 // thing is out of a melee weapon's reach, a barrel is beside the player (a
@@ -1560,18 +1715,9 @@ static double ShotDamage(const player_t *player, const weapon_t *weapon, double 
 
         hit = 1.0 / (1.0 + distance / 512.0);
     }
-    else if (!(weapon->taps && distance > TAP_DISTANCE))
+    else
     {
-        double half = atan2(radius, distance) * 180.0 / K_PI;
-
-        hit = SDL_min(1.0, half / weapon->spread);
-    }
-
-    if (weapon->range > 0.0 && distance > weapon->range)
-    {
-        double share = weapon->range / distance;
-
-        hit *= SDL_max(0.25, share * share);
+        hit = HitShare(weapon, distance, radius);
     }
 
     return damage * hit;
@@ -1848,6 +1994,267 @@ static boolean IgnoredTarget(int index)
     return false;
 }
 
+// The health a kind of monster is spawned with: its tier (WEAK_HEALTH,
+// TOUGH_HEALTH).
+static int SpawnHealth(int type)
+{
+    return type >= 0 && type < NUMMOBJTYPES ? mobjinfo[type].spawnhealth : 0;
+}
+
+// Whether the weapon fires the rockets or cells kept for the tough monsters
+// (RESERVE_SHARE).
+static boolean Reserved(const weapon_t *weapon)
+{
+    ammotype_t ammo = weaponinfo[weapon->weapon].ammo;
+
+    return ammo == am_misl || ammo == am_cell;
+}
+
+// The damage a round of the gun does to the monster, from as far as a fight
+// keeps it off: a projectile's FLIES_HIT of all of it, a bullet's or a
+// pellet's as the spread and range allow (HOPELESS_SHARE).
+static double RoundDamage(const weapon_t *weapon, const k_monster_t *monster)
+{
+    double distance = SDL_max(Kind(monster->type)->keep, KEEP_AWAY);
+
+    return weapon->damage * (weapon->flies ? FLIES_HIT
+                                           : HitShare(weapon, distance, monster->radius))
+         / weapon->shot;
+}
+
+// Whether the gun, firing on, would kill the monster within HOPELESS_TICS,
+// the ammo aside.
+static boolean InTime(const weapon_t *weapon, const k_monster_t *monster)
+{
+    return weapon->reach <= 0.0
+        && monster->health * weapon->tics
+           <= HOPELESS_TICS * RoundDamage(weapon, monster) * weapon->shot;
+}
+
+// What the guns held that would kill the monster in time could do to it
+// with the rounds there are: of each ammo type, by the best of them.
+static double InHand(const player_t *player, const k_monster_t *monster)
+{
+    double best[NUMAMMO] = { 0.0 }, can = 0.0;
+    int i, a;
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        const weapon_t *weapon = &weapons[i];
+        ammotype_t ammo = weaponinfo[weapon->weapon].ammo;
+
+        if (ammo != am_noammo && player->weaponowned[weapon->weapon]
+         && Selectable(player, weapon) && InTime(weapon, monster))
+        {
+            best[ammo] = SDL_max(best[ammo], RoundDamage(weapon, monster));
+        }
+    }
+
+    for (a = 0; a < NUMAMMO; ++a)
+    {
+        can += player->ammo[a] * best[a];
+    }
+
+    return can;
+}
+
+// Whether the monster (by its place in this tic's list) is hopeless: not
+// weak, and what is in hand would not take HOPELESS_SHARE of its health.
+static boolean Hopeless(const player_t *player, int index)
+{
+    const k_monster_t *monster = &monsters[index];
+    double share = battle && monster_mobjs[index] == target_mo ? HOPELESS_KEEP : HOPELESS_SHARE;
+
+    return SpawnHealth(monster->type) > WEAK_HEALTH && Kind(monster->type)->cost > 0.0
+        && player->powers[pw_invulnerability] < INVULN_LEFT
+        && InHand(player, monster) < monster->health * share;
+}
+
+// Each tic: which monsters are hopeless; logged as each becomes so, awake in
+// sight, and again once it can be fought. Those logged, met awake, are what
+// the player is outgunned by while they stay awake (beats).
+static void UpdateHopeless(const player_t *player)
+{
+    int i, k, w;
+
+    if (hopeless_capacity < num_monsters)
+    {
+        hopeless_capacity = monster_capacity;
+        hopeless = realloc(hopeless, hopeless_capacity * sizeof(*hopeless));
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        hopeless[i] = Hopeless(player, i);
+    }
+
+    for (k = 0; k < MAX_HOPELESS; ++k)
+    {
+        i = IndexOf(hopeless_logged[k]);
+
+        if (hopeless_logged[k] != NULL && (i < 0 || !hopeless[i]))
+        {
+            if (i >= 0)
+            {
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s can be fought now - %.0f of its %d "
+                      "health in hand", monsters[i].name, InHand(player, &monsters[i]),
+                      monsters[i].health);
+            }
+
+            hopeless_logged[k] = NULL;
+        }
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (!hopeless[i] || !monsters[i].awake || !monsters[i].visible)
+        {
+            continue;
+        }
+
+        for (k = 0; k < MAX_HOPELESS && hopeless_logged[k] != monster_mobjs[i]; ++k)
+        {
+        }
+
+        if (k < MAX_HOPELESS)
+        {
+            continue;
+        }
+
+        for (k = 0; k < MAX_HOPELESS && hopeless_logged[k] != NULL; ++k)
+        {
+        }
+
+        if (k < MAX_HOPELESS)
+        {
+            hopeless_logged[k] = monster_mobjs[i];
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s, %.0f units off, is beyond what the player "
+                  "holds - %.0f of its %d health in hand; not fought, kept off",
+                  monsters[i].name, monsters[i].distance, InHand(player, &monsters[i]),
+                  monsters[i].health);
+        }
+    }
+
+    memset(beats, 0, sizeof(beats));
+
+    for (k = 0; k < MAX_HOPELESS; ++k)
+    {
+        i = IndexOf(hopeless_logged[k]);
+
+        for (w = 0; i >= 0 && monsters[i].awake && w < arrlen(weapons); ++w)
+        {
+            beats[weapons[w].weapon] |= InTime(&weapons[w], &monsters[i]);
+        }
+    }
+}
+
+// Each tic: whether rockets and cells are kept for the tough monsters left
+// (RESERVE_SHARE); logged as it changes.
+static void UpdateReserve(const player_t *player)
+{
+    double best[NUMAMMO] = { 0.0 }, need = 0.0, can = 0.0, most = 0.0;
+    boolean held;
+    int i, a;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (SpawnHealth(monsters[i].type) >= TOUGH_HEALTH)
+        {
+            need += monsters[i].health;
+        }
+    }
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        if (Reserved(&weapons[i]) && player->weaponowned[weapons[i].weapon])
+        {
+            ammotype_t ammo = weaponinfo[weapons[i].weapon].ammo;
+
+            best[ammo] = SDL_max(best[ammo],
+                                 weapons[i].damage * FLIES_HIT / SDL_max(weapons[i].shot, 1));
+        }
+    }
+
+    for (a = 0; a < NUMAMMO; ++a)
+    {
+        can += player->ammo[a] * best[a];
+        most += player->maxammo[a] * best[a];
+    }
+
+    held = need > 0.0 && can > 0.0 && can <= SDL_min(need, most * RESERVE_SHARE);
+
+    if (held && !reserve)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells kept for the tough monsters left - "
+              "%.0f of their damage in hand, %.0f of their health", can, need);
+    }
+    else if (!held && reserve && can > 0.0)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells for anything again - %.0f of their "
+              "damage in hand, %.0f of the tough monsters' health", can, need);
+    }
+
+    reserve = held;
+}
+
+// The hopeless monster to keep off (AVOID_PAST): awake, in sight, nearer
+// than its kind's distance - the nearest; not the one passed, unless within
+// CLOSE_REACH. One that cannot come at the player too: from where it stands
+// it shoots (E3M8: the spider mastermind, 212 off, shot the bot dead as it
+// picked up a rocket; E3M9: a switch worked in the cyberdemon's sight). -1
+// if none.
+static int Avoided(void)
+{
+    int best = -1, i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+        double keep = SDL_max(Kind(monster->type)->keep, KEEP_AWAY)
+                    + (battle && monster_mobjs[i] == avoid_mo ? AVOID_PAST : 0.0);
+
+        if (hopeless[i] && monster->awake && monster->visible && monster->distance < keep
+         && !(monster_mobjs[i] == passed_mo && leveltime < passed_until
+              && monster->distance >= CLOSE_REACH)
+         && (best < 0 || monster->distance < monsters[best].distance))
+        {
+            best = i;
+        }
+    }
+
+    return best;
+}
+
+// Each tic: the hopeless monster kept off (Avoided), and for how long in
+// all while fighting; after AVOID_MOST, passed.
+static void UpdateAvoid(void)
+{
+    avoid = Avoided();
+
+    if (avoid < 0 || !battle)
+    {
+        return;
+    }
+
+    if (monster_mobjs[avoid] != avoid_mo)
+    {
+        avoid_mo = monster_mobjs[avoid];
+        avoid_tics = 0;
+    }
+
+    if (++avoid_tics >= AVOID_MOST)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "passing the %s, %.0f units off - kept off %d s in all; "
+              "the route goes on", monsters[avoid].name, monsters[avoid].distance,
+              AVOID_MOST / TICRATE);
+        passed_mo = avoid_mo;
+        passed_until = leveltime + AVOID_SKIP;
+        avoid_mo = NULL;
+        avoid_tics = 0;
+        avoid = Avoided();
+    }
+}
+
 static void ChooseTarget(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -1870,7 +2277,7 @@ static void ChooseTarget(const player_t *player)
 
         if (!monster->shootable || monster->distance > TARGET_REACH
          || (!monster->awake && monster->distance > ASLEEP_REACH)
-         || FarAndDodgeable(monster, monster_mobjs[i]) || IgnoredTarget(i))
+         || FarAndDodgeable(monster, monster_mobjs[i]) || IgnoredTarget(i) || hopeless[i])
         {
             continue;
         }
@@ -2077,9 +2484,38 @@ static void UpdateClear(void)
     }
 }
 
+// Whether a gun that fires neither rockets nor cells can fire - but the
+// pistol, without `pistol`.
+static boolean LowGun(const player_t *player, boolean pistol)
+{
+    int i;
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        if (weapons[i].reach <= 0.0 && !Reserved(&weapons[i])
+         && (pistol || weapons[i].weapon != wp_pistol)
+         && Selectable(player, &weapons[i]) && CanFire(player, &weapons[i]))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether the rockets and cells kept for the tough monsters are kept from
+// this one (RESERVE_SHARE): not tough, and another gun can fire - the pistol
+// too against a weak one.
+static boolean KeptFrom(const player_t *player, const k_monster_t *monster)
+{
+    int spawn = SpawnHealth(monster->type);
+
+    return reserve && spawn < TOUGH_HEALTH && LowGun(player, spawn <= WEAK_HEALTH);
+}
+
 // Whether the pistol is right for the target: far off with little health
 // left, not closing in, the area clear a while; or nothing better can hurt
-// it.
+// it - rockets and cells kept from it aside.
 static boolean PistolRight(const player_t *player, const k_monster_t *monster)
 {
     weapontype_t in_hand = player->pendingweapon != wp_nochange ? player->pendingweapon
@@ -2099,7 +2535,7 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
 
         if (weapon->weapon != wp_pistol
          && !(weapon->weapon == wp_fist && !player->powers[pw_strength])
-         && Selectable(player, weapon)
+         && Selectable(player, weapon) && !(Reserved(weapon) && KeptFrom(player, monster))
          && ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at) > 0.0)
         {
             return false;
@@ -2275,11 +2711,24 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
 // monster alone (none to bring them up while another gun can fire); none
 // for rockets at a lost soul, nor to bring them up without room while
 // another gun can fire (RocketRoom), nor for melee where it is not worth it
-// (MeleeWorth); more for the chainsaw against what it is for.
+// (MeleeWorth), nor for rockets and cells kept for the tough monsters
+// (KeptFrom), nor for a gun that would not kill one that is not weak in
+// time (InTime: E2M8, the pistol brought up whenever the cyberdemon came too
+// near for rockets, and put away as the player backed off - a switch each
+// way, the fight going on without either); more for the chainsaw against
+// what it is for.
 static double Preference(const player_t *player, const weapon_t *weapon,
                          const k_monster_t *monster, boolean pistol_right, boolean in_hand)
 {
     double rating = Rating(player, weapon, monster);
+
+    if (rating > 0.0
+     && ((Reserved(weapon) && KeptFrom(player, monster))
+         || (weapon->reach <= 0.0 && SpawnHealth(monster->type) > WEAK_HEALTH
+             && !InTime(weapon, monster))))
+    {
+        return 0.0;
+    }
 
     if (weapon->weapon == wp_missile && !in_hand && rating > 0.0
      && !RocketRoom(player, monster) && OtherGun(player, true))
@@ -2360,7 +2809,8 @@ static void ChooseWeapon(const player_t *player)
 
     current_rating = current != NULL ? Preference(player, current, monster, pistol_right, true)
                                      : 0.0;
-    can_hurt = best_rating > 0.0 || current_rating > 0.0;
+    can_hurt = best_rating > 0.0 || current_rating > 0.0
+            || SpawnHealth(monster->type) > WEAK_HEALTH;
 
     // The chainsaw stays up while what it is for stays near, out of reach a
     // moment (MELEE_KEEP).
@@ -2372,9 +2822,9 @@ static void ChooseWeapon(const player_t *player)
 
     // And rockets in a fight against what they are for, too near for a
     // moment: the player backs off to fire them (ChooseMove), not put them
-    // away - unless it comes within KEEP_AWAY.
+    // away - unless it comes within KEEP_AWAY, or they are kept from it.
     if (battle && current != NULL && current->weapon == wp_missile && CanFire(player, current)
-     && RocketsFor(monster) && monster->distance >= KEEP_AWAY)
+     && RocketsFor(monster) && monster->distance >= KEEP_AWAY && !KeptFrom(player, monster))
     {
         best = current;
     }
@@ -3099,30 +3549,35 @@ static double Room(k_vec2_t me, double ux, double uy, double floor, boolean hurt
 // strafing into a corridor and out, the bot looked to be peeking round the
 // corner), and open floor before a passage; out of the sight of the other
 // monsters that shoot (Exposure); and out of the way of projectiles
-// (THREAT_WEIGHT).
-static void ChooseMove(const player_t *player)
+// (THREAT_WEIGHT). Round the monster by its place in the list: the target,
+// or in a standoff the hopeless one kept off (AVOID_PAST), which is not
+// shot at - out of its sight (an exposer) rather than in it.
+static void ChooseMove(const player_t *player, int round, boolean standoff)
 {
     static const double speeds[] = { STRAFE_SPEED, DODGE_SPEED };
-    const k_monster_t *target = &monsters[status.target];
+    const k_monster_t *target = &monsters[round];
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double floor = ToMap(player->mo->floorz);
     double gun = GunHeight(player->mo);
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
     boolean threats = K_Threat_Count() > 0;
-    boolean rockets = wanted == wp_missile
-                   || (RocketsFor(target) && CanFire(player, WeaponOf(wp_missile))
-                       && !OtherGun(player, false));
+    boolean rockets = !standoff
+                   && (wanted == wp_missile
+                       || (RocketsFor(target) && CanFire(player, WeaponOf(wp_missile))
+                           && !OtherGun(player, false) && !KeptFrom(player, target)));
     double tx = target->at.x - me.x, ty = target->at.y - me.y;
     double length = sqrt(tx * tx + ty * ty);
     double face = atan2(ty, tx);
-    double sx, sy, best_score = -1e9, press = 0.0;
+    double sx, sy, best_score = -1e9;
     double pusher_keep[MAX_PUSHERS];
     int pushers[MAX_PUSHERS];
-    int num_pushers = 0, presser = -1;
+    int num_pushers = 0;
     boolean found = false;
     int k, i, s;
 
     move.x = move.y = 0.0;
+    press = 0.0;
+    presser = -1;
 
     if (length < 1e-6)
     {
@@ -3153,7 +3608,7 @@ static void ChooseMove(const player_t *player)
             keep = KEEP_AWAY;
         }
 
-        if (i == status.target && rockets)
+        if (i == round && rockets)
         {
             keep = SDL_max(keep, ROCKET_MIN + monster->radius + ROCKET_RADIUS + ROCKET_ROOM);
         }
@@ -3229,8 +3684,8 @@ static void ChooseMove(const player_t *player)
         score = ux * sx + uy * sy + 0.3 * (1.0 - fabs(ux * tx + uy * ty))
               + 0.3 * K_Graph_Clearance(far, OPEN_REACH) / OPEN_REACH;
 
-        if (!K_Sight_Aim(far.x, far.y, gun, target->at.x, target->at.y, target->z,
-                         target->z + target->height))
+        if (!standoff && !K_Sight_Aim(far.x, far.y, gun, target->at.x, target->at.y, target->z,
+                                      target->z + target->height))
         {
             score -= 1.5;
         }
@@ -3434,8 +3889,18 @@ static void StartBattle(const player_t *player)
     pressed_mo = NULL;
     progress_tic = leveltime;
     strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
-    K_Log(K_LOG_COMBAT, K_LOG_INFO, "fighting the %s, %.0f units off - the route waits",
-          monsters[status.target].name, monsters[status.target].distance);
+
+    if (status.target >= 0)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "fighting the %s, %.0f units off - the route waits",
+              monsters[status.target].name, monsters[status.target].distance);
+    }
+    else
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "keeping off the %s, %.0f units off - beyond what the "
+              "player holds; the route waits", monsters[avoid].name, monsters[avoid].distance);
+    }
+
     K_Nav_Pause(1);
 }
 
@@ -3583,7 +4048,9 @@ static boolean BlowsNear(double reach)
 // it (the user, E2M9: the soulsphere's pit, 128 across in a ring of slime
 // in the middle of an open room; the fight begun there stayed there, the
 // monsters coming from all sides, and "a skilled player would move aside
-// and shoot from a distance"): the route takes the player off it too.
+// and shoot from a distance"): the route takes the player off it too. A
+// hopeless monster that presses (Avoided) is kept off as a fight is fought,
+// with nothing to shoot (a standoff).
 static void UpdateBattle(const player_t *player)
 {
     boolean burning = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
@@ -3608,7 +4075,7 @@ static void UpdateBattle(const player_t *player)
     // 39 health the bot broke off a fight with a demon 50 off for health
     // bonuses beside it, stuck on the demon, bitten down to 21).
     flee = escape && !BlowsNear(battle ? KEEP_AWAY : CLOSE_REACH);
-    fight = WorthFighting() && !flee && !burning && !island;
+    fight = (WorthFighting() || avoid >= 0) && !flee && !burning && !island;
     calm = fight ? 0 : calm + 1;
 
     if (!battle && fight && K_Nav_CanPause())
@@ -3627,12 +4094,19 @@ static void UpdateBattle(const player_t *player)
     }
 
     pressed = false;
+    presser = -1;
+    press = 0.0;
 
     // Nothing to shoot for now (a monster ducked out of sight): standing,
     // or out of the way of what it fired (DodgeWay).
     if (battle && status.target >= 0)
     {
-        ChooseMove(player);
+        ChooseMove(player, status.target, false);
+        battle_way = -1;
+    }
+    else if (battle && avoid >= 0)
+    {
+        ChooseMove(player, avoid, true);
         battle_way = -1;
     }
     else if (battle && K_Threat_Count() > 0)
@@ -3649,6 +4123,281 @@ static void UpdateBattle(const player_t *player)
     {
         move.x = move.y = 0.0;
         battle_way = -1;
+    }
+}
+
+// Room for the searches through the cells (CoverByCells, FindRetreat).
+static void GrowCover(int cells)
+{
+    if (cover_capacity < cells)
+    {
+        cover_capacity = cells;
+        cover_distance = realloc(cover_distance, cover_capacity * sizeof(*cover_distance));
+        cover_entry = realloc(cover_entry, cover_capacity * sizeof(*cover_entry));
+        cover_from = realloc(cover_from, cover_capacity * sizeof(*cover_from));
+        cover_hops = realloc(cover_hops, cover_capacity * sizeof(*cover_hops));
+        cover_open = realloc(cover_open, cover_capacity * sizeof(*cover_open));
+    }
+}
+
+// Whether a point is clear of the awake monsters near (RETREAT_CLEAR): no
+// nearer to any than RETREAT_CLEAR, or than the player is.
+static boolean RetreatClear(k_vec2_t at, const int *near, int num_near)
+{
+    int i;
+
+    for (i = 0; i < num_near; ++i)
+    {
+        const k_monster_t *monster = &monsters[near[i]];
+
+        if (Distance(at, monster->at) < SDL_min(monster->distance, RETREAT_CLEAR))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Open floor to retreat to from the monster pressing the player hard
+// (RETREAT_OPEN): the nearest cell's middle, walked to through open
+// crossings (portal middle to portal middle), none on a floor that hurts
+// unless the player stands on one; the way there, the spot last.
+static boolean FindRetreat(const player_t *player, k_vec2_t *points, int *num_points)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_graph_t *graph = K_Graph_Get();
+    const k_monster_t *from = &monsters[presser];
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    int start = K_Map_CellAt(me.x, me.y);
+    int near[MAX_PUSHERS];
+    int num_open = 0, num_near = 0, best = -1, cell, k, i;
+    double best_score = 1e30;
+
+    for (i = 0; i < num_monsters && num_near < MAX_PUSHERS; ++i)
+    {
+        if (monsters[i].awake && Kind(monsters[i].type)->cost > 0.0
+         && monsters[i].distance < RETREAT_REACH + RETREAT_CLEAR)
+        {
+            near[num_near++] = i;
+        }
+    }
+
+    if (start < 0 || graph->generation != map->generation)
+    {
+        return false;
+    }
+
+    GrowCover(map->num_cells);
+
+    for (i = 0; i < map->num_cells; ++i)
+    {
+        cover_distance[i] = 1e30;
+    }
+
+    cover_distance[start] = 0.0;
+    cover_entry[start] = me;
+    cover_from[start] = -1;
+    cover_open[num_open++] = start;
+
+    while (num_open > 0)
+    {
+        int nearest = 0;
+        const k_cell_t *c;
+        double length;
+
+        for (i = 1; i < num_open; ++i)
+        {
+            if (cover_distance[cover_open[i]] < cover_distance[cover_open[nearest]])
+            {
+                nearest = i;
+            }
+        }
+
+        cell = cover_open[nearest];
+        cover_open[nearest] = cover_open[--num_open];
+
+        if (cover_distance[cell] > RETREAT_REACH)
+        {
+            break;
+        }
+
+        c = &map->cells[cell];
+        length = cover_distance[cell] + Distance(cover_entry[cell], c->centroid);
+
+        if (cell != start && length <= RETREAT_REACH
+         && Distance(c->centroid, from->at) >= from->distance + RETREAT_GAIN)
+        {
+            double floor = K_Map_CellFloor(cell);
+
+            if (Steppable(c->centroid, floor, hurts, EDGE_MARGIN)
+             && K_Graph_Clearance(c->centroid, RETREAT_OPEN) >= RETREAT_OPEN
+             && RetreatClear(c->centroid, near, num_near))
+            {
+                double score = length + DUCK_SEEN * Exposure(c->centroid, floor);
+
+                if (score < best_score)
+                {
+                    best_score = score;
+                    best = cell;
+                }
+            }
+        }
+
+        for (k = 0; k < graph->link_count[cell]; ++k)
+        {
+            const k_link_t *link = &graph->links[graph->first_link[cell] + k];
+            const k_portal_t *portal = &graph->portals[link->portal];
+            int next = link->neighbor;
+            k_vec2_t middle = { (portal->a.x + portal->b.x) * 0.5, (portal->a.y + portal->b.y) * 0.5 };
+            double distance = cover_distance[cell] + Distance(cover_entry[cell], middle);
+
+            if (distance >= cover_distance[next] || portal->jump >= 0
+             || !RetreatClear(middle, near, num_near)
+             || K_Graph_CanCross(link->portal, cell) != K_CROSS_OPEN
+             || (!hurts && K_Map_FloorDamage(map->subsectors[map->cells[next].subsector].sector)
+                           > 0.0))
+            {
+                continue;
+            }
+
+            if (cover_distance[next] >= 1e30)
+            {
+                cover_open[num_open++] = next;
+            }
+
+            cover_distance[next] = distance;
+            cover_entry[next] = middle;
+            cover_from[next] = cell;
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    // The way back from the cell to the player's, then turned round.
+    *num_points = 0;
+    points[(*num_points)++] = map->cells[best].centroid;
+
+    for (cell = best; cover_from[cell] >= 0 && *num_points < RETREAT_POINTS;
+         cell = cover_from[cell])
+    {
+        points[(*num_points)++] = cover_entry[cell];
+    }
+
+    for (i = 0; i < *num_points / 2; ++i)
+    {
+        k_vec2_t swap = points[i];
+
+        points[i] = points[*num_points - 1 - i];
+        points[*num_points - 1 - i] = swap;
+    }
+
+    return true;
+}
+
+static void StopRetreat(const char *why)
+{
+    retreating = false;
+    retreat_again = leveltime + RETREAT_AGAIN;
+    hard_pressed = 0;
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "retreat over after %.1f s - %s",
+          (double) (leveltime - retreat_since) / TICRATE, why);
+}
+
+// Retreating to open floor when pressed hard (RETREAT_AFTER): begun, over,
+// and the step along the way there, instead of the fight's own move -
+// unless something flying would hit it.
+static void UpdateRetreat(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    k_vec2_t to;
+    double dx, dy, distance;
+
+    hard_pressed = battle && presser >= 0 && press >= RETREAT_PRESS
+                && !BitesOnly(monsters[presser].type)
+                && K_Graph_Clearance(me, RETREAT_OPEN) < RETREAT_OPEN ? hard_pressed + 1 : 0;
+
+    if (retreating)
+    {
+        retreat_calm = presser >= 0 ? 0 : retreat_calm + 1;
+
+        if (!battle)
+        {
+            StopRetreat("the fight is over");
+        }
+        else if (Distance(me, retreat_points[retreat_num_points - 1]) < RETREAT_NEAR)
+        {
+            StopRetreat("on open floor");
+        }
+        else if (retreat_calm >= RETREAT_CALM)
+        {
+            StopRetreat("nothing presses now");
+        }
+        else if (leveltime - retreat_since >= RETREAT_MOST)
+        {
+            StopRetreat("retreated long enough");
+        }
+    }
+    else if (hard_pressed >= RETREAT_AFTER && leveltime >= retreat_again)
+    {
+        if (FindRetreat(player, retreat_points, &retreat_num_points))
+        {
+            k_vec2_t spot = retreat_points[retreat_num_points - 1];
+
+            retreating = true;
+            retreat_next = 0;
+            retreat_since = leveltime;
+            retreat_calm = 0;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "retreating from the %s, %.0f units off - to open "
+                  "floor at (%.0f,%.0f), %.0f units%s", monsters[presser].name,
+                  monsters[presser].distance, spot.x, spot.y, Distance(me, spot),
+                  retreat_num_points > 1 ? ", round a corner" : "");
+        }
+        else
+        {
+            retreat_again = leveltime + RETREAT_LOOK;
+        }
+    }
+
+    if (!retreating)
+    {
+        return;
+    }
+
+    while (retreat_next < retreat_num_points - 1
+        && Distance(me, retreat_points[retreat_next]) < DUCK_WAYPOINT)
+    {
+        ++retreat_next;
+    }
+
+    to = retreat_points[retreat_next];
+    dx = to.x - me.x;
+    dy = to.y - me.y;
+    distance = sqrt(dx * dx + dy * dy);
+
+    if (distance > 1e-6)
+    {
+        double floor = ToMap(player->mo->floorz);
+        boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+        double vx = dx / distance * DODGE_SPEED, vy = dy / distance * DODGE_SPEED;
+        double face = 0.0;
+
+        if (status.target >= 0)
+        {
+            face = atan2(monsters[status.target].at.y - me.y, monsters[status.target].at.x - me.x);
+        }
+
+        if (K_Threat_Count() == 0
+         || MoveCost(me, vx, vy, status.target >= 0 ? &face : NULL, floor, hurts, EDGE_MARGIN,
+                     NULL) < DODGE_MIN)
+        {
+            move.x = vx;
+            move.y = vy;
+        }
     }
 }
 
@@ -4620,15 +5369,7 @@ static boolean CoverByCells(const player_t *player, const duckfrom_t *from, k_ve
         return false;
     }
 
-    if (cover_capacity < map->num_cells)
-    {
-        cover_capacity = map->num_cells;
-        cover_distance = realloc(cover_distance, cover_capacity * sizeof(*cover_distance));
-        cover_entry = realloc(cover_entry, cover_capacity * sizeof(*cover_entry));
-        cover_from = realloc(cover_from, cover_capacity * sizeof(*cover_from));
-        cover_hops = realloc(cover_hops, cover_capacity * sizeof(*cover_hops));
-        cover_open = realloc(cover_open, cover_capacity * sizeof(*cover_open));
-    }
+    GrowCover(map->num_cells);
 
     for (i = 0; i < map->num_cells; ++i)
     {
@@ -4950,6 +5691,8 @@ static void UpdateDuck(const player_t *player)
 
 void K_Combat_Reset(void)
 {
+    int i;
+
     MarkAttackStates();
     num_monsters = 0;
     num_projectiles = 0;
@@ -4977,9 +5720,27 @@ void K_Combat_Reset(void)
     move.x = move.y = 0.0;
     pressed = false;
     pressed_mo = NULL;
+    presser = -1;
+    press = 0.0;
+    retreating = false;
+    hard_pressed = 0;
+    retreat_again = 0;
     num_trips = 0;
     ahead_area = -1;
     escape = false;
+    reserve = false;
+    memset(beats, 0, sizeof(beats));
+
+    for (i = 0; i < MAX_HOPELESS; ++i)
+    {
+        hopeless_logged[i] = NULL;
+    }
+
+    avoid = -1;
+    avoid_mo = NULL;
+    avoid_tics = 0;
+    passed_mo = NULL;
+    passed_until = 0;
     num_barrels = 0;
     DropBarrel();
     blocking_wanted = false;
@@ -5033,6 +5794,8 @@ void K_Combat_Tick(int driving)
         target_mo = NULL;
     }
 
+    UpdateHopeless(player);
+
     if (player->playerstate == PST_DEAD || player->health <= 0)
     {
         battle = false;
@@ -5043,6 +5806,7 @@ void K_Combat_Tick(int driving)
         status.creeping = false;
         ducking = false;
         status.ducking = false;
+        retreating = false;
 
         // Not when the death ended the level (E1M8's exit floor).
         if (!status.died && gameaction != ga_completed)
@@ -5070,12 +5834,15 @@ void K_Combat_Tick(int driving)
     {
         UpdateClear();
         UpdateComfy(player);
+        UpdateReserve(player);
         ChooseTarget(player);
         CountMisses(player);
         ChooseWeapon(player);
         ChooseBarrel(player);
         UpdateExposers();
+        UpdateAvoid();
         UpdateBattle(player);
+        UpdateRetreat(player);
         UpdateDodge(player);
         UpdateHold(player);
         UpdateDuck(player);
@@ -5083,6 +5850,7 @@ void K_Combat_Tick(int driving)
     else
     {
         barrel_target = -1;
+        avoid = -1;
     }
 
     status.barrel = barrel_target >= 0;
@@ -5105,7 +5873,13 @@ void K_Combat_Tick(int driving)
                    escape && !battle ? ", shooting at" : "",
                    monsters[status.target].name, monsters[status.target].distance,
                    status.weapon != NULL ? status.weapon : "no weapon for it",
-                   battle && pressed ? ", backing off" : "");
+                   battle && retreating ? ", retreating"
+                   : battle && pressed ? ", backing off" : "");
+    }
+    else if (battle && avoid >= 0)
+    {
+        M_snprintf(status.text, sizeof(status.text), "keeping off the %s, %.0f units - beyond "
+                   "what the player holds", monsters[avoid].name, monsters[avoid].distance);
     }
     else if (battle)
     {
@@ -5181,10 +5955,12 @@ int K_Combat_Aim(int tic, double *angle)
     k_vec2_t at;
     boolean held = HeldAim(tic, &at);
 
-    // Holding with nothing to shoot: watching the way in, and past it.
-    if (!held && status.target < 0 && barrel_target < 0 && holding && K_Nav_Predict(tic, &pose))
+    // Holding with nothing to shoot: watching the way in, and past it. In a
+    // standoff: facing the monster kept off.
+    if (!held && status.target < 0 && barrel_target < 0 && (holding || (battle && avoid >= 0))
+     && K_Nav_Predict(tic, &pose))
     {
-        at = CreepLook();
+        at = battle && avoid >= 0 ? monsters[avoid].at : CreepLook();
         *angle = atan2(at.y - pose.y, at.x - pose.x);
         return 1;
     }
@@ -5648,6 +6424,11 @@ int K_Combat_MonstersAhead(void)
     ahead_area = UnsafeAhead(me, HOLD_AHEAD, K_Area_Of(K_Map_CellAt(me.x, me.y)), -1, &at,
                              &point, &shut);
     return ahead_area;
+}
+
+int K_Combat_Beats(int weapon)
+{
+    return weapon >= 0 && weapon < NUMWEAPONS && beats[weapon];
 }
 
 void K_Combat_Escape(const char *why)

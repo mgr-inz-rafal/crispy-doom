@@ -2559,6 +2559,8 @@ The user's points, with what the engine says:
    C5): the health it would take - each attacker's damage rate times how long the bot needs to
    kill them all with the ammo it has - against the health left, with a margin; or ammo that
    cannot kill them at all. Built on the same per-kind costs as the danger around items (7.5).
+   Done for one monster at a time, by the ammo and how long it takes (7.8, "Ammo kept for tough
+   monsters, and fights it cannot win"); not yet for a crowd, nor by the health it would take.
 4. **Target priority.** Hitscanners first: the zombieman, shotgunner, chaingunner and Spider
    Mastermind, whose bullets cannot be dodged. Then arch-viles (they raise the dead, and their
    flame), pain elementals (they spawn lost souls; ahead of their souls, 7.8 "Pain elementals
@@ -3178,6 +3180,9 @@ Who controls the player in a fight (the user's model):
   - Barons and arch-viles: stay away from them too - though one BFG shot point blank settles it.
   - With tough monsters alive (Cyberdemon, Spider Mastermind, barons, arch-viles), keep plasma
     cells in reserve for them; the low tier monsters are cleared with low tier weapons.
+  Done: keeping them off (below, "Keeping tough monsters off"), the reserve and fight or avoid
+  (below, "Ammo kept for tough monsters, and fights it cannot win"). Left: invulnerability
+  planned for.
 - **Shooting on a jump ride** (the user, jotted for later): a lift ride that ends in a jump
   holds the facing on the jump's line the whole way up (`action.jump_ride`, after MAP02's run-up
   begun facing a shotgun guy fell short), so the bot neither shoots nor fights while monsters
@@ -3405,6 +3410,75 @@ Who controls the player in a fight (the user's model):
   7.2: fight or avoid - get out of its sight); the dash for a weapon still flip-flops with
   fights (E3M3: 15 broken off for the shotgun in 15 s, a monster in and out of 128); the fight
   ending as a baron backed off from goes out of sight, the route then walking back at it.
+- **Ammo kept for tough monsters, and fights it cannot win** (the user, 2026-11-08: ammo kept
+  for the big monsters; "avoid what it can't hurt"; then, watching E3M9, barons fought in a
+  cramped room with a bigger one nearby, and after the teleport among three cacodemons, a
+  fight in place where the big entrance room was better). Done (`k_combat.c`, `k_items.c`,
+  `k_brain.c`):
+  - Tiers by spawn health: weak up to 150 (zombiemen to spectres), tough from 600 (mancubi,
+    arch-viles, barons, the spider mastermind, the Cyberdemon), the rest between.
+  - The reserve: while what the rocket launcher, plasma rifle and BFG held could do with the
+    rockets and cells there are (0.8 of their damage a round) is no more than the health of
+    the tough monsters alive in the level, nor than half of what as many as the player can
+    carry could do, those weapons rate nothing against a weak monster while another gun can
+    fire, the pistol too, nor against one between while another gun but the pistol can.
+    Logged: "rockets and cells kept for the tough monsters left - ...", "... for anything
+    again".
+  - Hopeless (7.3 point 3, fight or avoid): a monster that is not weak the guns held cannot
+    kill - the rounds there are would not take half the health it has left (a quarter for
+    the target of a fight on), or none would kill it within 60 s of firing on - each round
+    counted from as far as a fight keeps the kind off (a projectile's 0.8, bullets and
+    pellets as spread and range allow); never while invulnerable. It is no target. Awake and
+    in sight within its kind's distance (128 more once kept off), it is kept off - a
+    standoff, battle mode with nothing to shoot, the player facing it, backing off toward
+    room and out of its sight, the route waiting - whether it can come at the player or
+    shoots from where it stands (E3M8: the spider mastermind shot the bot dead beside a
+    rocket); after 10 s of that in all it is passed for 10 s, the route going on, but kept
+    off still within 96. Once met, the ammo and weapons that would kill it in time are
+    running out (`K_Combat_Beats`): any detour, unguarded, a dash close by - but not worth
+    leaving a fight for however far (Doom II MAP10: outgunned by the cyberdemon, every clip
+    for the chaingun broke a fight off, six in 20 s). First tried at 1.1 times its health: a wounded
+    cacodemon with a little less in hand was kept off, passed, and bit the bot from 81 to 21
+    (E3M9). Logged: "the cyberdemon, 944 units off, is beyond what the player holds - 0 of
+    its 4000 health in hand; not fought, kept off", "keeping off the ...", "passing the
+    ...", "the ... can be fought now".
+  - A gun too slow to kill one that is not weak in 60 s rates nothing against it (E2M8: the
+    pistol brought up whenever the cyberdemon came too near for rockets, and put away as the
+    player backed off); such a target is still fought - kept off - when nothing can fire at
+    it for the moment.
+  - Retreating to open floor (the user's E3M9 rooms): pressed by a monster 96 or more inside
+    its kind's distance for half a second, off open floor (a wall within 128), the player
+    retreats to the nearest cell's middle with no wall within 128, 128 further from what
+    presses it, through open crossings within 768, the way and the spot never nearer to any
+    awake monster than 128 (than now, if nearer: E3M5, a retreat from a demon past three imps,
+    clawed and burned from 84 to 15); not from one that only bites, which keeps up with the
+    run and bites it from behind (E3M5: a demon 74 off, from 100 to dead in 2 s; backing off,
+    the player shoots it); the fight goes on, shooting on the way, a step that
+    something flying would hit left to the fight's own move. Over there, once nothing
+    presses for half a second, or after 4 s; not again for 3 s. Logged: "retreating from the
+    baron of hell, 162 units off - to open floor at (113,3222), 328 units, round a corner",
+    "retreat over after 1.1 s - on open floor"; the console: "..., retreating".
+  - The dash for a weapon or ammo, stopped for a monster within 128, waits until none is
+    within 384 or the fight begun is over (E3M3: 7 fights broken off and begun again in
+    15 s).
+  Runs, salt 443, against the build before: E3M1-7, E3M9, E1M8 7 of 9 both - E3M9 finished
+  (265.7 s; dead at 228 s before), E3M4 dead (a baron at a doorway hold, 10 to 14 awake
+  monsters round, no way out clear of them; finished before), E3M6 at the same crusher or
+  floor; in the runs on the way E3M9 finished twice in five, E3M6 twice. E2M8 (not run
+  before): the cyberdemon hopeless at the start, the rocket launcher fetched, the cyberdemon
+  killed in two runs of five; in the others a door shut on the way to the launcher, or its
+  rockets at close range. E3M8: dead to the spider mastermind (34.9 s, then 73 s). Doom II
+  MAP01-06, 10, 13, 15, 19: 7 of 10 (5 before: MAP06 and MAP10 now finished, MAP10 with 122
+  health; MAP13 alive to 120 s, 35 before, a pistol start among revenants and arachnotrons
+  kept off as hopeless; MAP15 and MAP19 dead as before).
+  Left: getting out of the sight of a monster that cannot come at the player but shoots, when
+  it is no hopeless one (E3M9: a switch worked in the cyberdemon's sight, with rockets in
+  hand, the cyberdemon left alone as one that cannot come; dead); choosing where to fight
+  before a fight (the user, E3M9 after the teleport: to the big entrance room early, then the
+  hitscanners one by one) - the retreat goes to open floor only once pressed; a hopeless
+  monster on the way to a goal that needs it dead or past it is passed every 10 s, the route
+  walking into it (E2M8, a door shut on the way to the rocket launcher); invulnerability
+  planned for.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate

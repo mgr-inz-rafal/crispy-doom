@@ -32,7 +32,11 @@
 //	player lacks, and the ammo running out - for a strong weapon while
 //	firepower is LOW or CRITICAL (k_condition.h), any while ammo is LOW -
 //	from ammo, weapons and backpacks; the health, and the ammo when ammo is
-//	LOW or firepower CRITICAL, however far (escape). A
+//	LOW or firepower CRITICAL, however far (escape). What would kill a
+//	monster the player met that its guns and rounds cannot (outgunned:
+//	K_Combat_Beats) - rockets for the Cyberdemon - is running out too, but
+//	no escape (Doom II MAP10: outgunned by the cyberdemon, every clip for
+//	the chaingun broke a fight off, six in 20 s). A
 //	weapon better than the pistol, at a pistol start, goes before other
 //	items (first), and pays for a long detour.
 //
@@ -384,6 +388,57 @@ static boolean Wanted(const player_t *player, ammotype_t ammo)
     return false;
 }
 
+// Ammo that beats what the player is outgunned by: it fires a weapon held
+// that would kill in time a monster awake the player cannot kill with what
+// it holds (K_Combat_Beats; E3M9: the shells spent on the cyberdemon with
+// the shotgun, then the bullets with the pistol).
+static boolean Beats(const player_t *player, ammotype_t ammo)
+{
+    int w;
+
+    for (w = 0; w < NUMWEAPONS && ammo != am_noammo; ++w)
+    {
+        if (player->weaponowned[w] && weaponinfo[w].ammo == ammo && K_Combat_Beats(w))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether the item beats what the player is outgunned by (Beats): its ammo,
+// a weapon that would, a backpack.
+static boolean BeatsWith(const player_t *player, const entry_t *entry)
+{
+    ammotype_t ammo;
+    weapontype_t weapon;
+    int clips;
+
+    if (AmmoItem(entry->sprite, &ammo, &clips))
+    {
+        return Beats(player, ammo);
+    }
+
+    if (WeaponItem(entry->sprite, &weapon))
+    {
+        return K_Combat_Beats(weapon) != 0;
+    }
+
+    if (entry->sprite == SPR_BPAK)
+    {
+        for (ammo = 0; ammo < NUMAMMO; ++ammo)
+        {
+            if (Beats(player, ammo))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // P_GiveAmmo: clips of ammo (0 for half of one), doubled on the easiest and
 // hardest skills, halved when dropped, up to the most the player carries.
 // Each round below the comfortable level is worth up to SCARCE times as
@@ -571,12 +626,18 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
 // Whether the item gives the ammo that is running out (Wanted; while ammo is
 // LOW, any for a weapon held): ammo, a weapon, a backpack. A strong weapon,
 // while firepower is LOW or CRITICAL, held or not: it brings its ammo - but
-// for a pistol start, where weapons go first anyway (k_items.h: first).
+// for a pistol start, where weapons go first anyway (k_items.h: first). And
+// what beats a monster the player is outgunned by (BeatsWith).
 static boolean RunningOut(const player_t *player, const entry_t *entry, boolean low)
 {
     ammotype_t ammo;
     weapontype_t weapon;
     int clips;
+
+    if (BeatsWith(player, entry))
+    {
+        return true;
+    }
 
     if (AmmoItem(entry->sprite, &ammo, &clips))
     {
