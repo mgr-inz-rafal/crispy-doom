@@ -2819,7 +2819,8 @@ Who controls the player in a fight (the user's model):
   1. **Stacked detours**: while an item is gone for, the route ends at it, so a candidate's
      detour is already its extra way to that item; one small enough (a few hundred units) goes
      on top of it, and the item below is planned again once it is picked up. Two deep at most;
-     fixes counted only above the topmost item, as now.
+     fixes counted only above the topmost item, as now. Done (below, "Monsters that shoot from
+     where they stand, bosses, stacked detours").
   2. **Weighing again**: now and then the detour on is set against the candidates, and one
      clearly worse, by a margin, is dropped (it may have grown long through fights and escapes).
 - **Seen on MAP10, for later** (the user, jotted): going for a chaingun, the bot lowered the
@@ -3479,6 +3480,56 @@ Who controls the player in a fight (the user's model):
   monster on the way to a goal that needs it dead or past it is passed every 10 s, the route
   walking into it (E2M8, a door shut on the way to the rocket launcher); invulnerability
   planned for.
+- **Monsters that shoot from where they stand, bosses, stacked detours** (the user, 2026-11-09:
+  on with what was left open; not every fight is won, nor need be - most vanilla fights over a
+  few salts, few stupid moves, no map-specific plans; then: E3M8's middle room and E1M8's
+  soulsphere never gone for, one reason?). Done:
+  - A hopeless monster in sight that is kept off and sees the player half a second is hidden
+    from: a retreat to the nearest cell's middle out of its sight within 1024 through open
+    crossings, the way clear of awake monsters (E3M8: the spider mastermind at 500 in an open
+    arena shot the bot from 100 to dead in 3 s; the duck's cover had to be reached before the
+    next burst, and none could). Logged: "hiding from the ...". Kept off for 3 s more once
+    out of its sight, while it is near (Doom II MAP10: hidden round a corner, the route walked
+    straight back at the cyberdemon, which had followed to 163 off; two rockets, dead).
+  - The boss a level needs dead (KILL EVERY <kind> on the chain: `K_Combat_Needed`), met as
+    hopeless, is fought with what there is once nothing that would beat it lies in reach to
+    fetch (`k_item_t.beats`). Tried first: the KILL goal waiting while its boss was hopeless -
+    E2M8 and E3M8 froze at the start (the user: "completely stuck"): items are looked for only
+    while a route is followed, and the boss, never met, made nothing worth fetching.
+  - An item whose way shut on the way pushes the fix (E2M8: a door shut behind the player
+    going for the rocket launcher, given up for 30 s, the bot walked up to the cyberdemon).
+  - A door that stays open (D1), gone through on the way to an item, is open for the way on
+    from it (`K_Graph_AssumeOpen`; E3M8: the plasma rifle's room, four doors opened from
+    outside and walk-over lines inside, read as shut in from within: no way on, so the rifle
+    was never gone for - with it, rockets and cells come to about 4400 of the spider's 3000;
+    with rockets alone 2160).
+  - A weapon not held that beats a monster met is a first item, before the rest (E3M8: the
+    plasma rifle passed, one rocket nearer at a time, all over the arena).
+  - Stacked detours ("Detours are sticky", 1; the user, E1M8: the soulsphere behind the secret
+    door by the stairs, passed 140 off while going for the first shotgun, one detour at a
+    time): while an item is gone for, out of a fight, another goes on top of it whose extra way
+    to it is no more than half its own reach and 1536 (the soulsphere: 1178, round by the
+    stairs and a second at its door), through no fix, two items on the chain at the most; on
+    top of one that goes first only health and armour (a box of bullets 1052 out of the way put
+    the first shotgun off from 29 s to 52). A replacement for the one on that goes first, when
+    refused, leaves the place to the best of these (the other shotgun had shut the soulsphere
+    out). Logged: "added GET SOULSPHERE ... - 1178 units out of the way, on the way to GET
+    SHOTGUN".
+  The user's two rooms had two reasons: E3M8's a judging bug (the way out of the room judged
+  by its doors as they are, shut, though they stay open once used), E1M8's the one-detour rule
+  (and, in the fights on the stairs, only items worth breaking a fight off for being looked
+  at - left so).
+  A/B against the build before (the commit), salts 443, 71 and 7, Doom II MAP01-06, 10, 13,
+  15, 19 and E3M1-9, E1M8, E2M8: 47 of 63 finished against 39 - MAP05 3 against 2, MAP10 2/1,
+  E3M4 3/0, E3M5 3/2, E3M6 3/2, E3M9 2/1, E2M8 3/2, MAP06 2/2, E3M2 2/3 (out of ammo, a
+  hopeless cacodemon passed 53 off, bitten); E3M8, MAP13, MAP15, MAP19 none either. No
+  monsters 29/29. Tried and dropped on the way: a cacodemon or tougher that cannot come at the
+  player but shoots at it fought as any (E3M9: the cyberdemon on a ledge rocketed the bot at a
+  switch) - 39 of 63, MAP06 none of 3: its hell knights up on a ledge, passed before, were
+  fought from below for 25 s, the ammo gone.
+  Left: E3M8 (the spider mastermind fought with the plasma rifle now, but never killed); a
+  hopeless monster passed while within reach of its blows; getting out of the sight of one
+  that cannot come at the player but shoots, when it is no hopeless one.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate

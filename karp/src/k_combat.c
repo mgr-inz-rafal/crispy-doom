@@ -284,6 +284,17 @@ extern void A_SPosAttack();
 #define RETREAT_LOOK TICRATE
 #define RETREAT_POINTS 32
 
+// In a standoff with a hopeless monster (AVOID_PAST) that sees the player
+// for RETREAT_AFTER, backing off in its sight is no answer to bullets or
+// rockets (E3M8: the spider mastermind, kept off at 500 in an open arena,
+// shot the bot from 100 to dead in 3 s; no cover reachable before its next
+// burst, the duck's test, was found): it retreats out of its sight - the
+// nearest cell's middle it does not see, within HIDE_REACH through open
+// crossings, the way clear of awake monsters as above, however long getting
+// there takes. Over once there, once out of its sight for RETREAT_CALM, or
+// after RETREAT_MOST.
+#define HIDE_REACH 1024.0
+
 // Open floor is floor with no wall within OPEN_REACH.
 #define OPEN_REACH 64.0
 
@@ -470,17 +481,24 @@ extern void A_SPosAttack();
 // off), whether it can come at the player or shoots from where it stands,
 // is kept off: a standoff, battle mode
 // with nothing to shoot, the route waiting while the player backs off it
-// toward room, out of its sight (Exposure), until it is out of sight or off
-// for BATTLE_CALM. Kept off AVOID_MOST in all, it is passed for AVOID_SKIP,
+// toward room, out of its sight (Exposure), until it has been out of sight
+// for AVOID_LINGER - hidden round a corner, the route walked straight back
+// at it, the cyberdemon having followed to 163 off (Doom II MAP10: two
+// rockets, dead) - or is off, then BATTLE_CALM more. Kept off AVOID_MOST in
+// all, it is passed for AVOID_SKIP,
 // the route going on (never stuck: it may stand where the route goes) - but
 // kept off still within CLOSE_REACH, in reach of its blows. While
 // one met awake in sight stays awake, the ammo and weapons that would kill
-// it in time are wanted (K_Combat_Beats; k_items.h: running out).
+// it in time are wanted (K_Combat_Beats; k_items.h: running out). A boss the
+// level needs dead, met, with none of those left to fetch, is fought with
+// what there is (K_Combat_Needed): kept off and passed for good it would
+// never die.
 #define HOPELESS_SHARE 0.5
 #define HOPELESS_KEEP 0.25
 #define HOPELESS_TICS (60 * TICRATE)
 #define FLIES_HIT 0.8
 #define AVOID_PAST 128.0
+#define AVOID_LINGER (3 * TICRATE)
 #define AVOID_MOST (10 * TICRATE)
 #define AVOID_SKIP (10 * TICRATE)
 #define MAX_HOPELESS 16
@@ -495,7 +513,12 @@ extern void A_SPosAttack();
 // OUT_SHARE as a target. Not gunmen, whose bullets reach the player
 // anyway: always cleared (the user). And when comfy - health OK and the
 // ammo of the weapon in hand at COMFY_AMMO of what the player can carry or
-// more, until it falls under UNCOMFY_AMMO - they are fought as any.
+// more, until it falls under UNCOMFY_AMMO - they are fought as any. Tried
+// and dropped: a cacodemon or tougher shooting at the player from where it
+// stands fought as any (E3M9: the cyberdemon on a ledge rocketed the bot at
+// a switch) - Doom II MAP06's hell knights up on a ledge, left alone before
+// and passed, were fought from below for 25 s, the ammo gone, and the bot
+// died in all three runs (it had finished two of three).
 #define REACH_TICS 17
 #define REACH_PIECE 128.0
 #define MAX_REACH_MEMO 64
@@ -938,6 +961,8 @@ static double press;                // by how many KEEP_AWAY inside its distance
 // the point gone for, since when, the tics with nothing pressing; the tics
 // pressed hard in a row, and when it may be looked for again.
 static boolean retreating;
+static boolean retreat_hide;        // out of the sight of a hopeless monster
+static int seen_tics;               // in a standoff, seen by it, in a row
 static k_vec2_t retreat_points[RETREAT_POINTS];
 static int retreat_num_points;
 static int retreat_next;
@@ -970,10 +995,13 @@ static boolean reserve;
 static boolean *hopeless;
 static int hopeless_capacity;
 static boolean beats[NUMWEAPONS];
+static int needed = -1;             // the kind the level needs dead (K_Combat_Needed)
+static boolean fight_needed;        // and fought anyway this tic, hopeless or not
 static const mobj_t *hopeless_logged[MAX_HOPELESS];
 static int avoid = -1;
 static const mobj_t *avoid_mo;
 static int avoid_tics;
+static int avoid_seen;              // when the one kept off was last in sight
 static const mobj_t *passed_mo;
 static int passed_until;
 
@@ -2070,6 +2098,33 @@ static boolean Hopeless(const player_t *player, int index)
         && InHand(player, monster) < monster->health * share;
 }
 
+// Whether an item that would beat a hopeless monster met lies in reach, worth
+// the detour (k_items.h: beats).
+static boolean Fetchable(void)
+{
+    int i;
+
+    for (i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+
+        if (item->present && item->beats && item->reachable && item->reach > 0.0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether the monster (by its place in this tic's list) is left alone as
+// hopeless: no target, kept off - but for the kind the level needs dead
+// while nothing that would beat it is left to fetch (fight_needed).
+static boolean LeftAlone(int index)
+{
+    return hopeless[index] && !(fight_needed && monsters[index].type == needed);
+}
+
 // Each tic: which monsters are hopeless; logged as each becomes so, awake in
 // sight, and again once it can be fought. Those logged, met awake, are what
 // the player is outgunned by while they stay awake (beats).
@@ -2086,6 +2141,30 @@ static void UpdateHopeless(const player_t *player)
     for (i = 0; i < num_monsters; ++i)
     {
         hopeless[i] = Hopeless(player, i);
+    }
+
+    // The kind the level needs dead, met as hopeless (logged by last tic, the
+    // items judged since), with nothing to fetch that would beat it.
+    for (k = 0, i = -1; k < MAX_HOPELESS && i < 0; ++k)
+    {
+        i = IndexOf(hopeless_logged[k]);
+        i = i >= 0 && hopeless[i] && monsters[i].type == needed ? i : -1;
+    }
+
+    if (i >= 0 && !Fetchable())
+    {
+        if (!fight_needed)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s must die for the level to go on, and nothing "
+                  "that would beat it is left to fetch - fought with what the player holds",
+                  monsters[i].name);
+        }
+
+        fight_needed = true;
+    }
+    else
+    {
+        fight_needed = false;
     }
 
     for (k = 0; k < MAX_HOPELESS; ++k)
@@ -2197,12 +2276,12 @@ static void UpdateReserve(const player_t *player)
     reserve = held;
 }
 
-// The hopeless monster to keep off (AVOID_PAST): awake, in sight, nearer
-// than its kind's distance - the nearest; not the one passed, unless within
-// CLOSE_REACH. One that cannot come at the player too: from where it stands
-// it shoots (E3M8: the spider mastermind, 212 off, shot the bot dead as it
-// picked up a rocket; E3M9: a switch worked in the cyberdemon's sight). -1
-// if none.
+// The hopeless monster to keep off (AVOID_PAST): awake, in sight - or the
+// one kept off, seen within AVOID_LINGER - nearer than its kind's distance;
+// the nearest; not the one passed, unless within CLOSE_REACH. One that
+// cannot come at the player too: from where it stands it shoots (E3M8: the
+// spider mastermind, 212 off, shot the bot dead as it picked up a rocket;
+// E3M9: a switch worked in the cyberdemon's sight). -1 if none.
 static int Avoided(void)
 {
     int best = -1, i;
@@ -2210,10 +2289,11 @@ static int Avoided(void)
     for (i = 0; i < num_monsters; ++i)
     {
         const k_monster_t *monster = &monsters[i];
-        double keep = SDL_max(Kind(monster->type)->keep, KEEP_AWAY)
-                    + (battle && monster_mobjs[i] == avoid_mo ? AVOID_PAST : 0.0);
+        boolean kept = battle && monster_mobjs[i] == avoid_mo;
+        double keep = SDL_max(Kind(monster->type)->keep, KEEP_AWAY) + (kept ? AVOID_PAST : 0.0);
 
-        if (hopeless[i] && monster->awake && monster->visible && monster->distance < keep
+        if (LeftAlone(i) && monster->awake && monster->distance < keep
+         && (monster->visible || (kept && leveltime - avoid_seen < AVOID_LINGER))
          && !(monster_mobjs[i] == passed_mo && leveltime < passed_until
               && monster->distance >= CLOSE_REACH)
          && (best < 0 || monster->distance < monsters[best].distance))
@@ -2240,6 +2320,12 @@ static void UpdateAvoid(void)
     {
         avoid_mo = monster_mobjs[avoid];
         avoid_tics = 0;
+        avoid_seen = leveltime;
+    }
+
+    if (monsters[avoid].visible)
+    {
+        avoid_seen = leveltime;
     }
 
     if (++avoid_tics >= AVOID_MOST)
@@ -2277,7 +2363,7 @@ static void ChooseTarget(const player_t *player)
 
         if (!monster->shootable || monster->distance > TARGET_REACH
          || (!monster->awake && monster->distance > ASLEEP_REACH)
-         || FarAndDodgeable(monster, monster_mobjs[i]) || IgnoredTarget(i) || hopeless[i])
+         || FarAndDodgeable(monster, monster_mobjs[i]) || IgnoredTarget(i) || LeftAlone(i))
         {
             continue;
         }
@@ -4159,17 +4245,21 @@ static boolean RetreatClear(k_vec2_t at, const int *near, int num_near)
     return true;
 }
 
-// Open floor to retreat to from the monster pressing the player hard
-// (RETREAT_OPEN): the nearest cell's middle, walked to through open
-// crossings (portal middle to portal middle), none on a floor that hurts
-// unless the player stands on one; the way there, the spot last.
-static boolean FindRetreat(const player_t *player, k_vec2_t *points, int *num_points)
+// Where to retreat to from a monster (by its place in the list): open floor
+// (RETREAT_OPEN), or with `hide` a spot out of its sight (HIDE_REACH) - the
+// nearest cell's middle, walked to through open crossings (portal middle to
+// portal middle), none on a floor that hurts unless the player stands on
+// one; the way there, the spot last.
+static boolean FindRetreat(const player_t *player, int away, boolean hide, k_vec2_t *points,
+                           int *num_points)
 {
     const k_map_t *map = K_Map_Get();
     const k_graph_t *graph = K_Graph_Get();
-    const k_monster_t *from = &monsters[presser];
+    const k_monster_t *from = &monsters[away];
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    double reach = hide ? HIDE_REACH : RETREAT_REACH;
+    double eye = from->z + from->height * 0.75;
     int start = K_Map_CellAt(me.x, me.y);
     int near[MAX_PUSHERS];
     int num_open = 0, num_near = 0, best = -1, cell, k, i;
@@ -4178,7 +4268,7 @@ static boolean FindRetreat(const player_t *player, k_vec2_t *points, int *num_po
     for (i = 0; i < num_monsters && num_near < MAX_PUSHERS; ++i)
     {
         if (monsters[i].awake && Kind(monsters[i].type)->cost > 0.0
-         && monsters[i].distance < RETREAT_REACH + RETREAT_CLEAR)
+         && monsters[i].distance < reach + RETREAT_CLEAR)
         {
             near[num_near++] = i;
         }
@@ -4218,7 +4308,7 @@ static boolean FindRetreat(const player_t *player, k_vec2_t *points, int *num_po
         cell = cover_open[nearest];
         cover_open[nearest] = cover_open[--num_open];
 
-        if (cover_distance[cell] > RETREAT_REACH)
+        if (cover_distance[cell] > reach)
         {
             break;
         }
@@ -4226,13 +4316,15 @@ static boolean FindRetreat(const player_t *player, k_vec2_t *points, int *num_po
         c = &map->cells[cell];
         length = cover_distance[cell] + Distance(cover_entry[cell], c->centroid);
 
-        if (cell != start && length <= RETREAT_REACH
-         && Distance(c->centroid, from->at) >= from->distance + RETREAT_GAIN)
+        if (cell != start && length <= reach
+         && (hide || Distance(c->centroid, from->at) >= from->distance + RETREAT_GAIN))
         {
             double floor = K_Map_CellFloor(cell);
 
             if (Steppable(c->centroid, floor, hurts, EDGE_MARGIN)
-             && K_Graph_Clearance(c->centroid, RETREAT_OPEN) >= RETREAT_OPEN
+             && (hide ? !K_Sight_Check(from->at.x, from->at.y, eye, c->centroid.x, c->centroid.y,
+                                       floor, floor + PLAYER_HEIGHT)
+                      : K_Graph_Clearance(c->centroid, RETREAT_OPEN) >= RETREAT_OPEN)
              && RetreatClear(c->centroid, near, num_near))
             {
                 double score = length + DUCK_SEEN * Exposure(c->centroid, floor);
@@ -4308,22 +4400,25 @@ static void StopRetreat(const char *why)
           (double) (leveltime - retreat_since) / TICRATE, why);
 }
 
-// Retreating to open floor when pressed hard (RETREAT_AFTER): begun, over,
-// and the step along the way there, instead of the fight's own move -
-// unless something flying would hit it.
+// Retreating to open floor when pressed hard (RETREAT_AFTER), or out of the
+// sight of a hopeless monster kept off that sees the player (HIDE_REACH):
+// begun, over, and the step along the way there, instead of the fight's own
+// move - unless something flying would hit it.
 static void UpdateRetreat(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    boolean standoff = battle && status.target < 0 && avoid >= 0;
     k_vec2_t to;
     double dx, dy, distance;
 
     hard_pressed = battle && presser >= 0 && press >= RETREAT_PRESS
                 && !BitesOnly(monsters[presser].type)
                 && K_Graph_Clearance(me, RETREAT_OPEN) < RETREAT_OPEN ? hard_pressed + 1 : 0;
+    seen_tics = standoff && monsters[avoid].visible ? seen_tics + 1 : 0;
 
     if (retreating)
     {
-        retreat_calm = presser >= 0 ? 0 : retreat_calm + 1;
+        retreat_calm = (retreat_hide ? seen_tics > 0 : presser >= 0) ? 0 : retreat_calm + 1;
 
         if (!battle)
         {
@@ -4331,30 +4426,36 @@ static void UpdateRetreat(const player_t *player)
         }
         else if (Distance(me, retreat_points[retreat_num_points - 1]) < RETREAT_NEAR)
         {
-            StopRetreat("on open floor");
+            StopRetreat(retreat_hide ? "out of its sight" : "on open floor");
         }
         else if (retreat_calm >= RETREAT_CALM)
         {
-            StopRetreat("nothing presses now");
+            StopRetreat(retreat_hide ? "out of its sight" : "nothing presses now");
         }
         else if (leveltime - retreat_since >= RETREAT_MOST)
         {
             StopRetreat("retreated long enough");
         }
     }
-    else if (hard_pressed >= RETREAT_AFTER && leveltime >= retreat_again)
+    else if (leveltime >= retreat_again
+          && (seen_tics >= RETREAT_AFTER || hard_pressed >= RETREAT_AFTER))
     {
-        if (FindRetreat(player, retreat_points, &retreat_num_points))
+        boolean hide = seen_tics >= RETREAT_AFTER;
+        int away = hide ? avoid : presser;
+
+        if (FindRetreat(player, away, hide, retreat_points, &retreat_num_points))
         {
             k_vec2_t spot = retreat_points[retreat_num_points - 1];
 
             retreating = true;
+            retreat_hide = hide;
             retreat_next = 0;
             retreat_since = leveltime;
             retreat_calm = 0;
-            K_Log(K_LOG_COMBAT, K_LOG_INFO, "retreating from the %s, %.0f units off - to open "
-                  "floor at (%.0f,%.0f), %.0f units%s", monsters[presser].name,
-                  monsters[presser].distance, spot.x, spot.y, Distance(me, spot),
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s the %s, %.0f units off - to %s at (%.0f,%.0f), "
+                  "%.0f units%s", hide ? "hiding from" : "retreating from", monsters[away].name,
+                  monsters[away].distance, hide ? "a spot out of its sight" : "open floor",
+                  spot.x, spot.y, Distance(me, spot),
                   retreat_num_points > 1 ? ", round a corner" : "");
         }
         else
@@ -5723,6 +5824,8 @@ void K_Combat_Reset(void)
     presser = -1;
     press = 0.0;
     retreating = false;
+    retreat_hide = false;
+    seen_tics = 0;
     hard_pressed = 0;
     retreat_again = 0;
     num_trips = 0;
@@ -5730,6 +5833,8 @@ void K_Combat_Reset(void)
     escape = false;
     reserve = false;
     memset(beats, 0, sizeof(beats));
+    needed = -1;
+    fight_needed = false;
 
     for (i = 0; i < MAX_HOPELESS; ++i)
     {
@@ -5739,6 +5844,7 @@ void K_Combat_Reset(void)
     avoid = -1;
     avoid_mo = NULL;
     avoid_tics = 0;
+    avoid_seen = 0;
     passed_mo = NULL;
     passed_until = 0;
     num_barrels = 0;
@@ -5879,7 +5985,8 @@ void K_Combat_Tick(int driving)
     else if (battle && avoid >= 0)
     {
         M_snprintf(status.text, sizeof(status.text), "keeping off the %s, %.0f units - beyond "
-                   "what the player holds", monsters[avoid].name, monsters[avoid].distance);
+                   "what the player holds%s", monsters[avoid].name, monsters[avoid].distance,
+                   retreating ? ", hiding" : "");
     }
     else if (battle)
     {
@@ -6429,6 +6536,11 @@ int K_Combat_MonstersAhead(void)
 int K_Combat_Beats(int weapon)
 {
     return weapon >= 0 && weapon < NUMWEAPONS && beats[weapon];
+}
+
+void K_Combat_Needed(int type)
+{
+    needed = type;
 }
 
 void K_Combat_Escape(const char *why)

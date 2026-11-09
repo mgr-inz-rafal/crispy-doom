@@ -154,6 +154,14 @@ double K_Graph_OpeningCeiling(int sector);
 // Whether the player can cross the portal when leaving the given cell.
 k_crossing_t K_Graph_CanCross(int portal, int from_cell);
 
+// A door sector the player will have opened and left open by the time it
+// comes back through it - a door that stays open, gone through on the way
+// to a spot - judged open from either side, as it will be (E3M8: the
+// plasma rifle's room, whose doors open from outside only; the way on from
+// the rifle read as shut in, and it was never gone for). -1 forgets them
+// all.
+void K_Graph_AssumeOpen(int sector);
+
 // Where to cross the portal: as clear of walls and other obstacles as the
 // portal allows (enough not to clip a wall corner), otherwise as near its
 // middle as possible.

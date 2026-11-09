@@ -765,10 +765,12 @@ void K_Items_Tick(void)
         item->worth = item->present ? Worth(player, entry, fights) : 0.0;
         entry->running_out = item->worth > 0.0
                           && RunningOut(player, entry, condition->ammo == K_NEED_LOW);
+        item->beats = item->worth > 0.0 && BeatsWith(player, entry);
         item->urgent = Urgent(player, entry, condition);
         item->escape = false;
         item->first = item->worth > 0.0 && WeaponItem(entry->sprite, &weapon)
-                   && weapon != wp_chainsaw && !player->weaponowned[weapon] && PistolOnly(player);
+                   && weapon != wp_chainsaw && !player->weaponowned[weapon]
+                   && (PistolOnly(player) || item->beats);
         item->suit = entry->sprite == SPR_SUIT;
         entry->most = REACH_MOST;
 

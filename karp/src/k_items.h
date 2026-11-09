@@ -62,10 +62,17 @@ typedef struct
                             // far: the health, when LOW or CRITICAL, and the
                             // ammo when ammo is LOW or firepower CRITICAL
     int first;              // a weapon better than the pistol while nothing
-                            // better is held (a pistol start): goes before
-                            // other items, but for health when CRITICAL
+                            // better is held (a pistol start), or one not
+                            // held that beats a monster the player is
+                            // outgunned by (beats): goes before other
+                            // items, but for health when CRITICAL (E3M8:
+                            // the plasma rifle passed for the rockets
+                            // nearer, one at a time, all over the map)
     int suit;               // a radiation suit: the brain also weighs it by
                             // the floors it would keep out on the way on
+    int beats;              // worth anything, it gives what would kill a
+                            // monster the player met that what it holds
+                            // cannot (K_Combat_Beats): running out
 } k_item_t;
 
 // Called by Karp on every level load.

@@ -179,6 +179,23 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define DASH_CLEAR 128.0
 #define DASH_FREE 384.0
 
+// Stacked detours (plan, 7.8: detours are sticky; the user, E1M8: going for
+// the first shotgun, the bot ran up the stairs 140 off the soulsphere behind
+// the secret door there and never went back for it, one detour at a time):
+// while an item is gone for - on top, the route ending at it - another whose
+// extra way to it is no more than STACK_SHARE of its own reach, and
+// STACK_MOST (the soulsphere 140 off as the crow flies was 1178 out of the
+// way: round by the stairs to its door, a second to open, counted as 560),
+// goes on top of it, out of a fight, through no fix; the one below is gone
+// for again once it is picked up. On top of one that goes first (GoesFirst:
+// a first weapon, the health or ammo that is short), only health and armour,
+// what keeps the player alive (E1M8: a box of bullets 1052 out of the way
+// went on top of the first shotgun, which came at 52 s, not 29). STACK_DEPTH
+// items on the chain at the most.
+#define STACK_SHARE 0.5
+#define STACK_MOST 1536.0
+#define STACK_DEPTH 2
+
 // Out of a fight, an item behind one fix the brain knows - barrels in the
 // way, a door or bars a switch or walk-over line opens; never a key - is
 // gone for through it: the detour counts the way to the fix's nearest spot,
@@ -2085,10 +2102,14 @@ static void PlanGoal(goal_t *goal)
         Go(goal, &candidates[best_open], open_length, reachable, count);
     }
     else if (goal->type == GOAL_ITEM
-          && (!goal->fixable || best_blocked < 0 || fix_type == GOAL_KEY))
+          && (!(goal->fixable || goal->shut > 0) || best_blocked < 0 || fix_type == GOAL_KEY))
     {
         // A detour, not a step on the way: never worth a wait, nor a fix
-        // unless it was gone for through one (FIX_WORK), and never a key.
+        // unless it was gone for through one (FIX_WORK), or its way shut on
+        // the way (E2M8: a door shut behind the player going for the rocket
+        // launcher, the cyberdemon too much without it; the launcher was
+        // given up for 30 s, and the bot walked up to the cyberdemon and
+        // died), and never a key.
         FailGoal(reason);
     }
     else if (best_blocked >= 0)
@@ -2381,6 +2402,23 @@ static boolean UpdateKill(goal_t *goal)
     return true;
 }
 
+// Whether the item (by its index) is gone for already, somewhere on the
+// chain.
+static boolean OnChain(int item)
+{
+    int i;
+
+    for (i = 0; i < depth; ++i)
+    {
+        if (goals[i].type == GOAL_ITEM && goals[i].param == item)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Whether the item goes before the others (FIRST_SCORE): one worth leaving a
 // fight for however far (k_items.h: escape) - but when CRITICAL only health
 // (Doom II MAP15: at 9 health a clip for the chaingun, firepower LOW, was
@@ -2552,6 +2590,27 @@ static double WayThrough(const k_path_t *path, int own)
     return through;
 }
 
+// The doors opened by hand on a way that stay open (not K_Specials_DoorCloses):
+// open for a way on from its end, the player having gone through them
+// (K_Graph_AssumeOpen).
+static void LeaveOpen(const k_path_t *path)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_graph_t *graph = K_Graph_Get();
+    int i;
+
+    for (i = 0; i + 1 < path->num_cells; ++i)
+    {
+        int line = graph->portals[path->portals[i]].line;
+        int special = line >= 0 ? K_Specials_LineSpecial(line) : 0;
+
+        if (K_Specials_ManualDoor(special) && !K_Specials_DoorCloses(special))
+        {
+            K_Graph_AssumeOpen(map->subsectors[map->cells[path->cells[i + 1]].subsector].sector);
+        }
+    }
+}
+
 // The extra way an item takes: there and on to where the route goes, less
 // the way left; the way there (the work at a fix counted); and the health
 // the floors take there and on, less what they take on the way left. Ways
@@ -2647,7 +2706,15 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
         return false;
     }
 
+    // The way on from the spot: through the doors opened on the way there
+    // that stay open (K_Graph_AssumeOpen).
+    if (!*fixed)
+    {
+        LeaveOpen(&probe);
+    }
+
     K_Path_Find(&probe, spot, -1, end);
+    K_Graph_AssumeOpen(-1);
 
     if (!OpenOrFixed(&probe, *fixed, type, param))
     {
@@ -2733,8 +2800,17 @@ static boolean ConsiderItems(goal_t *goal)
     k_pose_t player;
     k_vec2_t start, end;
     goal_t *item_goal;
-    char name[64], guarded[64] = "", floors[64] = "", risky[64] = "";
+    char name[64], guarded[64] = "", floors[64] = "", risky[64] = "", below[96] = "";
     int detour_at = -1;     // the detour on that goes first, which a nearer one may replace
+    boolean stacking = false;   // a small one may go on top of the item gone for
+    boolean stackable, best_stack = false;
+    boolean lives_only;         // on top only health and armour (STACK_SHARE)
+    int on_items = 0;
+    int alt = -1;           // the best of those that would go on top, if a
+    double alt_slack = 0.0, alt_detour = 0.0, alt_way = 0.0, alt_damage = 0.0;
+    double alt_risk = 0.0, alt_cost = 0.0, alt_through = 0.0;   // replacement is refused
+    boolean alt_first = false;
+    double on_way = 1.0e9, on_through = 0.0;    // the detour on, to be replaced
     int i, k;
 
     // Health just went CRITICAL: looked at now, not within the second (Doom
@@ -2756,7 +2832,16 @@ static boolean ConsiderItems(goal_t *goal)
 
     item_check_tic = leveltime + ITEM_CHECK_TICS;
 
-    // One detour at a time: not while one is on, nor its fix in front of it
+    for (i = 0; i < depth; ++i)
+    {
+        on_items += goals[i].type == GOAL_ITEM;
+    }
+
+    stackable = !fighting && on_items > 0 && on_items < STACK_DEPTH && goal->type == GOAL_ITEM;
+    lives_only = stackable && GoesFirst(K_Items_Get(goal->param), critical);
+
+    // One detour at a time, but for small ones on top (STACK_SHARE): not
+    // while one is on, nor its fix in front of it
     // (Doom II MAP04: the shotgun behind bars was added again over the
     // switch pushed for it, every second). But health LOW or CRITICAL goes
     // before any other, while some health worth leaving a fight for is there
@@ -2794,7 +2879,13 @@ static boolean ConsiderItems(goal_t *goal)
         if (i == 0 || on->kind == K_ITEM_HEALTH || (!critical && GoesFirst(on, critical))
          || !EscapeFor(critical, &for_health))
         {
-            return false;
+            if (!stackable)
+            {
+                return false;
+            }
+
+            stacking = true;
+            break;
         }
 
         GoalName(&goals[i], name, sizeof(name));
@@ -2822,6 +2913,9 @@ static boolean ConsiderItems(goal_t *goal)
         item_check_tic = 0;
         return true;
     }
+
+    // On top of one that goes first, too, as well as in its place.
+    stacking |= detour_at >= 0 && stackable;
 
     // In a fight nav waits: it was free to when the fight began.
     if (depth >= MAX_GOALS || !goal->planned
@@ -2857,15 +2951,24 @@ static boolean ConsiderItems(goal_t *goal)
 
         suits |= item->suit && item->present;
 
+        // With one on, in its place one that goes first, or on top a small
+        // one (STACK_SHARE).
+        if (stacking && !(detour_at >= 0 && GoesFirst(item, critical)))
+        {
+            reach = SDL_min(reach * STACK_SHARE, STACK_MOST);
+        }
+
         if (item->present && reach > 0.0 && distance > reach)
         {
             distance = SDL_min(distance, 2.0 * RouteDistance(path, nav->target, start, item->at));
         }
 
         if (!item->present || reach <= 0.0 || distance > reach
-         || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i)
+         || leveltime < item_skip[i] || IsFailed(GOAL_ITEM, i) || OnChain(i)
          || (fighting && !item->urgent)
-         || (detour_at >= 0 && (!GoesFirst(item, critical) || i == goals[detour_at].param)))
+         || (detour_at >= 0 && !stacking && !GoesFirst(item, critical))
+         || (stacking && lives_only && !(detour_at >= 0 && GoesFirst(item, critical))
+             && item->kind != K_ITEM_HEALTH && item->kind != K_ITEM_ARMOUR))
         {
             continue;
         }
@@ -2889,7 +2992,7 @@ static boolean ConsiderItems(goal_t *goal)
         order_score[k] = score;
     }
 
-    suits &= !fighting && detour_at < 0 && K_Map_SuitTics() < SUIT_KEEP;
+    suits &= !fighting && detour_at < 0 && !stacking && K_Map_SuitTics() < SUIT_KEEP;
 
     // The way left as the pathfinder sees it now, with its waits, and the
     // floors that hurt on it; as nav has it if there is none.
@@ -2918,11 +3021,17 @@ static boolean ConsiderItems(goal_t *goal)
         const k_item_t *item = K_Items_Get(order[k]);
         double reach = ItemReach(item, fighting);
         boolean first = GoesFirst(item, critical);
+        boolean stacks = stacking && !(detour_at >= 0 && first);
         double detour, way, damage, risk, through, cost;
         boolean fixed;
 
+        if (stacks)
+        {
+            reach = SDL_min(reach * STACK_SHARE, STACK_MOST);
+        }
+
         if (!ItemDetour(start, player.cell, item->spot, end, remaining_way, remaining_damage,
-                        !fighting, &detour, &way, &damage, &fixed, &risk, &through))
+                        !fighting && !stacks, &detour, &way, &damage, &fixed, &risk, &through))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
@@ -2964,6 +3073,20 @@ static boolean ConsiderItems(goal_t *goal)
             best_risk = risk;
             best_fixed = fixed;
             best_first = first;
+            best_stack = stacks;
+        }
+
+        if (stacks && detour <= reach && (alt < 0 || reach - detour > alt_slack))
+        {
+            alt = order[k];
+            alt_slack = reach - detour;
+            alt_detour = detour;
+            alt_way = way;
+            alt_cost = cost;
+            alt_through = through;
+            alt_damage = damage;
+            alt_risk = risk;
+            alt_first = first;
         }
     }
 
@@ -3000,11 +3123,14 @@ static boolean ConsiderItems(goal_t *goal)
     }
 
     // In place of the detour on, only when clearly sooner in hand; it and
-    // the fixes pushed for it go, the goal below it staying as it was.
-    if (detour_at >= 0)
+    // the fixes pushed for it go, the goal below it staying as it was. When
+    // not, the best that would go on top of it (E1M8: the soulsphere, 1178
+    // out of the way of the first shotgun, lost to the other shotgun, which
+    // was then no better than the one gone for).
+    if (!best_stack && detour_at >= 0)
     {
         const k_item_t *on = K_Items_Get(goals[detour_at].param);
-        double on_detour, on_way = 1.0e9, on_damage, on_through = 0.0;
+        double on_detour, on_damage;
         boolean on_fixed;
 
         // Through the fixes pushed for it, which are on the stack (E2M5:
@@ -3019,8 +3145,29 @@ static boolean ConsiderItems(goal_t *goal)
 
         if (best_cost + REPLACE_MARGIN >= on_way + on_through * DAMAGE_WAY)
         {
-            return false;
+            if (alt < 0)
+            {
+                return false;
+            }
+
+            best = alt;
+            best_slack = alt_slack;
+            best_detour = alt_detour;
+            best_way = alt_way;
+            best_cost = alt_cost;
+            best_through = alt_through;
+            best_damage = alt_damage;
+            best_risk = alt_risk;
+            best_fixed = false;
+            best_first = alt_first;
+            best_suit = false;
+            best_stack = true;
         }
+    }
+
+    if (!best_stack && detour_at >= 0)
+    {
+        const k_item_t *on = K_Items_Get(goals[detour_at].param);
 
         GoalName(&goals[detour_at], name, sizeof(name));
 
@@ -3043,6 +3190,14 @@ static boolean ConsiderItems(goal_t *goal)
         }
         depth = detour_at;
         K_Nav_Clear();
+    }
+
+    // On top of the item gone for (STACK_SHARE): it stays, gone for again
+    // once this one is picked up.
+    else if (best_stack)
+    {
+        GoalName(goal, name, sizeof(name));
+        M_snprintf(below, sizeof(below), ", on the way to %s", name);
     }
 
     // A switch not worked yet: going for it again after the item is not
@@ -3080,9 +3235,9 @@ static boolean ConsiderItems(goal_t *goal)
                    best_risk);
     }
 
-    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s%s%s, "
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s%s%s%s, "
           "worth %.0f (%.0f with those beside it)%s", name, chosen->at.x, chosen->at.y,
-          best_detour, best_fixed ? " through what blocks it" : "", floors, risky,
+          best_detour, best_fixed ? " through what blocks it" : "", below, floors, risky,
           chosen->worth, chosen->together, guarded);
     return true;
 }
@@ -3219,6 +3374,24 @@ static void UpdateEscape(void)
     {
         K_Combat_Escape(NULL);
     }
+}
+
+// The kind of monster the level needs dead for the goals on the chain (KILL
+// EVERY <kind>): combat fights it with what the player holds once nothing
+// that would beat it is left to fetch (K_Combat_Needed); -1 if none.
+static int NeededKind(void)
+{
+    int i;
+
+    for (i = depth - 1; i >= 0; --i)
+    {
+        if (goals[i].type == GOAL_KILL)
+        {
+            return goals[i].param;
+        }
+    }
+
+    return -1;
 }
 
 // Held up by a barrel (HOLD_TICS): it goes on top, to be shot from a safe
@@ -3563,6 +3736,7 @@ void K_Brain_Tick(void)
     health_ring[leveltime % FALL_TICS] = (int) K_Map_PlayerHealth();
     UpdateEscape();
     UpdateShooting();
+    K_Combat_Needed(NeededKind());
 
     if (depth == 0 && exit_wanted)
     {

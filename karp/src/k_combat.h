@@ -133,6 +133,12 @@ int K_Combat_MonstersAhead(void);
 // (k_items.h).
 int K_Combat_Beats(int weapon);
 
+// Set by the brain: the kind of monster (a mobjtype_t; -1 for none) that
+// must die for the level to go on - a boss. Met as one the player cannot
+// kill with what it holds (hopeless), it is fought anyway once nothing that
+// would beat it is left to fetch (k_items.h: beats).
+void K_Combat_Needed(int type);
+
 // Set by the brain while it goes for health with health CRITICAL, or dashes
 // for a weapon or ammo close by, with why ("health CRITICAL, going for
 // health"); NULL when not: no fight is started, one going on is broken off,

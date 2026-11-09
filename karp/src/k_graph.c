@@ -194,6 +194,8 @@ static unsigned char *door_sectors;
 static unsigned char *door_walled;      // a door with a one-sided line: set in a wall
 static unsigned char *lift_sectors;
 static unsigned char *lift_turns;       // per sector, K_Graph_LiftTurnedBack
+static unsigned char *assumed_open;     // per sector, K_Graph_AssumeOpen
+static boolean assumed_any;
 static k_vec2_t *sector_min, *sector_max;   // per sector, its bounding box
 
 // Per line: the teleporter it belongs to, -1 if none.
@@ -989,10 +991,13 @@ static void FindMoverSectors(const k_map_t *map)
     free(door_walled);
     free(lift_sectors);
     free(lift_turns);
+    free(assumed_open);
     door_sectors = calloc(count, 1);
     door_walled = calloc(count, 1);
     lift_sectors = calloc(count, 1);
     lift_turns = calloc(count, 1);
+    assumed_open = calloc(count, 1);
+    assumed_any = false;
 
     for (i = 0; i < numlines; ++i)
     {
@@ -2264,6 +2269,12 @@ static k_crossing_t JudgeHeights(int portal_index, int from, double *wait, doubl
     floor_b = b->floorheight;
     ceiling_b = b->ceilingheight;
 
+    // A door the player leaves open on the way (K_Graph_AssumeOpen).
+    if (assumed_any && assumed_open[to_sector])
+    {
+        ceiling_b = SDL_max(ceiling_b, DoorTop(b));
+    }
+
     // Standing in a door means it is open; under a crusher, it is up.
     ceiling_a = OpenCeiling(a);
 
@@ -2616,6 +2627,28 @@ k_crossing_t K_Graph_CanCross(int portal, int from)
     double wait, beyond;
 
     return Judge(portal, from, &wait, &beyond);
+}
+
+void K_Graph_AssumeOpen(int sector)
+{
+    if (assumed_open == NULL || sector >= numsectors)
+    {
+        return;
+    }
+
+    if (sector < 0)
+    {
+        if (assumed_any)
+        {
+            memset(assumed_open, 0, numsectors);
+        }
+
+        assumed_any = false;
+        return;
+    }
+
+    assumed_open[sector] = 1;
+    assumed_any = true;
 }
 
 k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
