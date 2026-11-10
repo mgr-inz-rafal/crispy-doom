@@ -3148,10 +3148,11 @@ static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
     return best;
 }
 
-// K_Graph_ObstaclesNear for a player standing in the given cell, and the
-// standing blocks too if asked; doors as standing_t takes door_reach.
+// K_Graph_ObstaclesNear for a player standing in the given cell - on `on`
+// if that is higher than the cell's floor - and the standing blocks too if
+// asked; doors as standing_t takes door_reach.
 static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *found,
-                           int max, boolean with_blocks, double door_reach)
+                           int max, boolean with_blocks, double door_reach, double on)
 {
     const k_map_t *map = K_Map_Get();
     k_vec2_t min = { at.x - reach, at.y - reach };
@@ -3169,6 +3170,10 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
     }
 
     StandingHeights(cell, &floor, &ceiling);
+    if (on * FRACUNIT > (double) floor)
+    {
+        floor = (fixed_t) (on * FRACUNIT);
+    }
     standing.sector[0] = map->subsectors[map->cells[cell].subsector].sector;
     standing.sector[1] = -1;
     standing.a = standing.b = at;
@@ -3282,9 +3287,13 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
 int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
                           int max)
 {
-    // Only a door the box is in.
+    // Only a door the box is in. From the floor the player stands on: on the
+    // edge of a stair, its centre over the floor below (the cell it plans
+    // from, K_Map_StandingCell), the box is up on the step already (Doom II
+    // MAP03: on the stairs to the blue key, the next riser judged from the
+    // floor below, 32 high, held the creeping player off it for 20 s).
     return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max,
-                           false, PLAYER_RADIUS);
+                           false, PLAYER_RADIUS, floor);
 }
 
 double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
@@ -3351,7 +3360,7 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
 {
     k_nearline_t found[MAX_NEAR_LINES];
     int cell = K_Map_CellAt(at.x, at.y);
-    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0);
+    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0, -1.0e6);
     double clearance = reach;
     int i;
 

@@ -3515,6 +3515,17 @@ Who controls the player in a fight (the user's model):
     refused, leaves the place to the best of these (the other shotgun had shut the soulsphere
     out). Logged: "added GET SOULSPHERE ... - 1178 units out of the way, on the way to GET
     SHOTGUN".
+  - Stalls while creeping (the user, MAP03 played on from MAP01, salt 4: crept a bit before the
+    blue key, then stood staring at it for seconds; found in 4 runs of 6, the build before too):
+    - Walls to steer off are judged from the floor the player stands on (`K_Graph_ObstaclesNear`):
+      on the edge of the stairs to the key, the box up on the first step (56), its centre over
+      the floor below (32, the cell it plans from), the next riser (64) counted as a wall 32
+      high touching the box, and every step toward it was taken off; at a run the momentum
+      carried the player over, at creeping speed it stood until HOLD_MOST, 20 s.
+    - A hold whose player comes no nearer to the spot for 2 s, out of a fight, is over and the
+      route planned again (MAP03: a floor rose on the way creeping went, a step of 184; 10 s
+      standing short of the spot).
+    MAP03 then: no stall in six salts, 4 to 20 s sooner.
   The user's two rooms had two reasons: E3M8's a judging bug (the way out of the room judged
   by its doors as they are, shut, though they stay open once used), E1M8's the one-detour rule
   (and, in the fights on the stairs, only items worth breaking a fight off for being looked

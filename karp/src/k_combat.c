@@ -704,6 +704,13 @@ extern void A_SPosAttack();
 #define CREEP_SHORT 24.0
 #define CREEP_POINTS 32
 
+// Out of a fight, a player that has come no nearer to the spot for
+// HOLD_STALL, HOLD_AT off it or more, cannot get there: the hold is over, the
+// route planned again (Doom II MAP03: the floor ahead rose during a hold,
+// a step of 184 on the way creeping went; the player stood short of the
+// spot until HOLD_MOST was up, 10 s).
+#define HOLD_STALL (2 * TICRATE)
+
 // Ducking (plan, 7.8: C4; the user: some threats are answered by getting
 // out of sight, not by dodging): an arch-vile winding up its flame (it
 // lands as the vile enters A_VileAttack, 66 tics after the attack starts,
@@ -1076,6 +1083,8 @@ static int creep_next;
 static int hold_since;
 static int hold_quiet;
 static boolean hold_crept;
+static double hold_nearest;         // the nearest to the spot lately, and the
+static int hold_stall;              // tics since (HOLD_STALL)
 static int hold_skip_area = -1;
 static int hold_skip_until;
 static int hold_shut_area = -1;
@@ -5157,6 +5166,22 @@ static void UpdateHold(const player_t *player)
                   && (status.target < 0 || (sighted >= SIGHTED_TICS && !WorthFighting()))
                    ? hold_quiet + 1 : 0;
 
+        // Coming no nearer to the spot, out of a fight (HOLD_STALL).
+        if (battle || dodging || ducking || Distance(me, hold_spot) < HOLD_AT)
+        {
+            hold_nearest = 1.0e9;
+            hold_stall = 0;
+        }
+        else if (Distance(me, hold_spot) < hold_nearest - 1.0)
+        {
+            hold_nearest = Distance(me, hold_spot);
+            hold_stall = 0;
+        }
+        else
+        {
+            ++hold_stall;
+        }
+
         if (area != hold_area)
         {
             StopHold(K_Area_Safe(hold_area) || AreaRisk(hold_area) < HOLD_RISK
@@ -5172,12 +5197,14 @@ static void UpdateHold(const player_t *player)
                   (double) (leveltime - hold_since) / TICRATE);
             StopHold(NULL);
         }
-        else if ((left < 1.0 && hold_quiet >= CREEP_WAIT) || leveltime - hold_since >= HOLD_MOST)
+        else if ((left < 1.0 && hold_quiet >= CREEP_WAIT) || leveltime - hold_since >= HOLD_MOST
+              || hold_stall >= HOLD_STALL)
         {
             hold_skip_area = hold_area;
             hold_skip_until = leveltime + HOLD_SKIP;
-            StopHold(left < 1.0 ? "crept in, nothing came, nothing worth fighting"
-                                : "held long enough");
+            StopHold(hold_stall >= HOLD_STALL ? "the spot is out of reach"
+                     : left < 1.0 ? "crept in, nothing came, nothing worth fighting"
+                     : "held long enough");
         }
         else if (hold_quiet >= CREEP_WAIT)
         {
@@ -5235,6 +5262,8 @@ static void UpdateHold(const player_t *player)
                    ? hold_shut_since : leveltime;
         hold_quiet = 0;
         hold_crept = false;
+        hold_nearest = 1.0e9;
+        hold_stall = 0;
         hold_shut_area = -1;
         K_Nav_Pause(1);
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "holding at (%.0f,%.0f), short of area %d - %d monsters "
