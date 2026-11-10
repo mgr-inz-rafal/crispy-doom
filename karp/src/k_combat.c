@@ -34,6 +34,13 @@
 //	off, out of its sight, with nothing shot at it, and what would kill it
 //	is gone for (K_Combat_Beats).
 //
+//	Infighting (plan, 7.8): a monster fighting another is no target - a shot
+//	would turn it on the player - but kept off as any. Telefrags: what stands
+//	where the brain goes to land by a teleporter is left alone, its death on
+//	its way (K_Combat_Telefrag). Invulnerable, the player fights far
+//	monsters too and begins no hold (INVULN_BOLD); a hard fight is what a
+//	sphere is for (K_Combat_HardFight).
+//
 //	Pistol and chaingun shots stray only when the trigger is held through
 //	a shot (P_GunShot is accurate while refire is 0): far off they are
 //	tapped, fired only from the ready state. The plasma rifle is held: let
@@ -438,6 +445,35 @@ extern void A_SPosAttack();
 #define SOUL_CLEAR 384.0
 #define INVULN_LEFT 70
 #define ROCKET_HEALTH 100
+
+// Invulnerable for INVULN_BOLD more at least (the user: plan to have it for
+// the fight), the target is fought as far as TARGET_REACH, far and
+// dodgeable or not, and no hold is begun; rockets fire whatever the burst
+// (INVULN_LEFT). Monsters are still kept off as ever. Tried and dropped:
+// keeping nothing off, closing in on the target - E3M9, rockets took the
+// Cyberdemon (4000, no splash) to half in the 30 s, and as it wore off the
+// bot stood 190 from it, and died to its rockets.
+#define INVULN_BOLD (4 * TICRATE)
+
+// A hard fight, which an invulnerability sphere is for (the user: grab it
+// when preparing for tough fights - a Cyberdemon, masses of monsters): awake
+// in sight within HARD_REACH, not fighting another, a monster whose kind
+// costs HARD_ONE or more (the Cyberdemon, the spider mastermind, the
+// arch-vile) or that is hopeless, or monsters costing HARD_CROWD in all;
+// lasting HARD_LINGER after, while the fight comes and goes from sight
+// (K_Combat_HardFight).
+#define HARD_REACH 1024.0
+#define HARD_ONE 50.0
+#define HARD_CROWD 80.0
+#define HARD_LINGER (5 * TICRATE)
+
+// Left alone for a telefrag (K_Combat_Telefrag): the monsters a player
+// landing on the spot would overlap (PIT_StompThing), TELEFRAG_SLACK more for
+// one stepping about in its cage.
+#define TELEFRAG_SLACK 16.0
+
+// Monsters fighting another, logged as left alone, at most at once.
+#define MAX_INFIGHT 16
 #define BUNCHED 96.0
 #define ROCKET_SHARE 0.25
 #define ROCKET_ROOM 64.0
@@ -1012,6 +1048,20 @@ static int avoid_seen;              // when the one kept off was last in sight
 static const mobj_t *passed_mo;
 static int passed_until;
 
+// Monsters fighting another, logged as left alone (MAX_INFIGHT).
+static const mobj_t *infight_logged[MAX_INFIGHT];
+
+// Invulnerable for INVULN_BOLD more, this tic; when a hard fight was last
+// on (HARD_LINGER).
+static boolean bold;
+static int hard_seen;
+
+// The spot the brain goes to land on, to telefrag what stands there
+// (K_Combat_Telefrag), and its area.
+static boolean telefrag_on;
+static k_vec2_t telefrag_at;
+static int telefrag_area = -1;
+
 // Barrels in the level, live ones and those about to blow up. Barrels that
 // would set each other off share a chain; a chain with a barrel within
 // BLAST_SAFE of the player is near: never shot, never grazed.
@@ -1270,6 +1320,8 @@ static void AddMonster(const mobj_t *mo, const mobj_t *player_mo, k_vec2_t me)
     monster->radius = ToMap(mo->radius);
     monster->health = mo->health;
     monster->awake = mo->target != NULL;
+    monster->infighting = mo->target != NULL && mo->target->player == NULL
+                       && mo->target->health > 0 && (mo->target->flags & MF_SHOOTABLE);
     monster->attacking = mo->state != NULL && attack_states[mo->state - states];
     monster->hitscan = kind->hitscan;
     monster->z = ToMap(mo->z);
@@ -2134,6 +2186,91 @@ static boolean LeftAlone(int index)
     return hopeless[index] && !(fight_needed && monsters[index].type == needed);
 }
 
+// Whether the monster (by its place in this tic's list) stands where the
+// brain goes to land, to telefrag it (TELEFRAG_SLACK).
+static boolean Spared(int index)
+{
+    double block = monsters[index].radius + PLAYER_RADIUS + TELEFRAG_SLACK;
+
+    return telefrag_on && fabs(monsters[index].at.x - telefrag_at.x) < block
+        && fabs(monsters[index].at.y - telefrag_at.y) < block;
+}
+
+// Each tic: the monsters fighting another, logged as each is left alone, in
+// sight within TARGET_REACH (MAX_INFIGHT).
+static void UpdateInfighting(void)
+{
+    int i, k;
+
+    for (k = 0; k < MAX_INFIGHT; ++k)
+    {
+        i = IndexOf(infight_logged[k]);
+
+        if (infight_logged[k] != NULL && (i < 0 || !monsters[i].infighting))
+        {
+            infight_logged[k] = NULL;
+        }
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (!monsters[i].infighting || !monsters[i].visible
+         || monsters[i].distance > TARGET_REACH)
+        {
+            continue;
+        }
+
+        for (k = 0; k < MAX_INFIGHT && infight_logged[k] != monster_mobjs[i]; ++k)
+        {
+        }
+
+        if (k < MAX_INFIGHT)
+        {
+            continue;
+        }
+
+        for (k = 0; k < MAX_INFIGHT && infight_logged[k] != NULL; ++k)
+        {
+        }
+
+        if (k < MAX_INFIGHT)
+        {
+            infight_logged[k] = monster_mobjs[i];
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "leaving the %s alone, %.0f units off - it fights "
+                  "the %s", monsters[i].name, monsters[i].distance,
+                  Kind(monster_mobjs[i]->target->type)->name);
+        }
+    }
+}
+
+// Each tic: whether a hard fight is on (HARD_ONE, HARD_CROWD), and whether the
+// player is invulnerable enough to close in (INVULN_BOLD).
+static void UpdateHard(const player_t *player)
+{
+    double crowd = 0.0;
+    boolean one = false;
+    int i;
+
+    bold = player->powers[pw_invulnerability] >= INVULN_BOLD;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+
+        if (monster->awake && monster->visible && !monster->infighting
+         && monster->distance <= HARD_REACH)
+        {
+            crowd += Kind(monster->type)->cost;
+            one |= Kind(monster->type)->cost >= HARD_ONE || hopeless[i];
+        }
+    }
+
+    if (one || crowd >= HARD_CROWD)
+    {
+        hard_seen = leveltime;
+    }
+}
+
 // Each tic: which monsters are hopeless; logged as each becomes so, awake in
 // sight, and again once it can be fought. Those logged, met awake, are what
 // the player is outgunned by while they stay awake (beats).
@@ -2287,7 +2424,8 @@ static void UpdateReserve(const player_t *player)
 
 // The hopeless monster to keep off (AVOID_PAST): awake, in sight - or the
 // one kept off, seen within AVOID_LINGER - nearer than its kind's distance;
-// the nearest; not the one passed, unless within CLOSE_REACH. One that
+// the nearest; not the one passed, unless within CLOSE_REACH, nor one about
+// to be telefragged (Spared). One that
 // cannot come at the player too: from where it stands it shoots (E3M8: the
 // spider mastermind, 212 off, shot the bot dead as it picked up a rocket;
 // E3M9: a switch worked in the cyberdemon's sight). -1 if none.
@@ -2301,7 +2439,7 @@ static int Avoided(void)
         boolean kept = battle && monster_mobjs[i] == avoid_mo;
         double keep = SDL_max(Kind(monster->type)->keep, KEEP_AWAY) + (kept ? AVOID_PAST : 0.0);
 
-        if (LeftAlone(i) && monster->awake && monster->distance < keep
+        if (LeftAlone(i) && !Spared(i) && monster->awake && monster->distance < keep
          && (monster->visible || (kept && leveltime - avoid_seen < AVOID_LINGER))
          && !(monster_mobjs[i] == passed_mo && leveltime < passed_until
               && monster->distance >= CLOSE_REACH)
@@ -2362,9 +2500,11 @@ static void ChooseTarget(const player_t *player)
     for (i = 0; i < num_monsters && !pain_near; ++i)
     {
         pain_near = monsters[i].type == MT_PAIN && monsters[i].shootable
-                 && monsters[i].distance <= TARGET_REACH && !IgnoredTarget(i);
+                 && monsters[i].distance <= TARGET_REACH && !IgnoredTarget(i)
+                 && !monsters[i].infighting;
     }
 
+    // Not one fighting another, nor one about to be telefragged.
     for (i = 0; i < num_monsters; ++i)
     {
         const k_monster_t *monster = &monsters[i];
@@ -2372,7 +2512,8 @@ static void ChooseTarget(const player_t *player)
 
         if (!monster->shootable || monster->distance > TARGET_REACH
          || (!monster->awake && monster->distance > ASLEEP_REACH)
-         || FarAndDodgeable(monster, monster_mobjs[i]) || IgnoredTarget(i) || LeftAlone(i))
+         || (!bold && FarAndDodgeable(monster, monster_mobjs[i])) || IgnoredTarget(i)
+         || LeftAlone(i) || monster->infighting || Spared(i))
         {
             continue;
         }
@@ -3970,7 +4111,8 @@ static boolean WorthFighting(void)
     }
 
     target = &monsters[status.target];
-    return (!target->awake || target->distance <= BATTLE_REACH) && FoughtAsAny(status.target);
+    return (!target->awake || target->distance <= (bold ? TARGET_REACH : BATTLE_REACH))
+        && FoughtAsAny(status.target);
 }
 
 static void StartBattle(const player_t *player)
@@ -5142,17 +5284,19 @@ static void UpdateHold(const player_t *player)
     // area judged only, not another before it on the way (Doom II MAP14: a
     // shotgun guy stepping to and fro over the border of the area before it
     // swapped holds between the two, 190 units apart, every few tics).
+    // Never short of where a telefrag lands, nor begun invulnerable.
     if (holding && !escape)
     {
-        area = UnsafeAhead(hold_spot, HOLD_AHEAD + HOLD_BACK_MOST + CREEP_PAST, -1, hold_area,
-                           &at, &point, &shut);
+        area = UnsafeAhead(hold_spot, HOLD_AHEAD + HOLD_BACK_MOST + CREEP_PAST,
+                           telefrag_on ? telefrag_area : -1, hold_area, &at, &point, &shut);
     }
-    else if (!holding && !escape && here >= 0
+    else if (!holding && !escape && !bold && here >= 0
           && (areas->areas[here].monsters == 0 || areas->areas[here].passage)
           && !dodging && K_Nav_CanPause() && !OnIsland(K_Map_CellAt(me.x, me.y))
           && (!K_Nav_Waiting() || K_Nav_GetStatus()->action == K_ACTION_DOOR))
     {
-        area = UnsafeAhead(me, HOLD_START, -1, -1, &at, &point, &shut);
+        area = UnsafeAhead(me, HOLD_START, telefrag_on ? telefrag_area : -1, -1, &at, &point,
+                           &shut);
     }
 
     if (holding)
@@ -5870,6 +6014,15 @@ void K_Combat_Reset(void)
         hopeless_logged[i] = NULL;
     }
 
+    for (i = 0; i < MAX_INFIGHT; ++i)
+    {
+        infight_logged[i] = NULL;
+    }
+
+    bold = false;
+    hard_seen = -HARD_LINGER - 1;
+    telefrag_on = false;
+    telefrag_area = -1;
     avoid = -1;
     avoid_mo = NULL;
     avoid_tics = 0;
@@ -5930,6 +6083,8 @@ void K_Combat_Tick(int driving)
     }
 
     UpdateHopeless(player);
+    UpdateInfighting();
+    UpdateHard(player);
 
     if (player->playerstate == PST_DEAD || player->health <= 0)
     {
@@ -6570,6 +6725,38 @@ int K_Combat_Beats(int weapon)
 void K_Combat_Needed(int type)
 {
     needed = type;
+}
+
+int K_Combat_HardFight(void)
+{
+    return leveltime - hard_seen <= HARD_LINGER;
+}
+
+int K_Combat_OnSpot(double x, double y)
+{
+    int best = -1, i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        double block = monsters[i].radius + PLAYER_RADIUS;
+
+        if (SpawnHealth(monsters[i].type) >= TOUGH_HEALTH
+         && fabs(monsters[i].at.x - x) < block && fabs(monsters[i].at.y - y) < block
+         && (best < 0 || SpawnHealth(monsters[i].type) > SpawnHealth(best)))
+        {
+            best = monsters[i].type;
+        }
+    }
+
+    return best;
+}
+
+void K_Combat_Telefrag(int on, double x, double y)
+{
+    telefrag_on = on != 0;
+    telefrag_at.x = x;
+    telefrag_at.y = y;
+    telefrag_area = on ? K_Area_Of(K_Map_CellAt(x, y)) : -1;
 }
 
 void K_Combat_Escape(const char *why)

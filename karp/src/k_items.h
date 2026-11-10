@@ -73,6 +73,10 @@ typedef struct
     int beats;              // worth anything, it gives what would kill a
                             // monster the player met that what it holds
                             // cannot (K_Combat_Beats): running out
+    int invuln;             // an invulnerability sphere: worth something only
+                            // in a hard fight (K_Combat_HardFight), then
+                            // worth breaking it off for close by (urgent),
+                            // dashed for through monsters
 } k_item_t;
 
 // Called by Karp on every level load.

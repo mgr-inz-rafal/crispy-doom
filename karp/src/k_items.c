@@ -38,7 +38,10 @@
 //	no escape (Doom II MAP10: outgunned by the cyberdemon, every clip for
 //	the chaingun broke a fight off, six in 20 s). A
 //	weapon better than the pistol, at a pistol start, goes before other
-//	items (first), and pays for a long detour.
+//	items (first), and pays for a long detour. An invulnerability sphere is
+//	worth something only in a hard fight (K_Combat_HardFight: a Cyberdemon,
+//	a crowd), then a lot, dashed for close by: left lying till then, it
+//	lasts for the fight.
 //
 //	What the monsters guarding an item would cost in health is taken off,
 //	weighed as health is (the user, MAP02: going for four stimpacks started
@@ -116,6 +119,21 @@
 // for HEALTH_REACH of detour at least, less the more it is guarded; when LOW
 // or CRITICAL, any detour at all, unguarded.
 #define HEALTH_REACH 1024.0
+
+// An invulnerability sphere (the user: grab it when preparing for tough
+// fights - a Cyberdemon, masses of monsters - and not before; map designers
+// often leave one for the Cyberdemon, which the bot picked up after the
+// fight on Doom II MAP10): worth nothing but in a hard fight
+// (K_Combat_HardFight), then INVULN_WORTH, within INVULN_REACH of detour -
+// a run there and back well inside its 30 s - whoever guards it: they
+// cannot hurt the player once it is picked up. In the fight a dash only
+// (urgent), not a run out of it (escape): E3M9, a run of 2063 for it went
+// past the Cyberdemon, and the bot's own rocket killed it on the way. Not
+// while the player has INVULN_KEEP of it left. Walked over on the way, it
+// is picked up as any item.
+#define INVULN_WORTH 100.0
+#define INVULN_REACH 1536.0
+#define INVULN_KEEP (4 * TICRATE)
 
 // The same for armour, a little less eager (the user, E1M5: green armour in
 // plain sight by the start, at 0%, was left; worth 33, it paid for some 470
@@ -607,7 +625,10 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
 
     switch (entry->sprite)
     {
-        case SPR_PINV: return 30.0;
+        case SPR_PINV:
+            return K_Combat_HardFight() && player->powers[pw_invulnerability] < INVULN_KEEP
+                 ? INVULN_WORTH : 0.0;
+
         case SPR_PINS: return 10.0;
 
         case SPR_BPAK:
@@ -702,6 +723,10 @@ static boolean Urgent(const player_t *player, const entry_t *entry,
             return (WeaponItem(entry->sprite, &weapon) && !player->weaponowned[weapon])
                 || entry->running_out;
 
+        // In a hard fight, an invulnerability sphere.
+        case K_ITEM_POWER:
+            return entry->sprite == SPR_PINV;
+
         default:
             return false;
     }
@@ -772,6 +797,7 @@ void K_Items_Tick(void)
                    && weapon != wp_chainsaw && !player->weaponowned[weapon]
                    && (PistolOnly(player) || item->beats);
         item->suit = entry->sprite == SPR_SUIT;
+        item->invuln = entry->sprite == SPR_PINV;
         entry->most = REACH_MOST;
 
         // Its guards and spot, about once a second; at once when it has been
@@ -884,6 +910,12 @@ void K_Items_Tick(void)
         if (item->first && item->danger < ROOM_DANGER)
         {
             item->reach = SDL_max(item->reach, FIRST_REACH * (1.0 - item->danger / ROOM_DANGER));
+        }
+
+        // Its guards cannot hurt the player once it is picked up.
+        if (item->invuln)
+        {
+            item->reach = INVULN_REACH;
         }
 
         if (item->kind == K_ITEM_HEALTH && item->together < URGENT_HEALTH)

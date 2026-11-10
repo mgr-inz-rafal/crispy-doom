@@ -204,6 +204,27 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // shotgun behind a door a switch opens, were left with the shells gone).
 #define FIX_WORK 300.0
 
+// Telefrags (the user: map designers shut a monster in on a teleporter's
+// landing spot for the player to kill by teleporting onto it - E4M2's
+// Cyberdemon, caged with the BFG; P_TeleportMove kills whatever the player
+// lands on): a tough monster (K_Combat_OnSpot; a weaker one is telefragged
+// only by chance) on the landing spot of a teleporter the player can get to
+// now, through no fix, the way there ending by it and a way on from there to
+// where the route goes - TELEFRAG goes on top, a detour through the
+// teleporter. No more than TELEFRAG_REACH out of the way; any length for the
+// Cyberdemon, the spider mastermind and the arch-vile, too big a threat to
+// fight (the user). Looked for every TELEFRAG_CHECK_TICS while a route is
+// followed, in a fight too (a standoff with the very monster); a teleporter
+// looked at is not again for TELEFRAG_SKIP. Done on landing, within
+// TELEFRAG_LANDED of the spot. With nothing tough on the spot for
+// TELEFRAG_OFF (it stepped off, or died), it fails: not again for 30 s,
+// then longer (the user: never replanning in a loop).
+#define TELEFRAG_REACH 512.0
+#define TELEFRAG_CHECK_TICS TICRATE
+#define TELEFRAG_SKIP (10 * TICRATE)
+#define TELEFRAG_OFF TICRATE
+#define TELEFRAG_LANDED 32.0
+
 // The floors that hurt on a detour (k_path.h: damage) - there and on, less
 // what the route takes anyway - count against it, each point of health as
 // DAMAGE_WAY units of detour, as the pathfinder counts them; and health is
@@ -306,6 +327,8 @@ typedef enum
     GOAL_ITEM,              // an item worth a detour, on top of the chain
     GOAL_BARREL,            // a barrel in the way, shot from a safe spot
     GOAL_KILL,              // every monster of a kind dead: a map's bosses
+    GOAL_TELEFRAG,          // through a teleporter, onto a monster on its
+                            // landing spot (TELEFRAG_REACH)
 } goal_type_t;
 
 // A place a goal can be met, and what to do there.
@@ -324,8 +347,11 @@ typedef struct
     int param;              // GOAL_KEY: the key; GOAL_TRIGGER: the sector;
                             // GOAL_ITEM: the item (K_Items_Get); GOAL_BARREL:
                             // the barrel's block (k_block_t); GOAL_KILL: the
-                            // kind (mobjtype_t)
+                            // kind (mobjtype_t); GOAL_TELEFRAG: the
+                            // teleporter (k_graph.h: teleports)
     k_vec2_t point;         // GOAL_GOTO
+    int victim;             // GOAL_TELEFRAG: the kind on the spot, and the
+    int off;                // tics nothing tough has stood there, in a row
 
     // Not planned until a candidate is chosen; planned again when it
     // fails, or a goal in front of this one ends.
@@ -433,6 +459,9 @@ static int *item_skip;                  // per item: not looked at before this
 static int item_skip_size;
 static k_vec2_t hold_at;                // where the player has kept near, and
 static int hold_since;                  // since when (HOLD_TICS)
+static int telefrag_check_tic;          // when to look for telefrags next
+static int *telefrag_skip;              // per teleporter: not looked at before
+static int telefrag_skip_size;          // this (TELEFRAG_SKIP)
 
 //
 // Names
@@ -464,6 +493,11 @@ static void GoalName(const goal_t *goal, char *buf, int len)
 
         case GOAL_KILL:
             M_snprintf(buf, len, "KILL EVERY %s", K_Combat_KindName(goal->param));
+            M_ForceUppercase(buf);
+            break;
+
+        case GOAL_TELEFRAG:
+            M_snprintf(buf, len, "TELEFRAG THE %s", K_Combat_KindName(goal->victim));
             M_ForceUppercase(buf);
             break;
 
@@ -1059,6 +1093,20 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 
         case GOAL_BARREL:
             count = BarrelSpots(goal->param, out, max);
+            break;
+
+        case GOAL_TELEFRAG:
+            {
+                const k_teleport_t *teleport = &K_Graph_Get()->teleports[goal->param];
+
+                out[0].at = teleport->to;
+                out[0].kind = K_GOAL_POINT;
+                out[0].line = -1;
+                M_snprintf(out[0].what, sizeof(out[0].what), "%s on the landing spot of the "
+                           "teleporter (tag %d) at (%.0f,%.0f)", K_Combat_KindName(goal->victim),
+                           teleport->tag, teleport->to.x, teleport->to.y);
+                count = 1;
+            }
             break;
 
         // Where each one is now: once in sight, combat fights it.
@@ -1884,8 +1932,8 @@ static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 // round, and from there the bot looped). The lowest such goal wins. An item
 // is a detour, not a fix for the goals below it, which have their way: only
 // the item and the fixes pushed for it count (Doom II MAP04: the switch for
-// the bars before a shotgun was dropped with the shotgun, every second).
-// Returns true if goals were dropped.
+// the bars before a shotgun was dropped with the shotgun, every second); so
+// is a telefrag. Returns true if goals were dropped.
 static boolean DropNeedless(void)
 {
     k_pose_t player;
@@ -1895,7 +1943,7 @@ static boolean DropNeedless(void)
 
     for (i = depth - 1; i >= 0; --i)
     {
-        if (goals[i].type == GOAL_ITEM)
+        if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG)
         {
             base = i;
             break;
@@ -1960,6 +2008,7 @@ static void PlanGoal(goal_t *goal)
              : goal->type == GOAL_TRIGGER ? "no line moves the sector any more"
              : goal->type == GOAL_ITEM ? "it is gone, or no spot touches it"
              : goal->type == GOAL_BARREL ? "no safe spot to shoot it from"
+             : goal->type == GOAL_TELEFRAG ? "no way through the teleporter now"
              : "no way there");
 
     for (i = 0; i < count; ++i)
@@ -2101,15 +2150,16 @@ static void PlanGoal(goal_t *goal)
     {
         Go(goal, &candidates[best_open], open_length, reachable, count);
     }
-    else if (goal->type == GOAL_ITEM
-          && (!(goal->fixable || goal->shut > 0) || best_blocked < 0 || fix_type == GOAL_KEY))
+    else if ((goal->type == GOAL_ITEM
+              && (!(goal->fixable || goal->shut > 0) || best_blocked < 0 || fix_type == GOAL_KEY))
+          || goal->type == GOAL_TELEFRAG)
     {
         // A detour, not a step on the way: never worth a wait, nor a fix
         // unless it was gone for through one (FIX_WORK), or its way shut on
         // the way (E2M8: a door shut behind the player going for the rocket
         // launcher, the cyberdemon too much without it; the launcher was
         // given up for 30 s, and the bot walked up to the cyberdemon and
-        // died), and never a key.
+        // died), and never a key. A telefrag never through a fix.
         FailGoal(reason);
     }
     else if (best_blocked >= 0)
@@ -3248,14 +3298,16 @@ static boolean ConsiderItems(goal_t *goal)
 // firepower LOW the bot ran for a box of shells past three imps in a
 // corridor, clawed; Doom II MAP14: a hold that had killed five was broken
 // off for a medikit among the monsters held short of) - until the fight
-// for it is over. Not for health at CRITICAL: worth any risk. Logged once a
+// for it is over. Not for health at CRITICAL: worth any risk; nor for
+// invulnerability, which makes the monsters there harmless. Logged once a
 // run.
 static boolean RunWaits(const goal_t *goal, const k_item_t *item)
 {
     char name[64];
     int area;
 
-    if (item->kind == K_ITEM_HEALTH && K_Condition_Get()->health == K_NEED_CRITICAL)
+    if ((item->kind == K_ITEM_HEALTH && K_Condition_Get()->health == K_NEED_CRITICAL)
+     || item->invuln)
     {
         return false;
     }
@@ -3392,6 +3444,177 @@ static int NeededKind(void)
     }
 
     return -1;
+}
+
+// The teleporter the topmost TELEFRAG goes through, -1 if none: combat
+// leaves what stands on its landing spot alone (K_Combat_Telefrag).
+static int TelefragOn(void)
+{
+    int i;
+
+    for (i = depth - 1; i >= 0; --i)
+    {
+        if (goals[i].type == GOAL_TELEFRAG)
+        {
+            return goals[i].param;
+        }
+    }
+
+    return -1;
+}
+
+// Whether a route ends by the teleporter (an index into teleports): its last
+// crossing teleports the player to the spot, not walks it there.
+static boolean LandsBy(const k_path_t *path, int teleport)
+{
+    int n = path->num_cells;
+
+    return n >= 2 && K_Graph_Teleport(path->portals[n - 2], path->cells[n - 2]) == teleport;
+}
+
+// A telefrag (TELEFRAG_REACH), looked for as items are (ConsiderItems), in a
+// fight too. Returns true if one was added.
+static boolean ConsiderTelefrag(goal_t *goal)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    const k_graph_t *graph = K_Graph_Get();
+    boolean fighting = K_Combat_GetStatus()->battle;
+    double remaining = -1.0, best_detour = 0.0, best_way = 0.0;
+    int best = -1, best_kind = -1;
+    boolean best_big = false;
+    k_pose_t player;
+    k_vec2_t start, end;
+    goal_t *telefrag;
+    char name[64];
+    int t;
+
+    if (leveltime < telefrag_check_tic || !goal->planned || goal->staying)
+    {
+        return false;
+    }
+
+    telefrag_check_tic = leveltime + TELEFRAG_CHECK_TICS;
+
+    if (depth >= MAX_GOALS || goal->type == GOAL_GOTO || goal->type == GOAL_BARREL
+     || TelefragOn() >= 0 || (goal->type == GOAL_TRIGGER && (goal->used || goal->moving))
+     || nav->state != K_NAV_DRIVING || path == NULL || path->num_points < 1
+     || (!fighting && (nav->action != K_ACTION_NONE || !K_Nav_CanPause()))
+     || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    if (telefrag_skip_size < graph->num_teleports)
+    {
+        telefrag_skip = realloc(telefrag_skip, graph->num_teleports * sizeof(*telefrag_skip));
+        memset(telefrag_skip + telefrag_skip_size, 0,
+               (graph->num_teleports - telefrag_skip_size) * sizeof(*telefrag_skip));
+        telefrag_skip_size = graph->num_teleports;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+    end = path->points[path->num_points - 1];
+
+    for (t = 0; t < graph->num_teleports; ++t)
+    {
+        const k_teleport_t *teleport = &graph->teleports[t];
+        double there, detour;
+        boolean big;
+        int kind;
+
+        if (teleport->cell < 0 || leveltime < telefrag_skip[t] || IsFailed(GOAL_TELEFRAG, t)
+         || (kind = K_Combat_OnSpot(teleport->to.x, teleport->to.y)) < 0)
+        {
+            continue;
+        }
+
+        telefrag_skip[t] = leveltime + TELEFRAG_SKIP;
+        big = kind == MT_CYBORG || kind == MT_SPIDER || kind == MT_VILE;
+
+        // The way left, as the pathfinder sees it now.
+        if (remaining < 0.0)
+        {
+            K_Path_Find(&probe, start, player.cell, end);
+            remaining = probe.result == K_PATH_FOUND ? probe.length + probe.wait * WAIT_WAY
+                                                     : nav->remaining;
+        }
+
+        K_Path_Find(&probe, start, player.cell, teleport->to);
+
+        if (probe.result != K_PATH_FOUND || !LandsBy(&probe, t))
+        {
+            continue;
+        }
+
+        there = probe.length + probe.wait * WAIT_WAY;
+        K_Path_Find(&probe, teleport->to, teleport->cell, end);
+
+        if (probe.result != K_PATH_FOUND)
+        {
+            continue;
+        }
+
+        detour = SDL_max(0.0, there + probe.length + probe.wait * WAIT_WAY - remaining);
+
+        if ((big || detour <= TELEFRAG_REACH)
+         && (best < 0 || (big && !best_big) || (big == best_big && detour < best_detour)))
+        {
+            best = t;
+            best_kind = kind;
+            best_big = big;
+            best_detour = detour;
+            best_way = there;
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    // A switch not worked yet: going for it again after is not another use
+    // of its line (MAX_TRIGGERS), as after an item.
+    if (goal->type == GOAL_TRIGGER && line_uses != NULL && goal->chosen.line >= 0
+     && line_uses[goal->chosen.line] > 0)
+    {
+        --line_uses[goal->chosen.line];
+    }
+
+    telefrag = Push(GOAL_TELEFRAG, best);
+    telefrag->victim = best_kind;
+    GoalName(telefrag, name, sizeof(name));
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s - on the landing spot of the teleporter (tag %d) at "
+          "(%.0f,%.0f), %.0f units there, %.0f out of the way%s", name, graph->teleports[best].tag,
+          graph->teleports[best].to.x, graph->teleports[best].to.y, best_way, best_detour,
+          best_detour > TELEFRAG_REACH ? " - too big a threat to fight" : "");
+    return true;
+}
+
+// The telefrag on top: done once the player has landed on the spot; failed
+// with nothing tough on it for TELEFRAG_OFF. Returns true if it ended.
+static boolean UpdateTelefrag(goal_t *goal)
+{
+    const k_teleport_t *teleport = &K_Graph_Get()->teleports[goal->param];
+    k_pose_t player;
+
+    if (K_Map_GetPlayer(&player)
+     && hypot(player.x - teleport->to.x, player.y - teleport->to.y) < TELEFRAG_LANDED)
+    {
+        DoneGoal("landed on the spot");
+        return true;
+    }
+
+    goal->off = K_Combat_OnSpot(teleport->to.x, teleport->to.y) >= 0 ? 0 : goal->off + 1;
+
+    if (goal->off >= TELEFRAG_OFF)
+    {
+        FailGoal("nothing tough stands on the landing spot now");
+        return true;
+    }
+
+    return false;
 }
 
 // Held up by a barrel (HOLD_TICS): it goes on top, to be shot from a safe
@@ -3663,10 +3886,16 @@ void K_Brain_Reset(void)
     run_waited = -1;
     hold_since = 0;
     hold_at.x = hold_at.y = 1.0e9;
+    telefrag_check_tic = 0;
 
     if (item_skip != NULL)
     {
         memset(item_skip, 0, item_skip_size * sizeof(*item_skip));
+    }
+
+    if (telefrag_skip != NULL)
+    {
+        memset(telefrag_skip, 0, telefrag_skip_size * sizeof(*telefrag_skip));
     }
 
     free(line_uses);
@@ -3732,11 +3961,15 @@ void K_Brain_Tick(void)
 {
     goal_t *goal;
     const k_item_t *item;
+    int telefrag;
 
     health_ring[leveltime % FALL_TICS] = (int) K_Map_PlayerHealth();
     UpdateEscape();
     UpdateShooting();
     K_Combat_Needed(NeededKind());
+    telefrag = TelefragOn();
+    K_Combat_Telefrag(telefrag >= 0, telefrag >= 0 ? K_Graph_Get()->teleports[telefrag].to.x : 0.0,
+                      telefrag >= 0 ? K_Graph_Get()->teleports[telefrag].to.y : 0.0);
 
     if (depth == 0 && exit_wanted)
     {
@@ -3826,7 +4059,13 @@ void K_Brain_Tick(void)
         return;
     }
 
-    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderFallBack() || ConsiderItems(goal))
+    if (goal->type == GOAL_TELEFRAG && UpdateTelefrag(goal))
+    {
+        return;
+    }
+
+    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderFallBack() || ConsiderTelefrag(goal)
+     || ConsiderItems(goal))
     {
         return;
     }
@@ -3899,6 +4138,10 @@ void K_Brain_Tick(void)
                 goal->planned = false;
                 goal->retry_tic = leveltime + TICRATE;
                 K_Nav_Clear();
+            }
+            else if (goal->type == GOAL_TELEFRAG)
+            {
+                DoneGoal("landed on the spot");
             }
             else
             {

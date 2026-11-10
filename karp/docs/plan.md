@@ -2695,7 +2695,9 @@ Who controls the player in a fight (the user's model):
   engine a monster hurt by another turns on it (`P_DamageMobj`; never on an arch-vile, and
   projectiles of its own kind do not hurt it), and keeps to it while its `threshold` runs down
   (100 of its chase steps, `A_Chase`), but any damage after that turns it on whoever did it, so a
-  stray shot at it ends the fight between them and brings it after the player.
+  stray shot at it ends the fight between them and brings it after the player. Done
+  (2026-11-10, below: "Invulnerability, infighting, telefrags"), for any monster whose target
+  is another (the user: for simplicity).
 - **Turning speed when aiming** (the user, jotted): the bot turns to a target faster than a human
   could, which looks unnatural. Noticed and left alone for now (the user).
 - **Barrel chains set off by others** (the user, jotted): monsters and stray missiles set barrels
@@ -3182,8 +3184,8 @@ Who controls the player in a fight (the user's model):
   - With tough monsters alive (Cyberdemon, Spider Mastermind, barons, arch-viles), keep plasma
     cells in reserve for them; the low tier monsters are cleared with low tier weapons.
   Done: keeping them off (below, "Keeping tough monsters off"), the reserve and fight or avoid
-  (below, "Ammo kept for tough monsters, and fights it cannot win"). Left: invulnerability
-  planned for.
+  (below, "Ammo kept for tough monsters, and fights it cannot win"); invulnerability planned
+  for (below, "Invulnerability, infighting, telefrags").
 - **Shooting on a jump ride** (the user, jotted for later): a lift ride that ends in a jump
   holds the facing on the jump's line the whole way up (`action.jump_ride`, after MAP02's run-up
   begun facing a shotgun guy fell short), so the bot neither shoots nor fights while monsters
@@ -3541,8 +3543,60 @@ Who controls the player in a fight (the user's model):
   Left: E3M8 (the spider mastermind fought with the plasma rifle now, but never killed); a
   hopeless monster passed while within reach of its blows; getting out of the sight of one
   that cannot come at the player but shoots, when it is no hopeless one.
+- **Invulnerability, infighting, telefrags** (the user, 2026-11-10: low-hanging fruit - grab
+  invulnerability for tough fights, a Cyberdemon or masses of monsters; leave infighting
+  alone; telefrag a powerful monster stuck on a teleporter's landing spot, E4M2). Done
+  (`k_combat.c`, `k_items.c`, `k_brain.c`):
+  - Infighting: a monster whose target is another monster, alive, is no target (a shot
+    would turn it on the player) - kept off still, as any. The engine leaves it on that one
+    until one of them dies or something else hurts it, so leaving it is stable. Logged:
+    "leaving the baron of hell alone, 300 units off - it fights the cacodemon".
+  - A hard fight (`K_Combat_HardFight`): awake in sight within 1024, not infighting, a
+    monster whose kind costs 50 or more (the Cyberdemon, the spider mastermind, the
+    arch-vile) or a hopeless one, or monsters costing 80 in all; lasting 5 s after. An
+    invulnerability sphere is worth nothing but then (it was 30 whenever cheap, and spent:
+    MAP10 picked it up after the Cyberdemon fight); then it is worth 100, 1536 of detour
+    whoever guards it, and in a fight a dash within 400 (urgent), run through monsters.
+    Walked over on the way, it is picked up as any item (the user: no item avoidance).
+  - Invulnerable with 4 s or more left, the player fights the target out to 1024, far and
+    dodgeable or not, and begins no hold; rockets fire whatever the burst (as before).
+  - Tried and dropped (E3M9, 0 of 3 against 3): the sphere worth leaving a fight for however
+    far (escape) - a run of 2063 for it past the Cyberdemon, the bot's own rocket killed it on
+    the way; a second sphere out of reach counted as one in reach and dropped every other
+    detour, the boxes of rockets for the Cyberdemon and first weapons too ("GET SHOTGUN
+    dropped - a hard fight, invulnerability goes first"); and keeping nothing off while
+    invulnerable, closing in - 24 rockets took the Cyberdemon (4000, no splash) to half in
+    the 30 s, and as it wore off the bot stood 190 from it and died to its rockets.
+  - Telefrags (`GOAL_TELEFRAG`): a tough monster (spawn health 600 or more; the user: the
+    middle tier only by chance) whose box a player landing on a teleporter's spot would
+    overlap (`K_Combat_OnSpot`, as `PIT_StompThing`), the teleporter open to the player now
+    and the way there ending by it, a way on from the spot to where the route goes - goes on
+    top as a detour, within 512 of it; any length for the Cyberdemon, the spider mastermind
+    and the arch-vile (the user: too big a threat). Looked for every second while a route is
+    followed, in a fight too (a standoff with the very monster); never through a fix. The
+    monster is left alone meanwhile - no target, not kept off nor hidden from, its area no
+    hold's. Done on landing; with nothing tough on the spot for 1 s, it fails - 30 s before
+    it is looked at again, then longer (the user: never replanning in a loop). Logged:
+    "added TELEFRAG THE CYBERDEMON - on the landing spot of the teleporter (tag 13) at
+    (-192,1728), ...", "TELEFRAG THE CYBERDEMON done - landed on the spot".
+    The bot knows where every monster is, as an experienced player knows the map (the user).
+  Tested with the tier lowered to any monster for a run: MAP17 (a cacodemon, 13.8 s, dead
+  the tic it landed) and E4M6 (two imps); the misses were monsters that walked off the spot,
+  then left alone for 30 s. E4M2 itself cannot be played yet (below: navigation).
+  A/B against the build before (the commit), salts 443, 71 and 7, Doom II MAP01-06, 10, 13,
+  15, 19 and E3M1-9, E1M8, E2M8: 46 of 63 finished against 45 - MAP06 3 against 2, E3M2 3/2,
+  E3M4 3/2, MAP04 2/3 and E3M9 2/3 (both salt 443, the runs parting on the way: a zombieman
+  left alone at 35 s as it turned on a shotgun guy, then a spectre 22 s later; the sphere
+  not gone for before the Cyberdemon was seen, then a cacodemon two minutes later). E3M9
+  salt 7: the sphere at 1:57, the Cyberdemon dead at 2:09. 220 infights left alone, all
+  real (lost souls charging each other, zombiemen shooting each other).
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
+  - E4M2 (both builds, every salt): the normal exit (line 593) has no route at all; the
+    secret exit's and the cage lift's (618) are blocked by steps of 144 to 160 out of the
+    nukage pit (sector 4, floor -128) and a jump at (-16,823) that does not work; the bot
+    walks about and dies in the pit at 10 s, or idles. The telefrag of its Cyberdemon (the
+    WR teleporter at (160,992), its booth opened by walk-over line 613) waits on this.
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate
     in the north-east room, up small crates 16 apart, never gone for). The first small crate
     (floor 16) and the big one (32) are 8 apart, the room's floor (0) between them in a cell

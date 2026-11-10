@@ -30,6 +30,9 @@ typedef struct
     int health;
     int awake;              // it has a target: it saw or heard the player,
                             // or fights another monster
+    int infighting;         // its target is another monster, alive: it is
+                            // left to it, never shot at (a shot would turn
+                            // it on the player)
     int attacking;          // winding up an attack or making it
     int hitscan;            // its attack is a bullet, which cannot be dodged
     int visible;            // the player can see it
@@ -138,6 +141,23 @@ int K_Combat_Beats(int weapon);
 // kill with what it holds (hopeless), it is fought anyway once nothing that
 // would beat it is left to fetch (k_items.h: beats).
 void K_Combat_Needed(int type);
+
+// Whether a hard fight is on, or was within the last few seconds: in sight,
+// awake, a Cyberdemon, a spider mastermind, an arch-vile or a monster the
+// player cannot kill with what it holds (hopeless), or a crowd. What an
+// invulnerability sphere is for (k_items.h: invuln).
+int K_Combat_HardFight(void);
+
+// The kind (a mobjtype_t) of the toughest monster - of the tough tier: a
+// mancubus, an arch-vile, a baron, the spider mastermind, the Cyberdemon -
+// that a player teleported to (x, y) would kill there (PIT_StompThing: their
+// boxes overlap); -1 if none.
+int K_Combat_OnSpot(double x, double y);
+
+// Set by the brain while it goes through a teleporter to land on (x, y) and
+// kill what stands there (on; 0 for none): those monsters are left alone - no
+// target, not kept off nor hidden from, their area no hold's.
+void K_Combat_Telefrag(int on, double x, double y);
 
 // Set by the brain while it goes for health with health CRITICAL, or dashes
 // for a weapon or ammo close by, with why ("health CRITICAL, going for
