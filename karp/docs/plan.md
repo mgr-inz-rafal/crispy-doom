@@ -3590,6 +3590,27 @@ Who controls the player in a fight (the user's model):
   not gone for before the Cyberdemon was seen, then a cacodemon two minutes later). E3M9
   salt 7: the sphere at 1:57, the Cyberdemon dead at 2:09. 220 infights left alone, all
   real (lost souls charging each other, zombiemen shooting each other).
+- **The BFG's spray** (the user, 2026-11-10, Doom II MAP15: a ball fired at a baron in the
+  tower room, then the bot turned for a pain elemental - which way the player faces does not
+  matter for the tracers, the line of sight does). `A_BFGSpray` runs 16 tics after the ball
+  bursts; its 40 tracers leave from the player, 45 degrees either way of the way the ball
+  flew, out to 1024. Done (`k_combat.c`, BFG_HOLD): from the press (the ball leaves 30 tics
+  later) to the spray, where the ball bursts - the monster it was fired at, the burst once it
+  has - is kept in sight, within 40 degrees of its way and 960: a fight step losing it scores
+  3 less, whatever the target now; a fight is begun or kept on meanwhile (the route waits),
+  no retreat begun. The BFG is pressed only when ready, as rockets (held, `A_ReFire` fired
+  a second ball with no aim held), and only with the ball's path clear by its radius, 13,
+  either side (MAP10: through a window at the Cyberdemon, two balls burst on the frame 39
+  and 55 off). Logged the tic before: "BFG spray next tic - the burst 168 units off, in
+  sight; 3 monsters in its cone and sight". MAP10, MAP15, E3M3, E3M7 (salts 443, 71, 7):
+  8 of 11 sprays with the burst in sight; of the rest, a ball that missed the Cyberdemon
+  and one whose lost soul died first. Finishes as before (MAP10 salt 7, E3M3 and E3M7 all).
+- **MAP15's tower room** (the user: fights it cannot win - run?): in all 12 runs the bot
+  walks in at about 25 s (health LOW, 65, the BFG and yellow key there), the walk-over lines
+  open the doors, a baron, pain elementals and their lost souls come, and it dies 8 to 40 s
+  later, 10 times of 12 to lost souls. Falling back never happens: it wants a safe area
+  (none inside, none awake seeing it, the way through no area with monsters), and with lost
+  souls flying about there is none.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - E4M2 (both builds, every salt): the normal exit (line 593) has no route at all; the

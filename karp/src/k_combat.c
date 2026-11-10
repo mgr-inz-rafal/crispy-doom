@@ -48,7 +48,8 @@
 //	they would burst well clear of the player, as the blast measures it,
 //	their path clear of walls and other monsters, no lost soul near; and
 //	only at tough monsters, or bunched ones, unless the player is
-//	invulnerable.
+//	invulnerable. A BFG ball's spray leaves from where the player stands
+//	once it has burst: till then its burst is kept in sight (BFG_HOLD).
 //
 //	Barrels (plan, 7.3): never set off near the player, by a shot that could
 //	graze one (spread counted, and those behind the target) or a blow; kept
@@ -445,6 +446,28 @@ extern void A_SPosAttack();
 #define SOUL_CLEAR 384.0
 #define INVULN_LEFT 70
 #define ROCKET_HEALTH 100
+
+// The BFG (the user, Doom II MAP15: a ball fired at a baron in the tower
+// room, then the bot turned for a pain elemental): its 40 tracers leave from
+// where the player stands 16 tics after the ball has burst (A_BFGSpray, on
+// S_BFGLAND3), spread 45 degrees either way of the way the ball flew, out to
+// 1024 - whichever way the player faces by then. So from the ball's leaving
+// until its spray, the player keeps where it bursts - the monster it was
+// fired at, the burst once it has - in sight, within BFG_CONE of the ball's
+// way and BFG_REACH: a fight step that would lose it scores BFG_HOLD less,
+// turning to another target or not; a fight is begun or kept on meanwhile
+// (the route waits), and no retreat begun. Pressed only from the ready
+// state, as rockets: held, A_ReFire fires again at the end of the shot, the
+// ball leaving with no aim held for it. Held from the press on: the ball
+// leaves 30 tics later, from where the player is then. And fired only with
+// the ball's path clear by its radius, BFG_RADIUS, either side (MAP10:
+// through a window at the Cyberdemon, the ball burst on its frame 39 to 55
+// units off, the spray finding nothing).
+#define BFG_CONE (40.0 * K_PI / 180.0)
+#define BFG_REACH 960.0
+#define BFG_HOLD 3.0
+#define BFG_NEAR 32.0
+#define BFG_RADIUS 13.0
 
 // Invulnerable for INVULN_BOLD more at least (the user: plan to have it for
 // the fight), the target is fought as far as TARGET_REACH, far and
@@ -1051,6 +1074,19 @@ static int passed_until;
 // Monsters fighting another, logged as left alone (MAX_INFIGHT).
 static const mobj_t *infight_logged[MAX_INFIGHT];
 
+// The player's BFG ball whose spray is to come (BFG_HOLD), this tic: the way
+// it flew, where it is, whether it has burst; what the last BFG press was
+// fired at; the ball whose spray comes next tic, and the one last logged
+// (compared, never followed).
+static boolean bfg_pending;
+static double bfg_angle;
+static k_vec2_t bfg_ball;
+static double bfg_z;
+static boolean bfg_burst;
+static const mobj_t *bfg_mo;
+static boolean bfg_spraying;
+static const mobj_t *bfg_logged;
+
 // Invulnerable for INVULN_BOLD more, this tic; when a hard fight was last
 // on (HARD_LINGER).
 static boolean bold;
@@ -1525,6 +1561,31 @@ static boolean WasAlive(const mobj_t *mo)
     return false;
 }
 
+// A BFG ball of the player's: its spray to come, in flight or burst (the
+// spray runs on entering S_BFGLAND3), and the tic before it.
+static void NoteBfg(const mobj_t *mo)
+{
+    boolean flying = (mo->flags & MF_MISSILE) != 0;
+
+    if (!flying && mo->state != &states[S_BFGLAND] && mo->state != &states[S_BFGLAND2])
+    {
+        return;
+    }
+
+    bfg_pending = true;
+    bfg_angle = mo->angle * (2.0 * K_PI / 4294967296.0);
+    bfg_ball.x = ToMap(mo->x);
+    bfg_ball.y = ToMap(mo->y);
+    bfg_z = ToMap(mo->z);
+    bfg_burst = !flying;
+
+    if (mo->state == &states[S_BFGLAND2] && mo->tics <= 1 && mo != bfg_logged)
+    {
+        bfg_spraying = true;
+        bfg_logged = mo;
+    }
+}
+
 // The monsters and projectiles, and the monsters that died since last tic.
 static void Collect(const player_t *player)
 {
@@ -1539,6 +1600,8 @@ static void Collect(const player_t *player)
     num_projectiles = 0;
     num_barrels = 0;
     status.alive = status.visible = status.awake = 0;
+    bfg_pending = false;
+    bfg_spraying = false;
     K_Threat_Begin(player_mo);
 
     for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
@@ -1548,6 +1611,11 @@ static void Collect(const player_t *player)
         if (thinker->function.acp1 != (actionf_p1) P_MobjThinker)
         {
             continue;
+        }
+
+        if (mo->type == MT_BFG && mo->target == player_mo)
+        {
+            NoteBfg(mo);
         }
 
         if (mo->flags & MF_MISSILE)
@@ -1586,6 +1654,25 @@ static void Collect(const player_t *player)
     }
 
     num_was_alive = num_monsters;
+
+    // Winding up: the ball will leave facing what it was fired at.
+    if (!bfg_pending && bfg_mo != NULL && shot_mo == bfg_mo && gametic <= shot_tic
+     && player->readyweapon == wp_bfg)
+    {
+        for (i = 0; i < num_monsters && monster_mobjs[i] != bfg_mo; ++i)
+        {
+        }
+
+        if (i < num_monsters)
+        {
+            bfg_pending = true;
+            bfg_burst = false;
+            bfg_angle = atan2(monsters[i].at.y - me.y, monsters[i].at.x - me.x);
+            bfg_ball = monsters[i].at;
+            bfg_z = monsters[i].z;
+        }
+    }
+
     UpdateChains(changed || num_barrels != was_barrels, player_mo);
     K_Threat_End();
     status.threats = K_Threat_Count();
@@ -1877,6 +1964,70 @@ static int IndexOf(const mobj_t *mo)
     }
 
     return -1;
+}
+
+// Where the BFG ball pending bursts, to be kept in sight (BFG_HOLD): the
+// monster it was fired at, while it flies and that one lives; else the ball,
+// the height of a monster round it.
+static void BfgAnchor(k_vec2_t *at, double *bottom, double *top)
+{
+    int i = bfg_burst ? -1 : IndexOf(bfg_mo);
+
+    if (i >= 0)
+    {
+        *at = monsters[i].at;
+        *bottom = monsters[i].z;
+        *top = monsters[i].z + monsters[i].height;
+    }
+    else
+    {
+        *at = bfg_ball;
+        *bottom = bfg_z - 24.0;
+        *top = bfg_z + 32.0;
+    }
+}
+
+// Whether the spray of the BFG ball pending, from a player at `from` with
+// its gun at `gun`, would find what is round its burst: in sight, within
+// BFG_CONE of the ball's way and BFG_REACH. True when none is pending.
+static boolean BfgSees(k_vec2_t from, double gun)
+{
+    double bottom, top;
+    k_vec2_t at;
+
+    if (!bfg_pending)
+    {
+        return true;
+    }
+
+    BfgAnchor(&at, &bottom, &top);
+
+    return Distance(from, at) <= BFG_REACH
+        && (Distance(from, at) < BFG_NEAR
+            || fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - bfg_angle)) <= BFG_CONE)
+        && K_Sight_Aim(from.x, from.y, gun, at.x, at.y, bottom, top);
+}
+
+// The tic before a spray: what it will find, logged.
+static void LogSpray(const player_t *player)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double bottom, top;
+    k_vec2_t at;
+    int count = 0, i;
+
+    BfgAnchor(&at, &bottom, &top);
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        count += monsters[i].shootable && monsters[i].distance <= 1024.0
+              && fabs(Wrap(atan2(monsters[i].at.y - me.y, monsters[i].at.x - me.x) - bfg_angle))
+                 <= K_PI / 4.0;
+    }
+
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "BFG spray next tic - the burst %.0f units off, %s; %d "
+          "monsters in its cone and sight", Distance(me, at),
+          BfgSees(me, GunHeight(player->mo)) ? "in sight" : "out of its sight or cone", count);
 }
 
 // A tough monster with no bullets across a large room (LEAVE_REACH).
@@ -3926,6 +4077,12 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
             score -= 1.5;
         }
 
+        // The BFG's spray to come, whatever the target now.
+        if (!BfgSees(far, gun))
+        {
+            score -= BFG_HOLD;
+        }
+
         score -= EXPOSE_WEIGHT * Exposure(far, floor);
 
         if (pressed)
@@ -4132,10 +4289,15 @@ static void StartBattle(const player_t *player)
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "fighting the %s, %.0f units off - the route waits",
               monsters[status.target].name, monsters[status.target].distance);
     }
-    else
+    else if (avoid >= 0)
     {
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "keeping off the %s, %.0f units off - beyond what the "
               "player holds; the route waits", monsters[avoid].name, monsters[avoid].distance);
+    }
+    else
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "keeping the BFG ball's burst in sight for its spray - "
+              "the route waits");
     }
 
     K_Nav_Pause(1);
@@ -4287,7 +4449,8 @@ static boolean BlowsNear(double reach)
 // monsters coming from all sides, and "a skilled player would move aside
 // and shoot from a distance"): the route takes the player off it too. A
 // hopeless monster that presses (Avoided) is kept off as a fight is fought,
-// with nothing to shoot (a standoff).
+// with nothing to shoot (a standoff); and a BFG ball's spray to come keeps
+// one on (BFG_HOLD).
 static void UpdateBattle(const player_t *player)
 {
     boolean burning = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
@@ -4312,7 +4475,7 @@ static void UpdateBattle(const player_t *player)
     // 39 health the bot broke off a fight with a demon 50 off for health
     // bonuses beside it, stuck on the demon, bitten down to 21).
     flee = escape && !BlowsNear(battle ? KEEP_AWAY : CLOSE_REACH);
-    fight = (WorthFighting() || avoid >= 0) && !flee && !burning && !island;
+    fight = (WorthFighting() || avoid >= 0 || bfg_pending) && !flee && !burning && !island;
     calm = fight ? 0 : calm + 1;
 
     if (!battle && fight && K_Nav_CanPause())
@@ -4588,7 +4751,7 @@ static void UpdateRetreat(const player_t *player)
             StopRetreat("retreated long enough");
         }
     }
-    else if (leveltime >= retreat_again
+    else if (leveltime >= retreat_again && !bfg_pending
           && (seen_tics >= RETREAT_AFTER || hard_pressed >= RETREAT_AFTER))
     {
         boolean hide = seen_tics >= RETREAT_AFTER;
@@ -6021,6 +6184,10 @@ void K_Combat_Reset(void)
 
     bold = false;
     hard_seen = -HARD_LINGER - 1;
+    bfg_pending = false;
+    bfg_spraying = false;
+    bfg_mo = NULL;
+    bfg_logged = NULL;
     telefrag_on = false;
     telefrag_area = -1;
     avoid = -1;
@@ -6085,6 +6252,11 @@ void K_Combat_Tick(int driving)
     UpdateHopeless(player);
     UpdateInfighting();
     UpdateHard(player);
+
+    if (bfg_spraying)
+    {
+        LogSpray(player);
+    }
 
     if (player->playerstate == PST_DEAD || player->health <= 0)
     {
@@ -6305,6 +6477,33 @@ static boolean LineOfFire(const player_t *player, k_vec2_t from, double facing,
                        from.y + sin(facing) * reach, monster->z, monster->z + monster->height);
 }
 
+// Whether a BFG ball fired along the facing would get to the target's front:
+// no wall within its radius either side of its path, at the height it flies
+// climbing to the target's middle (as RocketClear; BFG_RADIUS).
+static boolean BallClear(const player_t *player, k_vec2_t from, double facing,
+                         const k_monster_t *monster)
+{
+    double ux = cos(facing), uy = sin(facing);
+    double distance = Distance(from, monster->at);
+    double reach = SDL_max(distance - monster->radius - BFG_RADIUS, distance * 0.5);
+    double gun = GunHeight(player->mo);
+    double z = gun + (monster->z + monster->height * 0.5 - gun) * reach / SDL_max(distance, 1.0);
+    int side;
+
+    for (side = -1; side <= 1; side += 2)
+    {
+        double ox = -uy * BFG_RADIUS * side, oy = ux * BFG_RADIUS * side;
+
+        if (!K_Sight_Aim(from.x + ox, from.y + oy, gun, from.x + ox + ux * reach,
+                         from.y + oy + uy * reach, z - 4.0, z + 4.0))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Whether a rocket fired along the facing at what lies `distance` off (of
 // the radius, its middle at height `middle`; the target, or NULL) would
 // burst ROCKET_SAFE off the player as the blast measures it (the larger of
@@ -6467,6 +6666,11 @@ static void Pressed(const player_t *player, const weapon_t *weapon, const mobj_t
         shot_mo = mo;
         shot_tic = tic + weapon->lead;
         shot_at = at;
+
+        if (weapon->weapon == wp_bfg)
+        {
+            bfg_mo = mo;
+        }
     }
 }
 
@@ -6588,17 +6792,18 @@ void K_Combat_Fire(int tic, k_command_t *command)
     // (A_WeaponReady: not while attackdown): fire held on from before is
     // let go for a tic first (Doom II MAP10: fire held on from the shotgun
     // through the BFG picked up, it never fired, a demon biting the bot for
-    // 5 s). The rocket launcher is pressed only when ready, never held on:
-    // held, A_ReFire fires again at the end of the shot, a press not looked
-    // at where that rocket leaves, and with no aim held for it (E1M9: one
-    // left 33 degrees off, the target dead, into a wall 93 off - killed).
+    // 5 s). And they are pressed only when ready, never held on: held,
+    // A_ReFire fires again at the end of the shot, a press not looked at
+    // where that rocket or ball leaves, and with no aim held for it (E1M9:
+    // one left 33 degrees off, the target dead, into a wall 93 off -
+    // killed; BFG_HOLD).
     if ((weapon->weapon == wp_missile || weapon->weapon == wp_bfg) && player->attackdown
      && WeaponReady(player))
     {
         return;
     }
 
-    if (weapon->weapon == wp_missile && !WeaponReady(player))
+    if ((weapon->weapon == wp_missile || weapon->weapon == wp_bfg) && !WeaponReady(player))
     {
         return;
     }
@@ -6623,7 +6828,8 @@ void K_Combat_Fire(int tic, k_command_t *command)
      || BarrelAtRisk(player, from, facing, weapon, at, accurate)
      || BarrelAtRisk(player, leaves, leaves_facing, weapon, leaves_at, accurate)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))
-     || !LineOfFire(player, from, facing, monster))
+     || !LineOfFire(player, from, facing, monster)
+     || (weapon->weapon == wp_bfg && !BallClear(player, from, facing, monster)))
     {
         return;
     }
