@@ -261,8 +261,10 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // the player falls back to the nearest safe area (k_area.h; of the
 // FALL_CANDIDATES nearest, within FALL_REACH of route, those visited before
 // counted VISITED_SHARE as far), whose way there goes through no other area
-// with monsters inside: a GO TO on top, the fight broken off, shooting on
-// the way (UpdateEscape); there, holding short of the way back in
+// with monsters inside - open now, or through one switch or walk-over line
+// that opens it, its work counted FIX_WORK (FallBackWay): a GO TO on top, the
+// fix pushed on it, the fight broken off, shooting on the way (UpdateEscape);
+// there, holding short of the way back in
 // (k_combat.c) lets the monsters come. Only against a crowd - FALL_CROWD
 // monsters or more on the player - or gunmen worth FALL_GUNMEN or more,
 // whom getting out of sight answers: a few tough ones that chase follow the
@@ -281,6 +283,23 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define FALL_CANDIDATES 6
 #define VISITED_SHARE 0.75
 #define FALL_AGAIN (8 * TICRATE)
+
+// A way back (the user, Doom II MAP15: teleported into the tower room, the
+// stairs out are built by a switch beside the landing - better pressed before
+// the fight than in it): brought somewhere by a teleporter, with monsters
+// about - alive, awake or not, seen or not, within WAY_BACK_DANGER, worth
+// WAY_BACK_RISK or more - the player looks at the way back to the cell it
+// stood on before. Blocked by what a switch or walk-over line fixes (never a
+// key) and keeps fixed (no lift, no door that shuts again), that one's
+// nearest spot within WAY_BACK_REACH, it is worked first - once no awake
+// monster is in sight, within WAY_BACK_TICS of getting there, out of a fight,
+// following a route. Not after a drop (Doom II MAP04: dropped into a room,
+// the bars back out pressed open for nothing).
+#define WAY_BACK_REACH 512.0
+#define WAY_BACK_DANGER 1024.0
+#define WAY_BACK_RISK 30.0
+#define WAY_BACK_TICS (10 * TICRATE)
+#define TELEPORT_JUMP 64.0
 
 // Ways count the waits at doors, lifts and teleporters on them, as the
 // pathfinder expects them (k_path.h: wait), each tic as WAIT_WAY units, the
@@ -372,6 +391,9 @@ typedef struct
                                 // way (FIX_WORK), pushed in front of it
     boolean fallback;           // GOAL_GOTO: falling back to a safe area out
                                 // of a fight going badly (FALL_LOSS)
+    boolean way_back;           // GOAL_TRIGGER: opening the way back from
+                                // where a teleporter brought the player
+                                // (WAY_BACK_REACH)
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
     // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
@@ -459,6 +481,11 @@ static int *item_skip;                  // per item: not looked at before this
 static int item_skip_size;
 static k_vec2_t hold_at;                // where the player has kept near, and
 static int hold_since;                  // since when (HOLD_TICS)
+static k_pose_t last_pose;              // the player last tic, if known
+static boolean last_known;
+static int back_cell = -1;              // where the player stood before a
+static int back_until;                  // teleporter brought it here, looked
+                                        // at until then (WAY_BACK_TICS)
 static int telefrag_check_tic;          // when to look for telefrags next
 static int *telefrag_skip;              // per teleporter: not looked at before
 static int telefrag_skip_size;          // this (TELEFRAG_SKIP)
@@ -1933,7 +1960,8 @@ static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 // is a detour, not a fix for the goals below it, which have their way: only
 // the item and the fixes pushed for it count (Doom II MAP04: the switch for
 // the bars before a shotgun was dropped with the shotgun, every second); so
-// is a telefrag. Returns true if goals were dropped.
+// is a telefrag, a fall back, and a way back opened (ConsiderWayBack).
+// Returns true if goals were dropped.
 static boolean DropNeedless(void)
 {
     k_pose_t player;
@@ -1943,7 +1971,8 @@ static boolean DropNeedless(void)
 
     for (i = depth - 1; i >= 0; --i)
     {
-        if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG)
+        if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG || goals[i].fallback
+         || goals[i].way_back)
         {
             base = i;
             break;
@@ -2452,6 +2481,42 @@ static boolean UpdateKill(goal_t *goal)
     return true;
 }
 
+// The FALL BACK on the stack, -1 if none: only the fixes pushed for it can
+// be above it (ConsiderItems looks for none meanwhile).
+static int FallingBack(void)
+{
+    int i;
+
+    for (i = depth - 1; i >= 0; --i)
+    {
+        if (goals[i].type == GOAL_GOTO && goals[i].fallback)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// The way back being opened (ConsiderWayBack), on the stack, -1 if none:
+// no item detour meanwhile - dropping one would drop it too, above it (Doom
+// II MAP15: the stairs switch added on landing, gone with the BFG dropped
+// for health the next tic).
+static int OpeningWayBack(void)
+{
+    int i;
+
+    for (i = depth - 1; i >= 0; --i)
+    {
+        if (goals[i].way_back)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 // Whether the item (by its index) is gone for already, somewhere on the
 // chain.
 static boolean OnChain(int item)
@@ -2874,8 +2939,10 @@ static boolean ConsiderItems(goal_t *goal)
 
     // A goal not planned yet (the one below an item just picked up) does not
     // use the look up: it comes once it is. Nothing takes the player off the
-    // exit floor (E1M8: health is what it takes).
-    if (leveltime < item_check_tic || !goal->planned || goal->staying)
+    // exit floor (E1M8: health is what it takes), nor off a fall back, the
+    // fix in its way included, nor off a way back being opened.
+    if (leveltime < item_check_tic || !goal->planned || goal->staying || FallingBack() >= 0
+     || OpeningWayBack() >= 0)
     {
         return false;
     }
@@ -3346,8 +3413,9 @@ static void UpdateEscape(void)
     k_pose_t player;
     int i;
 
-    // Falling back to a safe area: the fight is broken off.
-    if (depth > 0 && goals[depth - 1].type == GOAL_GOTO && goals[depth - 1].fallback)
+    // Falling back to a safe area, the fix in its way worked too: the fight
+    // is broken off.
+    if (FallingBack() >= 0)
     {
         dashing = -1;
         K_Combat_Escape("falling back to a safe area");
@@ -3669,6 +3737,79 @@ static boolean OpenNow(const k_path_t *path)
     return true;
 }
 
+// The way to fall back to a spot (FALL_REACH): open now, through no area
+// with monsters inside but `here`; or, with none, through one fix the brain
+// knows - a switch, a walk-over line, never a key nor a barrel - the way to
+// its nearest spot open now, and on from there blocked only by what it fixes
+// (the user, Doom II MAP15: teleported into the tower room, its stairs out
+// built by a switch beside the landing; the trap sprung, the only ways out
+// went up the stairs, and the bot fought on at 65 health and died, 12 runs
+// of 12). *length gets the way, *fixed whether it is through a fix.
+static boolean FallBackWay(k_vec2_t start, int cell, k_vec2_t spot, int here, double *length,
+                           boolean *fixed)
+{
+    goal_type_t type;
+    int param, want, portal, from, key_door, count, i;
+    boolean later;
+    goal_t fix;
+
+    *fixed = false;
+    K_Path_Find(&probe, start, cell, spot);
+    *length = probe.length;
+
+    if (probe.result == K_PATH_FOUND)
+    {
+        return probe.length <= FALL_REACH && !ThroughMonsters(&probe, here) && OpenNow(&probe);
+    }
+
+    // Not one on its way already (Doom II MAP04: a gap narrowing the way to
+    // a safe area, its sector moving; the fix done at once, the way still
+    // shut, the fall back waited a second, the fight broken off, and failed).
+    if (probe.result != K_PATH_BLOCKED
+     || !RouteFix(&probe, &type, &param, &want, &portal, &from, &later, &key_door)
+     || type != GOAL_TRIGGER || key_door >= 0 || later || portal < 0
+     || K_Graph_SectorBusy(param) || !Allowed(GOAL_TRIGGER, param))
+    {
+        return false;
+    }
+
+    // The fix as PlanGoal would push it, and its nearest spot.
+    memset(&fix, 0, sizeof(fix));
+    fix.type = type;
+    fix.param = param;
+    fix.want = want;
+    fix.portal = portal;
+    fix.from = from;
+    fix.pinch_cell = -1;
+    count = Candidates(&fix, fix_candidates, MAX_CANDIDATES);
+
+    for (i = 0; i < count; ++i)
+    {
+        double to_fix;
+
+        K_Path_Find(&fix_probe, start, cell, fix_candidates[i].at);
+
+        if (fix_probe.result != K_PATH_FOUND || ThroughMonsters(&fix_probe, here)
+         || !OpenNow(&fix_probe))
+        {
+            continue;
+        }
+
+        to_fix = fix_probe.length;
+        K_Path_Find(&fix_probe, fix_candidates[i].at, -1, spot);
+
+        if (OpenOrFixed(&fix_probe, true, type, param) && !ThroughMonsters(&fix_probe, here)
+         && to_fix + fix_probe.length <= FALL_REACH
+         && (!*fixed || to_fix + fix_probe.length < *length))
+        {
+            *length = to_fix + fix_probe.length;
+            *fixed = true;
+        }
+    }
+
+    return *fixed;
+}
+
 // Falling back out of a fight going badly (FALL_LOSS). Looked at every tic;
 // returns true if the goal was added.
 static boolean ConsiderFallBack(void)
@@ -3680,13 +3821,14 @@ static boolean ConsiderFallBack(void)
     double pressure = 0.0, gunmen = 0.0, health = K_Map_PlayerHealth();
     double best_cost = 0.0, best_length = 0.0;
     int found = 0, best = -1, crowd = 0, here, a, i, k;
+    boolean best_fixed = false;
     k_pose_t player;
     k_vec2_t start;
     goal_t *goal;
 
     if (!K_Combat_GetStatus()->battle || K_Combat_GetStatus()->holding
-     || leveltime < fall_again || depth >= MAX_GOALS
-     || (depth > 0 && goals[depth - 1].fallback) || !K_Map_GetPlayer(&player)
+     || leveltime < fall_again || depth >= MAX_GOALS - 1
+     || FallingBack() >= 0 || !K_Map_GetPlayer(&player)
      || (here = K_Area_Of(player.cell)) < 0 || K_Area_Safe(here))
     {
         return false;
@@ -3742,23 +3884,22 @@ static boolean ConsiderFallBack(void)
     for (k = 0; k < found; ++k)
     {
         const k_area_t *area = &areas->areas[order[k]];
-        double cost;
+        double cost, length;
+        boolean fixed;
 
-        K_Path_Find(&probe, start, player.cell, area->spot);
-
-        if (probe.result != K_PATH_FOUND || probe.length > FALL_REACH
-         || ThroughMonsters(&probe, here) || !OpenNow(&probe))
+        if (!FallBackWay(start, player.cell, area->spot, here, &length, &fixed))
         {
             continue;
         }
 
-        cost = probe.length * (area->visited ? VISITED_SHARE : 1.0);
+        cost = (length + (fixed ? FIX_WORK : 0.0)) * (area->visited ? VISITED_SHARE : 1.0);
 
         if (best < 0 || cost < best_cost)
         {
             best = order[k];
             best_cost = cost;
-            best_length = probe.length;
+            best_length = length;
+            best_fixed = fixed;
         }
     }
 
@@ -3773,10 +3914,152 @@ static boolean ConsiderFallBack(void)
     goal->point = areas->areas[best].spot;
     goal->fallback = true;
     K_Log(K_LOG_BRAIN, K_LOG_INFO, "added FALL BACK TO (%.0f, %.0f) - area %d, safe, %.0f units "
-          "away: %d health lost in %d s, %.0f health's worth of monsters on the player",
-          goal->point.x, goal->point.y, best, best_length, then >= 0 ? then - (int) health : 0,
+          "away%s: %d health lost in %d s, %.0f health's worth of monsters on the player",
+          goal->point.x, goal->point.y, best, best_length,
+          best_fixed ? " through what blocks it" : "", then >= 0 ? then - (int) health : 0,
           FALL_TICS / TICRATE, pressure);
     PlanGoal(goal);
+    return true;
+}
+
+// Each tic: brought somewhere by a teleporter, the cell stood on before is
+// looked at (ConsiderWayBack).
+static void TrackArrival(void)
+{
+    k_pose_t pose;
+
+    if (!K_Map_GetPlayer(&pose))
+    {
+        last_known = false;
+        return;
+    }
+
+    if (last_known && last_pose.cell >= 0
+     && hypot(pose.x - last_pose.x, pose.y - last_pose.y) > TELEPORT_JUMP)
+    {
+        back_cell = last_pose.cell;
+        back_until = leveltime + WAY_BACK_TICS;
+    }
+
+    last_pose = pose;
+    last_known = true;
+}
+
+// The way back from where a teleporter brought the player (WAY_BACK_REACH):
+// blocked by what one switch or walk-over line near fixes, that fix goes on
+// top, before anything else. Returns true if it was added.
+static boolean ConsiderWayBack(goal_t *goal)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    k_vec2_t back, start;
+    goal_type_t type;
+    int param, want, portal, from, key_door, count, i;
+    boolean later, near = false;
+    double about = 0.0;
+    k_pose_t player;
+    goal_t fix, *added;
+    char name[64], text[K_LOG_LINE_LEN];
+
+    if (back_cell >= 0 && leveltime > back_until)
+    {
+        back_cell = -1;
+    }
+
+    if (back_cell < 0 || !goal->planned || depth >= MAX_GOALS || goal->type == GOAL_GOTO
+     || goal->type == GOAL_BARREL || (goal->type == GOAL_TRIGGER && (goal->used || goal->moving))
+     || nav->state != K_NAV_DRIVING || nav->action != K_ACTION_NONE || !K_Nav_CanPause()
+     || K_Combat_GetStatus()->battle || K_Combat_GetStatus()->awake > 0
+     || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    // Looked at once, with monsters about that a fight may come from.
+    back = K_Map_Get()->cells[back_cell].centroid;
+    back_cell = -1;
+
+    for (i = 0; i < K_Combat_MonsterCount(); ++i)
+    {
+        const k_monster_t *monster = K_Combat_Monster(i);
+
+        about += monster->distance <= WAY_BACK_DANGER ? K_Combat_KindCost(monster->type) : 0.0;
+    }
+
+    if (about < WAY_BACK_RISK)
+    {
+        return false;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+    K_Path_Find(&probe, start, player.cell, back);
+
+    if (probe.result != K_PATH_BLOCKED
+     || !RouteFix(&probe, &type, &param, &want, &portal, &from, &later, &key_door)
+     || type != GOAL_TRIGGER || key_door >= 0 || later || !Allowed(GOAL_TRIGGER, param))
+    {
+        return false;
+    }
+
+    K_Path_Describe(&probe, text, sizeof(text));
+    memset(&fix, 0, sizeof(fix));
+    fix.type = type;
+    fix.param = param;
+    fix.want = want;
+    fix.portal = portal;
+    fix.from = from;
+    fix.pinch_cell = -1;
+
+    if (portal < 0)
+    {
+        fix.pinch_cell = from;
+        fix.pinch_at = probe.blocked_at;
+    }
+
+    count = Candidates(&fix, fix_candidates, MAX_CANDIDATES);
+
+    // Near, and keeping the way open once worked: no lift, no door that
+    // shuts again (Doom II MAP03: a walk-over line beside the landing lowered
+    // a lift, which carried the bot back where it came from - 16 s).
+    for (i = 0; i < count && !near; ++i)
+    {
+        int line = fix_candidates[i].line;
+        double floor, ceiling;
+
+        if (line < 0 || !K_Specials_MoverTarget(line, param, &floor, &ceiling)
+         || K_Specials_DoorCloses(K_Specials_LineSpecial(line)))
+        {
+            continue;
+        }
+
+        K_Path_Find(&fix_probe, start, player.cell, fix_candidates[i].at);
+        near = fix_probe.result == K_PATH_FOUND
+            && fix_probe.length + fix_probe.wait * WAIT_WAY <= WAY_BACK_REACH;
+    }
+
+    if (!near)
+    {
+        return false;
+    }
+
+    // A switch not worked yet: going for it again after is not another use
+    // of its line (MAX_TRIGGERS), as after an item.
+    if (goal->type == GOAL_TRIGGER && line_uses != NULL && goal->chosen.line >= 0
+     && line_uses[goal->chosen.line] > 0)
+    {
+        --line_uses[goal->chosen.line];
+    }
+
+    added = Push(GOAL_TRIGGER, param);
+    added->want = fix.want;
+    added->portal = fix.portal;
+    added->from = fix.from;
+    added->pinch_cell = fix.pinch_cell;
+    added->pinch_at = fix.pinch_at;
+    added->way_back = true;
+    GoalName(added, name, sizeof(name));
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "the way back to (%.0f,%.0f), where the player stood before, is "
+          "blocked by %s - opened first: added %s", back.x, back.y, text, name);
     return true;
 }
 
@@ -3886,6 +4169,8 @@ void K_Brain_Reset(void)
     run_waited = -1;
     hold_since = 0;
     hold_at.x = hold_at.y = 1.0e9;
+    last_known = false;
+    back_cell = -1;
     telefrag_check_tic = 0;
 
     if (item_skip != NULL)
@@ -3964,6 +4249,7 @@ void K_Brain_Tick(void)
     int telefrag;
 
     health_ring[leveltime % FALL_TICS] = (int) K_Map_PlayerHealth();
+    TrackArrival();
     UpdateEscape();
     UpdateShooting();
     K_Combat_Needed(NeededKind());
@@ -4064,8 +4350,8 @@ void K_Brain_Tick(void)
         return;
     }
 
-    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderFallBack() || ConsiderTelefrag(goal)
-     || ConsiderItems(goal))
+    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderFallBack() || ConsiderWayBack(goal)
+     || ConsiderTelefrag(goal) || ConsiderItems(goal))
     {
         return;
     }

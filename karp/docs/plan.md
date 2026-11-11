@@ -3610,7 +3610,68 @@ Who controls the player in a fight (the user's model):
   open the doors, a baron, pain elementals and their lost souls come, and it dies 8 to 40 s
   later, 10 times of 12 to lost souls. Falling back never happens: it wants a safe area
   (none inside, none awake seeing it, the way through no area with monsters), and with lost
-  souls flying about there is none.
+  souls flying about there is none. And the way out is shut: the bot teleports in, and the
+  stairs out (west, to x 416) are built by a switch beside the landing (line 634, special 127)
+  - the user: better pressed before the fight than in it, or the escape planned through it.
+  Done, both (`k_brain.c`):
+  - Falling back through a fix (`FallBackWay`): with no safe area whose way is open now, one
+    whose way one switch or walk-over line opens (no key, no barrel), the way to its nearest
+    spot open now and through no area with monsters, on from there blocked only by what it
+    fixes, within 1024 in all, its work counted 300; the fix pushed on the FALL BACK by its
+    planning, worked as part of the run (the fight broken off, no item detour, not dropped as
+    needless). Logged: "added FALL BACK TO ... units away through what blocks it".
+  - A way back (`ConsiderWayBack`): brought somewhere by a teleporter, with monsters about
+    (alive, awake or not, seen or not, within 1024, worth 30 or more - two cacodemons), the
+    player looks at the way back to the cell it stood on before; blocked by what a switch or
+    walk-over line fixes and keeps fixed (no key, no lift, no door that shuts again), its
+    nearest spot within 512, it is worked first - once no awake monster is in sight, within
+    10 s of getting there, out of a fight, following a route; no item detour meanwhile
+    (MAP15 salt 71: the switch added on landing went the next tic with the BFG, dropped for
+    health). Logged: "the way back to (160,-2472), where the player stood before, is blocked
+    by a step 128 units high at line 618 - opened first: added USE TRIGGER for sector 238
+    (tag 14)". First built for drops too, any fix, monsters or not: on MAP04 the bot, dropped
+    into a room, went back to press open the bars it had come over; on MAP03, teleported, it
+    crossed a walk-over line beside the landing that lowered a lift, which carried it back
+    where it came from (16 s, no monsters); MAP22 and MAP24 without monsters opened doors
+    behind them (MAP22 4.5 s).
+  - Lost souls stop rockets only when they could charge the player: awake, in sight, not
+    fighting another (the user, MAP15: out of bullets and shells, the rocket launcher just
+    picked up, souls all about charging each other, the bot stood looking at a shotgun guy
+    302 off with nothing it would fire, shot from 76 to 26; the bare fist is no answer with
+    the launcher loaded).
+  MAP15, six salts: the stairs switch pressed on landing in all; dead at 34 to 156 s (44
+  kills at the most), 34 to 60 s before; two falls back, one through a switch. Falling back
+  through a fix takes no gap fix, nor one whose sector moves already (MAP04 salt 71: a gap
+  narrowing the way, its sector on its way; the fix done at once, the way still shut, the
+  fall back waited a second with the fight broken off, failed, and the bot died at 38 s).
+  Side by side with 694c7d4c (Doom II 01-06, 10, 13, 15, 19; E3M1-9, E1M8, E2M8; salts 443,
+  71, 7; 63 runs a build): 44 against 44, then 44 against 45, the rest noise checked run
+  against run; MAP15 finished in each (240 s, 230 s - never before), E3M9 1 and 2 of 3 (0
+  of 3 before); no-monster set 29 of 29 on both, no time lost. Left: MAP05 salt 71 dies at
+  143 s to an imp marked "cannot come at the player" while it claws from 41 off (as on
+  E3M6).
+- **Rockets and cells kept, in a fight that needs them** (the user, E3M9: teleported among
+  three cacodemons, 40 cells ready in the plasma rifle, the bot brought up the shotgun - the
+  cells kept for the barons, 720 of damage against their 4000 of health). Done: the reserve
+  is waived while the player is beset by monsters between the tiers (cacodemons, revenants,
+  hell knights, pain elementals, arachnotrons) - awake in sight within 512, not fighting
+  another, costing 30 or more in all (two cacodemons) - and 2 s after; against the weak ones
+  among them too (kept from those, the plasma rifle and the shotgun swapped every 2 s
+  between the cacodemons and the shotgun guys). Logged: "rockets and cells for this fight -
+  30 health's worth of monsters between the tiers on the player". First built for any hard
+  fight too: on MAP10 the Cyberdemon about made every fight a hard one, and the BFG came up
+  for a zombieman 672 off and an imp 624 off; the Cyberdemon won all three runs, against one
+  of three before.
+- **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
+  different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
+  MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
+  itself. Nothing in Karp decides by the clock; a likely cause is the engine building
+  commands ahead in real time (several at once under load), Karp predicting from the state
+  at each. Builds are compared side by side in one session (ab.ps1), over several salts.
+  Even so, one exe run twice at once can part in a close fight (MAP06 salt 7: at 5.2 s, one
+  run dead at 20.1 s, the other on): a map where the builds differ is run twice on each, and
+  the logs compared at the first line they part - a new decision there is the code, a few
+  units' drift in a fight is not.
 - **Navigation, left for later** (the user: no navigation or geometry changes while fights are
   the focus):
   - E4M2 (both builds, every salt): the normal exit (line 593) has no route at all; the

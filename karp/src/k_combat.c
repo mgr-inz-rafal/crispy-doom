@@ -521,6 +521,21 @@ extern void A_SPosAttack();
 // Above that, they are for anything, as before.
 #define RESERVE_SHARE 0.5
 
+// The rockets and cells kept are for the fight at hand too while the player
+// is beset by monsters between the tiers - awake in sight within BESET_REACH,
+// not fighting another, costing BESET_COST or more in all - and BESET_LINGER
+// after (the user, E3M9: teleported among three cacodemons, 40 cells ready in
+// the plasma rifle, the bot brought up the shotgun - the cells kept for
+// barons, 720 of damage against their 4000 of health). The weak ones there
+// too: kept from them, the plasma rifle and the shotgun swapped every 2 s
+// between the cacodemons and the shotgun guys among them. Not for a hard
+// fight as such (Doom II MAP10: the Cyberdemon about, the BFG brought up for a
+// zombieman 672 off and an imp 624 off; the Cyberdemon won, 3 runs of 3,
+// against 1 of 3 before).
+#define BESET_REACH 512.0
+#define BESET_COST 30.0
+#define BESET_LINGER (2 * TICRATE)
+
 // Hopeless (plan 7.3 point 3, fight or avoid; the user, E3M9: the shells
 // spent on the cyberdemon with the shotgun, then the bullets with the
 // pistol, and the red key's room of hitscanners gone into with rockets
@@ -1088,9 +1103,10 @@ static boolean bfg_spraying;
 static const mobj_t *bfg_logged;
 
 // Invulnerable for INVULN_BOLD more, this tic; when a hard fight was last
-// on (HARD_LINGER).
+// on (HARD_LINGER), and when the player was last beset (BESET_LINGER).
 static boolean bold;
 static int hard_seen;
+static int beset_seen;
 
 // The spot the brain goes to land on, to telefrag what stands there
 // (K_Combat_Telefrag), and its area.
@@ -1767,14 +1783,20 @@ static boolean Selectable(const player_t *player, const weapon_t *weapon)
         && !(weapon->weapon == wp_shotgun && player->weaponowned[wp_supershotgun]);
 }
 
-// Whether a lost soul is within SOUL_CLEAR of the player: no rockets.
+// Whether a lost soul that could charge at the player is within SOUL_CLEAR of
+// it: no rockets. Awake, in sight, not fighting another (the user, Doom II
+// MAP15: out of bullets and shells, the rocket launcher just picked up, lost
+// souls all about - asleep, behind walls, charging at each other - and the
+// bot stood looking at a shotgun guy 302 off, nothing to shoot it with,
+// shot from 76 health to 26).
 static boolean SoulNear(void)
 {
     int i;
 
     for (i = 0; i < num_monsters; ++i)
     {
-        if (monsters[i].type == MT_SKULL && monsters[i].distance < SOUL_CLEAR)
+        if (monsters[i].type == MT_SKULL && monsters[i].distance < SOUL_CLEAR
+         && monsters[i].awake && monsters[i].visible && !monsters[i].infighting)
         {
             return true;
         }
@@ -2394,12 +2416,21 @@ static void UpdateInfighting(void)
     }
 }
 
-// Each tic: whether a hard fight is on (HARD_ONE, HARD_CROWD), and whether the
-// player is invulnerable enough to close in (INVULN_BOLD).
+// Whether the rockets and cells kept are for the monsters between the tiers
+// too (BESET_COST).
+static boolean Beset(void)
+{
+    return leveltime - beset_seen <= BESET_LINGER;
+}
+
+// Each tic: whether a hard fight is on (HARD_ONE, HARD_CROWD), whether the
+// player is beset (BESET_COST) - logged as it begins with rockets and cells
+// kept - and whether it is invulnerable enough to fight far monsters
+// (INVULN_BOLD).
 static void UpdateHard(const player_t *player)
 {
-    double crowd = 0.0;
-    boolean one = false;
+    double crowd = 0.0, beset = 0.0;
+    boolean one = false, was = Beset();
     int i;
 
     bold = player->powers[pw_invulnerability] >= INVULN_BOLD;
@@ -2413,12 +2444,25 @@ static void UpdateHard(const player_t *player)
         {
             crowd += Kind(monster->type)->cost;
             one |= Kind(monster->type)->cost >= HARD_ONE || hopeless[i];
+            beset += monster->distance <= BESET_REACH && SpawnHealth(monster->type) > WEAK_HEALTH
+                  && SpawnHealth(monster->type) < TOUGH_HEALTH ? Kind(monster->type)->cost : 0.0;
         }
     }
 
     if (one || crowd >= HARD_CROWD)
     {
         hard_seen = leveltime;
+    }
+
+    if (beset >= BESET_COST)
+    {
+        beset_seen = leveltime;
+    }
+
+    if (!was && Beset() && reserve)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells for this fight - %.0f health's worth "
+              "of monsters between the tiers on the player", beset);
     }
 }
 
@@ -2892,12 +2936,12 @@ static boolean LowGun(const player_t *player, boolean pistol)
 
 // Whether the rockets and cells kept for the tough monsters are kept from
 // this one (RESERVE_SHARE): not tough, and another gun can fire - the pistol
-// too against a weak one.
+// too against a weak one - but for a fight the player is beset in (Beset).
 static boolean KeptFrom(const player_t *player, const k_monster_t *monster)
 {
     int spawn = SpawnHealth(monster->type);
 
-    return reserve && spawn < TOUGH_HEALTH && LowGun(player, spawn <= WEAK_HEALTH);
+    return reserve && !Beset() && spawn < TOUGH_HEALTH && LowGun(player, spawn <= WEAK_HEALTH);
 }
 
 // Whether the pistol is right for the target: far off with little health
@@ -6184,6 +6228,7 @@ void K_Combat_Reset(void)
 
     bold = false;
     hard_seen = -HARD_LINGER - 1;
+    beset_seen = -BESET_LINGER - 1;
     bfg_pending = false;
     bfg_spraying = false;
     bfg_mo = NULL;
