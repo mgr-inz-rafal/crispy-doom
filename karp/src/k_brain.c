@@ -43,6 +43,7 @@
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
+#include "k_salt.h"
 #include "k_sight.h"
 #include "k_specials.h"
 
@@ -66,6 +67,19 @@
 #define START_TICS (2 * TICRATE)
 #define MOVE_TICS (15 * TICRATE)
 #define MAX_TRIGGERS 3
+
+// A lift or a door that goes back by itself (FixPasses), its line just
+// worked (the user, E3M9: lift 147 lowered three times, each time a
+// cacodemon fought or held short of, or a box of rockets gone for, while it
+// went back up; the third use used the switch up, and every goal behind it
+// failed for 2 minutes): until it goes back, PASS_TICS at most, no item is
+// gone for but health at CRITICAL; and a window a fight or a hold took
+// counts neither as a use of the line (MAX_TRIGGERS) nor, for PASS_TICS
+// after, as the way shut on the goal going through (MAX_SHUT): the player
+// had no fair try, and works the line again. Fights go on as ever: run as
+// for an item (escape), passing broke off what keeps the player from a
+// Cyberdemon, and E3M9 died 3 runs of 3 by lift 27, under its rockets.
+#define PASS_TICS (10 * TICRATE)
 
 // A goal whose way shut while the player was on it (a door closing before
 // it got through) is planned again, which pushes the fix, up to this many
@@ -337,6 +351,20 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define HOLD_GAP 24.0
 #define PLAYER_RADIUS 16.0
 
+// Going round in a loop (the user: whatever the cause, break it; Doom II
+// MAP15 pushed and dropped a key for 13 minutes): a goal planned LOOP_PLANS
+// times within LOOP_TICS - a wait for moving sectors plans once a second,
+// a loop several times - fails, so the goal below looks for another way.
+// GO TO EXIT never fails: the player wanders to an open spot WANDER_MIN to
+// WANDER_MOST off by route, through no floor that hurts, picked at random
+// (salt, k_salt.h) out of WANDER_TRIES, and plans again from there; with
+// none, it waits IDLE_TICS.
+#define LOOP_PLANS 20
+#define LOOP_TICS (5 * TICRATE)
+#define WANDER_MIN 256.0
+#define WANDER_MOST 1024.0
+#define WANDER_TRIES 32
+
 typedef enum
 {
     GOAL_GOTO,              // a point (a click)
@@ -394,6 +422,10 @@ typedef struct
     boolean way_back;           // GOAL_TRIGGER: opening the way back from
                                 // where a teleporter brought the player
                                 // (WAY_BACK_REACH)
+    boolean wander;             // GOAL_GOTO: out of a loop GO TO EXIT went
+                                // round (BreakLoop)
+    int plans;                  // times planned since plans_since, within
+    int plans_since;            // LOOP_TICS (BreakLoop)
 
     // GOAL_TRIGGER: the sector's heights when its line was gone for; or,
     // if it was busy then (settling: K_Graph_SectorBusy, a door closing by
@@ -489,6 +521,16 @@ static int back_until;                  // teleporter brought it here, looked
 static int telefrag_check_tic;          // when to look for telefrags next
 static int *telefrag_skip;              // per teleporter: not looked at before
 static int telefrag_skip_size;          // this (TELEFRAG_SKIP)
+static int pass_portal = -1;            // the crossing a lift or door opens,
+static int pass_from;                   // its line just worked (PASS_TICS),
+static int pass_sector;                 // crossed out of pass_from; the
+static int pass_line;                   // mover, the line, and until when
+static int pass_until;
+static boolean pass_routed;             // the route has gone through it
+static boolean pass_past;               // the player has got past it
+static boolean pass_fought;             // a fight took the window
+static int pass_excused = -1;           // when one missed so: the way shut
+                                        // is not counted (MAX_SHUT)
 
 //
 // Names
@@ -562,8 +604,8 @@ static void GoalName(const goal_t *goal, char *buf, int len)
             break;
 
         default:
-            M_snprintf(buf, len, "%s (%.0f, %.0f)", goal->fallback ? "FALL BACK TO" : "GO TO",
-                       goal->point.x, goal->point.y);
+            M_snprintf(buf, len, "%s (%.0f, %.0f)", goal->fallback ? "FALL BACK TO"
+                       : goal->wander ? "WANDER TO" : "GO TO", goal->point.x, goal->point.y);
             break;
     }
 }
@@ -1960,19 +2002,28 @@ static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 // is a detour, not a fix for the goals below it, which have their way: only
 // the item and the fixes pushed for it count (Doom II MAP04: the switch for
 // the bars before a shotgun was dropped with the shotgun, every second); so
-// is a telefrag, a fall back, and a way back opened (ConsiderWayBack).
+// is a telefrag, a fall back, a way back opened (ConsiderWayBack), and a
+// wander out of a loop (BreakLoop). Each goal is looked at with the stack as
+// it would be once those above it are gone, as it is planned then: a fix on
+// the stack is not allowed again (Allowed), and the crossing it is for costs
+// a route as one nothing fixes (Doom II MAP15: at 10 health, with GET RED KEY
+// pushed, the red door counted so, and the way to switch 594 went open over
+// floors that hurt; dropped, the door was a fix again, the way through it
+// cheaper, and GET RED KEY was pushed again - 4842 times, for 13 minutes).
 // Returns true if goals were dropped.
 static boolean DropNeedless(void)
 {
     k_pose_t player;
     char name[64];
     int base = 0;
+    int top = depth;
+    boolean open;
     int i;
 
     for (i = depth - 1; i >= 0; --i)
     {
         if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG || goals[i].fallback
-         || goals[i].way_back)
+         || goals[i].way_back || goals[i].wander)
         {
             base = i;
             break;
@@ -1984,9 +2035,18 @@ static boolean DropNeedless(void)
         return false;
     }
 
-    for (i = base; i < depth - 1; ++i)
+    for (i = base; i < top - 1; ++i)
     {
-        if (goals[i].type == GOAL_GOTO || !HasOpenWay(&goals[i], &player))
+        if (goals[i].type == GOAL_GOTO)
+        {
+            continue;
+        }
+
+        depth = i + 1;
+        open = HasOpenWay(&goals[i], &player);
+        depth = top;
+
+        if (!open)
         {
             continue;
         }
@@ -2001,6 +2061,110 @@ static boolean DropNeedless(void)
     }
 
     return false;
+}
+
+// A cheap hash for a spot picked at random: the same game picks the same,
+// but for salt (k_salt.h).
+static unsigned int Hash(unsigned int x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+// An open spot to wander to out of a loop (LOOP_PLANS), or false.
+static boolean WanderSpot(k_vec2_t *spot)
+{
+    const k_map_t *map = K_Map_Get();
+    k_pose_t player;
+    k_vec2_t start;
+    int i;
+
+    if (map->num_cells == 0 || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+
+    for (i = 0; i < WANDER_TRIES; ++i)
+    {
+        const k_cell_t *cell = &map->cells[Hash(K_Salt_Mix((unsigned int) leveltime * 31u + i))
+                                           % map->num_cells];
+
+        if (K_Graph_Clearance(cell->centroid, PLAYER_RADIUS + 1.0) <= PLAYER_RADIUS)
+        {
+            continue;
+        }
+
+        K_Path_Find(&scratch, start, player.cell, cell->centroid);
+
+        if (scratch.result == K_PATH_FOUND && scratch.damage <= 0.0
+         && scratch.length >= WANDER_MIN && scratch.length <= WANDER_MOST)
+        {
+            *spot = cell->centroid;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Before the goal on top is planned: if it has been planned LOOP_PLANS times
+// within LOOP_TICS, the stack is going round in a loop, and it is broken.
+// Returns true if it was.
+static boolean BreakLoop(goal_t *goal)
+{
+    char name[64], why[K_LOG_LINE_LEN];
+    k_vec2_t spot;
+    goal_t *wander;
+    int took;
+
+    if (leveltime - goal->plans_since >= LOOP_TICS)
+    {
+        goal->plans_since = leveltime;
+        goal->plans = 0;
+    }
+
+    if (++goal->plans < LOOP_PLANS)
+    {
+        return false;
+    }
+
+    took = leveltime - goal->plans_since;
+    goal->plans = 0;
+    goal->plans_since = leveltime;
+    M_snprintf(why, sizeof(why), "planned %d times in %.1f s, going round in a loop",
+               LOOP_PLANS, (double) took / TICRATE);
+
+    if (goal->type != GOAL_EXIT)
+    {
+        FailGoal(why);
+        return true;
+    }
+
+    GoalName(goal, name, sizeof(name));
+
+    if (depth < MAX_GOALS && WanderSpot(&spot))
+    {
+        wander = Push(GOAL_GOTO, -1);
+        wander->point = spot;
+        wander->wander = true;
+        K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s: %s - added WANDER TO (%.0f, %.0f), to plan again "
+              "from there", name, why, spot.x, spot.y);
+        return true;
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s: %s - nowhere open to wander to; waiting %d s", name, why,
+          IDLE_TICS / TICRATE);
+    M_snprintf(goal->note, sizeof(goal->note), "waiting - %s", why);
+    goal->retry_tic = leveltime + IDLE_TICS;
+    K_Nav_Clear();
+    return true;
 }
 
 static void PlanGoal(goal_t *goal)
@@ -2273,6 +2437,98 @@ static void PlanGoal(goal_t *goal)
     }
 }
 
+// The player sets off past a lift or a door that goes back by itself, its
+// line just worked (PASS_TICS).
+static void StartPassing(const goal_t *goal, k_crossing_t crossing)
+{
+    pass_portal = goal->portal;
+    pass_from = goal->from;
+    pass_sector = goal->param;
+    pass_line = goal->chosen.line;
+    pass_until = leveltime + PASS_TICS;
+    pass_routed = false;
+    pass_past = false;
+    pass_fought = false;
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "passing the %s (sector %d) before it goes back (%s) - no "
+          "detour meanwhile", K_Graph_IsLift(pass_sector) ? "lift" : "door", pass_sector,
+          K_Graph_CrossingName(crossing));
+}
+
+// Every tic, until the mover goes back, or the time is up: whether a fight
+// or a hold has come meanwhile, and whether the player is past it - off the
+// mover, in a cell of the route after the crossing (stepping onto a lift
+// lowered and off it on the near side is no pass). Past it, the window is
+// kept all the same: E3M9, over lift 27, a strip 8 deep, the bot fought a
+// cacodemon and retreated from it back over the lift still down, which was
+// up again when the fight was over. Riding the mover, kept until the time
+// is up. Ended at once if the route, which went through the crossing, goes
+// through it no more (another way).
+static void UpdatePassing(void)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_path_t *path = K_Nav_GetPath();
+    k_pose_t player;
+    boolean on, open;
+    int k = -1, i;
+
+    if (pass_portal < 0 || !K_Map_GetPlayer(&player) || player.cell < 0)
+    {
+        return;
+    }
+
+    on = map->subsectors[map->cells[player.cell].subsector].sector == pass_sector;
+    open = K_Graph_Passable(K_Graph_CanCross(pass_portal, pass_from));
+    pass_fought |= K_Combat_GetStatus()->battle || K_Combat_GetStatus()->holding;
+
+    for (i = 0; path != NULL && i < path->num_cells - 1 && k < 0; ++i)
+    {
+        if (path->portals[i] == pass_portal)
+        {
+            k = i;
+        }
+    }
+
+    for (i = k + 1; k >= 0 && i < path->num_cells && !on && !pass_past; ++i)
+    {
+        pass_past = path->cells[i] == player.cell;
+    }
+
+    pass_routed |= k >= 0;
+
+    if (on ? leveltime < pass_until
+           : leveltime < pass_until && open && (k >= 0 || !pass_routed || pass_past))
+    {
+        return;
+    }
+
+    // The route goes another way: nothing to give back.
+    if (!on && open && leveltime < pass_until)
+    {
+        pass_portal = -1;
+        return;
+    }
+
+    // Over: a fight or a hold took the window, the player perhaps carried
+    // back over the mover with it (a retreat), so no fair try.
+    if (pass_fought && line_uses != NULL && line_uses[pass_line] > 0)
+    {
+        --line_uses[pass_line];
+    }
+
+    pass_excused = pass_fought ? leveltime : -1;
+
+    if (!on && !pass_past)
+    {
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "missed the %s (sector %d) - %s%s",
+              K_Graph_IsLift(pass_sector) ? "lift" : "door", pass_sector,
+              leveltime >= pass_until ? "out of time" : "it went back",
+              pass_fought ? "; a fight took the way, so neither the use of its line nor the "
+                            "way shut counts" : "");
+    }
+
+    pass_portal = -1;
+}
+
 // A trigger goal is done once the crossing it was pushed for opens: a door
 // opening or a lift coming down is a crossing to wait at, so the player
 // sets off for it at once, as a human would. Judged before the goal is
@@ -2310,6 +2566,12 @@ static boolean DoneIfOpen(const goal_t *goal)
 
     M_snprintf(how, sizeof(how), "the way on is open, or opening (%s)",
                K_Graph_CrossingName(crossing));
+
+    if (goal->planned && goal->chosen.line >= 0 && FixPasses(goal->type, goal->param, goal->want))
+    {
+        StartPassing(goal, crossing);
+    }
+
     DoneGoal(how);
     return true;
 }
@@ -2940,9 +3202,10 @@ static boolean ConsiderItems(goal_t *goal)
     // A goal not planned yet (the one below an item just picked up) does not
     // use the look up: it comes once it is. Nothing takes the player off the
     // exit floor (E1M8: health is what it takes), nor off a fall back, the
-    // fix in its way included, nor off a way back being opened.
+    // fix in its way included, nor off a way back being opened, nor past a
+    // lift or a door that goes back but for health at CRITICAL (PASS_TICS).
     if (leveltime < item_check_tic || !goal->planned || goal->staying || FallingBack() >= 0
-     || OpeningWayBack() >= 0)
+     || OpeningWayBack() >= 0 || (pass_portal >= 0 && !critical))
     {
         return false;
     }
@@ -4172,6 +4435,8 @@ void K_Brain_Reset(void)
     last_known = false;
     back_cell = -1;
     telefrag_check_tic = 0;
+    pass_portal = -1;
+    pass_excused = -1;
 
     if (item_skip != NULL)
     {
@@ -4250,6 +4515,7 @@ void K_Brain_Tick(void)
 
     health_ring[leveltime % FALL_TICS] = (int) K_Map_PlayerHealth();
     TrackArrival();
+    UpdatePassing();
     UpdateEscape();
     UpdateShooting();
     K_Combat_Needed(NeededKind());
@@ -4358,7 +4624,7 @@ void K_Brain_Tick(void)
 
     if (!goal->planned)
     {
-        if (leveltime >= goal->retry_tic && !DropNeedless())
+        if (leveltime >= goal->retry_tic && !DropNeedless() && !BreakLoop(goal))
         {
             PlanGoal(goal);
         }
@@ -4439,12 +4705,20 @@ void K_Brain_Tick(void)
             // The way shut on the way, but is there, blocked (Doom II
             // MAP02: a fast door closed before the player got back to it,
             // and its only blue key was given up for good): planned again,
-            // which pushes the fix (the door's switch), not given up.
-            if (K_Nav_GetStatus()->blocked && goal->shut < MAX_SHUT)
+            // which pushes the fix (the door's switch), not given up. Not
+            // counted when a fight took the way lately (PASS_TICS).
+            if (K_Nav_GetStatus()->blocked
+             && (goal->shut < MAX_SHUT
+                 || (pass_excused >= 0 && leveltime - pass_excused <= PASS_TICS)))
             {
                 char name[64];
 
-                ++goal->shut;
+                if (pass_excused < 0 || leveltime - pass_excused > PASS_TICS)
+                {
+                    ++goal->shut;
+                }
+
+                pass_excused = -1;
                 GoalName(goal, name, sizeof(name));
                 K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: the way shut on the way (%s) - planning "
                       "again (%d/%d)", name, K_Nav_GetStatus()->problem, goal->shut, MAX_SHUT);

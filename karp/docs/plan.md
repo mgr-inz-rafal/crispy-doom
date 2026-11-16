@@ -2756,6 +2756,12 @@ Who controls the player in a fight (the user's model):
   super shotgun want another look (the user, MAP02): the super shotgun was used far off where
   the plain one would do better; enough against zombiemen, but against a baron far off, with a
   fraction of the pellets landing, it wastes shells.
+- **The fist when only rockets are held** (the user, jotted 2026-11-16, Doom II MAP15): with no
+  weapon but the rocket launcher, the bot pressed on a shotgun guy in its way, trying to get
+  past it, rightly holding the rockets at that range (the blast), but never brought up the fist
+  to hit it in the face, so the shotgun guy had shot after shot. An exception to "no fist"
+  wanted: against a weak monster in reach, when every gun held is barred at that range (or has
+  no ammo), punch rather than stand under fire. Probably a small change in the weapon rating.
 - **Seen in salted runs, to look into with logs** (the user, jotted, Doom and Doom II):
   1. The fist brought up at close range, once even against a baron of hell, with ammo full. A
      guess: a berserk pack in hand, which makes the fist rate ten times and skips its quarter
@@ -3766,6 +3772,39 @@ Who controls the player in a fight (the user's model):
   sidesteps out of projectiles' way and the steps away from blows, out of a fight too, now
   cross no trip either (before, only fight steps were held: a sidestep over a teleport line's
   front would have sent the player away) - but a step away from a barrel about to go off.
+- **Goals going round in a loop** (Doom II MAP15 salt 7, 2026-11-16: the log filled with
+  4842 pairs of lines in 13 minutes). Fallen back through a teleporter at 10 health, the bot
+  had USE TRIGGER for sector 85 (switch 594) under GET MEDIKIT. Planned, the switch's route was
+  blocked by a step and a red door further on: GET RED KEY pushed. Then `DropNeedless` found
+  an open way to the switch and dropped the key; planned, the key again. The two saw different
+  routes: `BlockCost` charges a crossing as fixable only while its fix may go on the stack
+  (`Allowed`), and with GET RED KEY on it the red door cost as one nothing fixes (1e8); at 10
+  health an open way over floors that hurt (1e5 a point) came cheaper than that, though not
+  than the door as a fix (1e6). Done (`k_brain.c`): `DropNeedless` looks at each goal with the
+  stack as it would be once those above it are gone, as it is planned then. And (the user:
+  whatever the cause, break a loop) `BreakLoop`: a goal planned 20 times within 5 s
+  (`LOOP_PLANS`, `LOOP_TICS`; a wait for moving sectors plans once a second) fails, not pushed
+  again for 30 s, then longer, so the goal below looks for another way. GO TO EXIT never fails:
+  WANDER TO a spot 256 to 1024 off by an open route through no floor that hurts, picked at
+  random (salt), and plan again from there; with none, wait 5 s.
+- **Lifts and doors that go back, passed before they do** (the user, 2026-11-16, E3M9 salt 71:
+  "no way to exit, gap narrower" for two minutes; the same on MAP06 with a door after a
+  medikit detour). Lift 147 (sector 27) was lowered three times in 9 s: a cacodemon fought,
+  then held short of, then a box of rockets gone for, each while it went back up. The third
+  use used the switch up (`MAX_TRIGGERS`, for 30 s), the other switch (146) was on the far
+  side, and every goal behind it failed, backing off 30, 60, 120, 240 s. Done (`k_brain.c`,
+  `PASS_TICS`): once the line of a lift or a door that closes again (`FixPasses`) is worked
+  and its crossing opens, until it goes back, 10 s at most (riding the mover, the whole 10 s;
+  ended early only when the route no longer goes through the crossing), no item is gone for
+  but health at CRITICAL; and a window a fight or a hold took counts neither as a use of the
+  line nor, within 10 s, as the way shut on the goal going through (`MAX_SHUT`): the player had
+  no fair try, and works the line again. Logged: "passing the lift (sector 27) before it goes
+  back", and "missed the lift ... - it went back" when the player is not past it (off the
+  mover, in a route cell after the crossing). Lift 27 is a strip 8 deep: past it, the bot
+  fought the cacodemon and retreated from it back over the lift still down. Tried and dropped:
+  combat run as for an item the while (`K_Combat_Escape`: no fight begun but with blows near,
+  shooting on the way, no hold) - it also broke off keeping off the Cyberdemon, and E3M9 died
+  3 runs of 3 by lift 27, under its rockets (head finished 2).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
