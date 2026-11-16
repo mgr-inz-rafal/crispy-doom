@@ -99,6 +99,7 @@ karp/
     k_specials.h / k_specials.c  what lines and things do: exit lines, lines that move sectors
                                  (switches, walk-over lines), keys lying in the level
     k_trace.h / k_trace.c     player trace: what a human driving does, in the log
+    k_demo.h / k_demo.c       demo mode (-karpdemo): plays on for ever, level saves, retries
     k_console.h / k_console.cpp  Karp Console (SDL window, ImGui, map canvas, tabs, log pane)
   third_party/imgui/          Dear ImGui v1.93.0 (latest release at plan time): core files,
                               backends/imgui_impl_sdl2.*, backends/imgui_impl_sdlrenderer2.*,
@@ -117,6 +118,8 @@ karp/
 | H6 | `src/doom/g_game.c` end of `G_BuildTiccmd`, after the lowres block (between :981 and :982) | `K_BuildTiccmd(cmd, maketic);` | Write the bot's input into the command before it enters the network layer (section 3.6) |
 | H7 | `src/doom/g_game.c` `G_PrepTiccmd`, right after the `strafe` declaration (:1398) | `if (K_OwnsControls()) { mousex = mousey = 0; return; }` | Skip crispy's per-frame mouse look while the bot drives. Without it, moving the mouse over the focused game window turns the view until the next tic, then the bot's command snaps it back. |
 | H8 | `src/doom/d_main.c` `D_RunFrame`: end of function (after :584) and before the wipe-branch `return` (:548) | `K_Frame();` | Redraw the console (rate-limited); the second call keeps it alive during screen melts |
+| H10 | `src/doom/d_main.c` after the `-karpsalt` block | `//!` doc block + `if (M_CheckParm("-karpdemo")) K_EnableDemo();` | Demo mode (3.11) |
+| H11 | `src/doom/g_game.c` end of `G_DoLoadGame` | `K_GameLoaded();` | Rebuild Karp's copy of the level from the world a savegame restored: H4 ran inside `G_InitNew`, before every thing and mover was replaced |
 | H9 | `src/i_video.c` / `i_video.h` (shared by all games) | `I_SetEventFilter(fn)`; call `if (event_filter && event_filter(&sdlevent)) continue;` at the top of the `SDL_PollEvent` loop in `I_GetEvent` (:474); `I_GetWindow()` accessor (`struct SDL_Window;` forward declaration, since i_video.h does not include SDL.h) | Route console events to Karp. Only Doom registers a filter, and only with `-karpconsole`; otherwise it stays NULL. |
 
 `karp.h` is included only by the four doom files above (`d_main.c`, `p_setup.c`, `d_net.c`,
@@ -170,6 +173,11 @@ them. A bot that touched the world any other way would desync the game (and brea
    `k_map` data.
 4. **Think and act from the local player's view only** (`consoleplayer`), so in a future netgame
    each machine can run its own bot for its own player.
+
+Demo mode (3.11) is the one exception to rule 3: between levels and after a death it works the
+game as a player at the menu would - saves, loads, moves past an intermission or a text screen,
+starts a new game (`G_SaveGame`, `G_LoadGame`, `G_WorldDone`, `G_DeferedInitNew`,
+`F_StartCast`). Never inside a level's simulation, and never in a netgame.
 
 Stage 1 still refuses to drive in netgames (the activity gate requires `!netgame`; Karp logs this
 once and stays idle), simply because it is untested there. The architecture above keeps lifting that guard a later-stage task, not a
@@ -1417,6 +1425,8 @@ The log is the bot's "thought stream": what it decided and why, not a per-tic du
   - `BRAIN click at (3000,4000) ignored - not on any floor`
 - Sinks: the console pane, stdout, and `karp.log` in crispy's config directory (`configdir`, the
   exe folder on Windows; truncated each run), so a session can be reviewed after the game exits.
+  In demo mode, which runs for days, it rolls over at a level start once it reaches 32 MB: renamed
+  `karp.old.log` (the one before dropped), a new one begun (`K_Log_Roll`).
 
 Later stages will write their decisions into the same stream, e.g. "looking for blue key",
 "avoiding missile", "low health - going for medkit".
@@ -1462,6 +1472,33 @@ under `PLAYER`. Read-only, like the rest of Karp (2.4):
 
 Started from `K_Ticker` before the exit check, so the exit line crossed shows before "level
 finished". Doom II MAP23 was the first map read this way (see the playtests in section 4).
+
+### 3.11 `k_demo.c` - demo mode
+
+The user, 2026-11-16: Karp will play on a PC at an exhibition, 24 hours a day. `-karpdemo` (with
+the IWAD, a skill, and `-warp` if not the first level) turns on autoplay and salt (a clock seed
+unless `-karpsalt` gives one), starts the game at once and overrides `-quitonexit`:
+- **Each level's start is saved** on its first tic, to slot 7 (`doomsav7.dsg` on the menu's
+  first page), described "KARP DEMO MAP05".
+- **A death** is retried 3 s later: the save loaded again with a new random salt, so the run
+  parts from the one before. A level still going after 15 minutes (the bot stuck) is retried the
+  same way - never a frozen screen. With no save of the level, it starts again from scratch.
+  The bot need not clear every level with every salt: some salt clearing it is enough (the user).
+- **The intermission** moves on after 5 s.
+- **A text screen between levels** (Doom II) stays as long as Doom 1 shows its own by itself: 3
+  tics a letter, then 250 (`F_Ticker`'s TEXTSPEED, TEXTWAIT).
+- **The end of the game** - every Doom 1 finale (an episode's end), Doom II's after MAP30 (No
+  Rest for the Living's MAP08, the Master Levels' MAP20 or 21) - shows the text, then Doom 1's
+  end picture for 30 s or Doom II's cast of characters for 60 s, and starts a new game from E1M1
+  or MAP01, at the skill given.
+- **The title screen** (a game ended from the menu) starts a new game after 10 s.
+- Nothing waits while the game is paused or a menu is open; nothing happens in a netgame.
+- Logged: "demo: saving the start of MAP06 (try 1) to ...", "demo: died on MAP06 - loading its
+  start, try 2", "demo: intermission over - on to the next level", "demo: the end of the
+  episode - a new game from the first level".
+
+Loading a savegame needed Karp's copy of the level rebuilt (H11): `G_DoLoadGame` sets the level up
+(H4) and only then restores the saved world, every monster, item and mover replaced.
 
 ## 4. Milestones
 

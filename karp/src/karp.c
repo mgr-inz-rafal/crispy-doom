@@ -1,8 +1,8 @@
 //
 // DESCRIPTION:
-//	Karp glue: the -autoplay / -karpconsole / -quitonexit / -karpsalt
-//	switches, lifecycle and the SDL event filter that gives the console its
-//	own events.
+//	Karp glue: the -autoplay / -karpconsole / -quitonexit / -karpsalt /
+//	-karpdemo switches, lifecycle and the SDL event filter that gives the
+//	console its own events.
 //
 
 #include <stdlib.h>
@@ -24,6 +24,7 @@
 #include "k_combat.h"
 #include "k_condition.h"
 #include "k_console.h"
+#include "k_demo.h"
 #include "k_graph.h"
 #include "k_items.h"
 #include "k_log.h"
@@ -108,6 +109,21 @@ void K_EnableSalt(void)
     }
 
     K_Salt_Enable(seed);
+}
+
+void K_EnableDemo(void)
+{
+    InitKarp();
+    autoplay_enabled = true;
+    autostart = true;
+
+    if (quit_on_exit)
+    {
+        quit_on_exit = false;
+        K_Log(K_LOG_SYS, K_LOG_WARN, "-quitonexit ignored in demo mode");
+    }
+
+    K_Demo_Enable();
 }
 
 boolean K_AutoplayEnabled(void)
@@ -209,6 +225,21 @@ void K_LevelLoaded(void)
     {
         K_Log(K_LOG_SYS, K_LOG_INFO, "salt: setting off after %d tics", K_Salt_StartPause());
     }
+
+    K_Demo_LevelLoaded();
+}
+
+void K_GameLoaded(void)
+{
+    if (!autoplay_enabled && !console_enabled)
+    {
+        return;
+    }
+
+    K_Log(K_LOG_SYS, K_LOG_INFO, "savegame loaded - Karp's copy of the level built again "
+          "from it");
+    K_LevelLoaded();
+    K_Demo_GameLoaded();
 }
 
 boolean K_OwnsControls(void)
@@ -281,6 +312,8 @@ void K_Ticker(void)
     {
         K_Brain_Tick();
     }
+
+    K_Demo_Tick();
 }
 
 // Writes only the fields a human's keyboard and mouse would, so the command

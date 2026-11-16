@@ -77,6 +77,10 @@ void K_Log_FormatTime(int leveltime, char *buf, int buf_len);
 // Writes a pending repeat count and closes karp.log. Run via I_AtExit.
 void K_Log_Shutdown(void);
 
+// Once karp.log has grown to `most` bytes: renamed karp.old.log (the one
+// before that dropped), and a new karp.log begun (demo mode: runs for days).
+void K_Log_Roll(long most);
+
 #ifdef __cplusplus
 }
 #endif

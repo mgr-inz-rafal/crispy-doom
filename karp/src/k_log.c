@@ -61,6 +61,13 @@ static k_logentry_t *LastEntry(void)
     return &entries[(first + count - 1) % K_LOG_MAX_ENTRIES];
 }
 
+// configdir is set long before Karp logs anything; fall back to the
+// working directory just in case.
+static char *LogPath(const char *name)
+{
+    return M_StringJoin(configdir != NULL ? configdir : "", name, NULL);
+}
+
 static void OpenLogFile(void)
 {
     char *path;
@@ -71,9 +78,7 @@ static void OpenLogFile(void)
         return;
     }
 
-    // configdir is set long before Karp logs anything; fall back to the
-    // working directory just in case.
-    path = M_StringJoin(configdir != NULL ? configdir : "", "karp.log", NULL);
+    path = LogPath("karp.log");
     logfile = M_fopen(path, "w");
 
     if (logfile == NULL)
@@ -214,6 +219,26 @@ void K_Log_FormatTime(int tics, char *buf, int buf_len)
 {
     M_snprintf(buf, buf_len, "%02d:%02d.%d", tics / (60 * TICRATE),
                (tics / TICRATE) % 60, (tics % TICRATE) * 10 / TICRATE);
+}
+
+void K_Log_Roll(long most)
+{
+    char *path, *old;
+
+    if (logfile == NULL || ftell(logfile) < most)
+    {
+        return;
+    }
+
+    fclose(logfile);
+    logfile = NULL;
+    path = LogPath("karp.log");
+    old = LogPath("karp.old.log");
+    M_remove(old);
+    M_rename(path, old);
+    free(path);
+    free(old);
+    OpenLogFile();
 }
 
 void K_Log_Shutdown(void)

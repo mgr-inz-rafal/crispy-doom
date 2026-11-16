@@ -2383,6 +2383,22 @@ void D_DoomMain (void)
         K_EnableSalt(); // [Karp]
     }
 
+    //!
+    // @category game
+    //
+    // [Karp] Demo mode: the bot plays on by itself, for ever - a game
+    // started at once (from -warp's level, or the first), each level's
+    // start saved, a death retried from it with another salt, the
+    // intermissions and text screens moving on by themselves, the game
+    // begun again from the first level once it ends. Implies -autoplay and
+    // -karpsalt.
+    //
+
+    if (M_CheckParm("-karpdemo"))
+    {
+        K_EnableDemo(); // [Karp]
+    }
+
     // Undocumented:
     // Invoked by setup to test the controls.
 

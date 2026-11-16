@@ -2573,7 +2573,9 @@ void G_DoLoadGame (void)
     // [crisy] once loaded from the command line,
     // the next savegame will be loaded from the menu
     startloadgame = -1;
-} 
+
+    K_GameLoaded(); // [Karp]
+}
  
 
 //

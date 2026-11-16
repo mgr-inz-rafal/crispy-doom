@@ -24,6 +24,10 @@ void K_EnableQuitOnExit(void);
 // -karpsalt [seed]: runs differ, from the seed given or the clock.
 void K_EnableSalt(void);
 
+// -karpdemo: the bot plays on by itself for ever (k_demo.h); implies
+// -autoplay and salt, starts a game at once, overrides -quitonexit.
+void K_EnableDemo(void);
+
 // Right after I_InitGraphics: opens the console.
 void K_PostVideoInit(void);
 
@@ -32,6 +36,11 @@ void K_Frame(void);
 
 // End of P_SetupLevel: rebuilds Karp's copy of the level.
 void K_LevelLoaded(void);
+
+// End of G_DoLoadGame: rebuilds it again from the world the savegame
+// restored (P_SetupLevel ran before, on the level as it starts; every
+// thing and mover has been replaced since).
+void K_GameLoaded(void);
 
 // Once per game tic, after G_Ticker: the bot thinks on the fresh state.
 void K_Ticker(void);
