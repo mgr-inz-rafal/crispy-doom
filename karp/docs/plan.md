@@ -3752,6 +3752,20 @@ Who controls the player in a fight (the user's model):
     projectile counted once (`k_threathit_t.mo`: one fireball started up to four sidesteps
     within a tic or two). Logged: "on into area 116 after holding 6.6 s - under fire from
     monsters waiting does not bring (outside it, or that cannot come)".
+- **Lines crossed in a fight** (the user, 2026-11-16, E2M1 in demo mode: teleported to the
+  plasma rifle, the bot stood on the small landing pad while dodging cacodemon balls, and took
+  two it had seen coming). The pad (sector 4, 64 by 64) has walls on two sides and teleport
+  lines (97, tag 10) facing out on the other two; every step off it crossed one, and no fight
+  step crosses a walk-over line that does something (`Trips`) - though a teleporter works only
+  from its front (`EV_Teleport`), and off the pad was its back. Done (`k_combat.c`,
+  `K_Specials_CrossHarmless`): a step may cross a walk-over line that changes nothing for good -
+  a teleporter from behind; one for monsters only (125, 126); the lighting lines (12, 13, 17,
+  35, 104, 79, 80, 81); and (the user: lowering a lift that comes back is fine to survive) the
+  WR lifts and doors that go back by themselves, the line left to work again (88, 120; 90,
+  105). Not their W1 kin (10, 121, 4, 108): the line used up, the way could stay shut. And the
+  sidesteps out of projectiles' way and the steps away from blows, out of a fight too, now
+  cross no trip either (before, only fight steps were held: a sidestep over a teleport line's
+  front would have sent the player away) - but a step away from a barrel about to go off.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

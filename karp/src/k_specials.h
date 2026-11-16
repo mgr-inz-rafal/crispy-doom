@@ -94,6 +94,14 @@ int K_Specials_LineSpecial(int line);
 // one sets something off.
 int K_Specials_WalkOver(int special);
 
+// Whether the player crossing a walk-over line with this special, from its
+// back side (back) or its front, leaves nothing changed for good: the
+// lights; a teleporter for monsters only, or one crossed from behind
+// (EV_Teleport works from the front only); a lift that lowers and rises
+// again, a door that opens and shuts again, the line left to work again
+// (WR). Not a one-shot (W1) lift or door: crossed, the line would be used up.
+int K_Specials_CrossHarmless(int special, int back);
+
 // Whether crossing a walk-over line shuts a sector with its tag: a door that
 // closes, a ceiling that comes down to 8 over the floor, a floor that goes up
 // to 8 under the ceiling. Not a door the player opens by hand (one of its

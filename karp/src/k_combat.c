@@ -69,8 +69,9 @@
 //	it is kept off: a baron is shot from afar, the player backing off as
 //	far as it takes, toward room to back off further, and pressed hard
 //	where there is none, retreating to open floor nearby - never over a
-//	drop, onto a floor that hurts, or over a walk-over line that does
-//	something.
+//	drop, onto a floor that hurts, or over a walk-over line that would
+//	change something for good (a teleport line from behind, a lift that
+//	comes back, the lights do not).
 //	Once nothing has been worth shooting for a second, nav
 //	plans its route again from where the player is. A target that has not
 //	lost health for a while (out of reach of the shots) is left alone for
@@ -243,8 +244,11 @@ extern void A_SPosAttack();
 // ROCKET_TOWARD less as it goes toward it: running at it, rockets burst
 // nearer (RocketGain). The target of a
 // melee weapon (MeleeFor) is not backed off from: it must come close. And
-// no step in a fight crosses a walk-over line that does something (Trips;
-// as creeping, CreepStops): backing off goes further than strafing.
+// no step in a fight, nor a sidestep or step away out of one, crosses a
+// walk-over line that would change something for good (Trips; as creeping,
+// CreepStops) - a lighting line, a WR lift or door that goes back by
+// itself, a teleporter crossed from behind may be: backing off goes further
+// than strafing.
 #define STRAFE_SPEED 10.0
 #define STRAFE_MIN 20
 #define STRAFE_SPREAD 30
@@ -4044,7 +4048,7 @@ static boolean MeleeFor(const player_t *player, const k_monster_t *monster)
 }
 
 // This tic's trips: the walk-over lines within reach of me that do
-// something.
+// something (crossed the wrong way: Trips).
 static void FindTrips(k_vec2_t me, double reach)
 {
     k_vec2_t min = { me.x - reach, me.y - reach };
@@ -4065,7 +4069,13 @@ static void FindTrips(k_vec2_t me, double reach)
 }
 
 // Whether a straight step from a to b crosses a trip: the player's centre
-// goes over its line with the player's box on it (P_CrossSpecialLine).
+// goes over its line with the player's box on it (P_CrossSpecialLine) -
+// but for one whose crossing, that way, leaves nothing changed for good
+// (K_Specials_CrossHarmless: the user, E2M1: landed on the plasma rifle's
+// teleporter pad, walls on two sides and the pad's teleport lines on the
+// other two, crossed from behind - nothing - the bot stood on it, every
+// step out a trip, and took two cacodemon balls it had seen coming; and a
+// WR lift lowered while fighting comes back by itself).
 static boolean Trips(k_vec2_t a, k_vec2_t b)
 {
     const k_map_t *map = K_Map_Get();
@@ -4080,7 +4090,9 @@ static boolean Trips(k_vec2_t a, k_vec2_t b)
         double sb = ex * (b.y - line->v1.y) - ey * (b.x - line->v1.x);
         double t, along;
 
-        if (length < 1e-6 || sa * sb > 0.0 || sa == sb)
+        // The front side is on the right of v1 to v2 (sa < 0).
+        if (length < 1e-6 || sa * sb > 0.0 || sa == sb
+         || K_Specials_CrossHarmless(K_Specials_LineSpecial(trips[k]), sa > 0.0))
         {
             continue;
         }
@@ -4350,10 +4362,11 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
 // (k_threat.h): going on at `velocity` (the route's way; zero, standing)
 // against each of MOVE_WAYS ways at DODGE_SPEED (DODGE_MIN). With sidestep,
 // only ways no more than 90 degrees off velocity, unless a hit going on
-// could kill. keep is the way stepped already, -1 if none. Returns the way,
-// or -1 to go on as it is; hit gets the costliest hit going on, *on_way
-// whether the way is a sidestep. The way returned is the one taken
-// (Expect).
+// could kill; over no trip, as fight steps (out of a fight too: a sidestep
+// over a teleport line's front would send the player away). keep is the way
+// stepped already, -1 if none. Returns the way, or -1 to go on as it is; hit
+// gets the costliest hit going on, *on_way whether the way is a sidestep.
+// The way returned is the one taken (Expect).
 static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep, int keep,
                     k_threathit_t *hit, boolean *on_way)
 {
@@ -4392,6 +4405,7 @@ static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep,
 
     *on_way = sidestep && !hit->lethal;
     best_cost -= keep >= 0 ? 0.0 : ROUTE_KEEP;
+    FindTrips(me, MOVE_LOOK + PLAYER_RADIUS);
 
     for (k = 0; k < MOVE_WAYS; ++k)
     {
@@ -4403,7 +4417,7 @@ static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep,
         double cost;
 
         if ((*on_way && along < 0.0) || !Steppable(near, floor, hurts, edge)
-         || !Steppable(far, floor, hurts, edge))
+         || !Steppable(far, floor, hurts, edge) || Trips(me, far))
         {
             continue;
         }
@@ -5216,7 +5230,8 @@ static void DodgeMissiles(const player_t *player)
 // Out of a fight, away from a blast about to go off (or a primed barrel a
 // monster can see), or from blows the shots cannot answer: the route waits
 // while the player steps the walkable
-// way that gets furthest from it. A blow is stepped away from even at a door
+// way that gets furthest from it - over no trip (Trips), but from a blast
+// about to go off. A blow is stepped away from even at a door
 // or lift (the action is begun again after), but only if some way is
 // walkable: a lift going down rides on. In battle the strafing keeps away
 // from barrels (ChooseMove). With none of these, out of the way of
@@ -5276,6 +5291,7 @@ static void UpdateDodge(const player_t *player)
 
     from = blast >= 0 ? barrels[blast].at : monsters[blow].at;
     blow_mo = blast >= 0 ? NULL : monster_mobjs[blow];
+    FindTrips(me, MOVE_LOOK + PLAYER_RADIUS);
 
     for (k = 0; k < MOVE_WAYS; ++k)
     {
@@ -5286,7 +5302,8 @@ static void UpdateDodge(const player_t *player)
         double away = blast >= 0 ? AxisDistance(far, from) : Distance(far, from);
 
         if (away > best && Steppable(near, floor, hurts, edge)
-         && Steppable(far, floor, hurts, edge))
+         && Steppable(far, floor, hurts, edge)
+         && ((blast >= 0 && primed < 0) || !Trips(me, far)))
         {
             best = away;
             way.x = ux;

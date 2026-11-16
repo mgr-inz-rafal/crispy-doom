@@ -270,6 +270,30 @@ int K_Specials_WalkOver(int special)
     }
 }
 
+int K_Specials_CrossHarmless(int special, int back)
+{
+    switch (special)
+    {
+        // The lights (W1, WR); teleporters for monsters only (W1, WR).
+        case 12: case 13: case 17: case 35: case 104:
+        case 79: case 80: case 81:
+        case 125: case 126:
+            return true;
+
+        // Teleporters (W1, WR): from the front only (EV_Teleport).
+        case 39: case 97:
+            return back;
+
+        // WR lifts down, wait, up (88, 120 blazing); WR doors open, wait,
+        // shut (90, 105 blazing).
+        case 88: case 120: case 90: case 105:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 int K_Specials_LineShuts(int line, int sector)
 {
     const line_t *l = &lines[line];
