@@ -3662,6 +3662,55 @@ Who controls the player in a fight (the user's model):
   fight too: on MAP10 the Cyberdemon about made every fight a hard one, and the BFG came up
   for a zombieman 672 off and an imp 624 off; the Cyberdemon won all three runs, against one
   of three before.
+- **Imps in a pit, holds in a crossfire** (the user, E3M6 "the bot just stayed still and
+  tried to shoot too many enemies"; Doom II MAP05 salt 71). Two deaths, one cause each:
+  - MAP05 at 143 s: imps in a pit (sector 128, floor 96) below the bridge the bot jumps from
+    (sector 126, floor 184). Judged by the straight line they cannot come at the player (a
+    step of 88), so each got two shots on the way and was left alone 10 s; but vanilla's
+    blows reach any height, and at the edge they clawed the bot from 41 units, where the
+    autoaim cannot find them. Stepping away (BLOW_SAFE) and back to the jump, again and
+    again, 87 health to 0. E3M6 salt 7 died the same way at 232 s, an imp below the
+    platform at (-498,-915) clawing from 52.
+    Done (`k_combat.c`), two ways:
+    - `WayClear`: stopped on the straight line by a step, a ledge or bars - no wall, no shut
+      sector - so near the player that its blows reach it from there (BLOW_RANGE 60, centre
+      to centre: `P_CheckMeleeRange`, no height), a monster that has blows can come at it.
+      Every imp in the pit, as the bot stands at its edge, not just the one that clawed.
+    - `Strike`: a monster whose blow hurts the player (no projectile, no bullet, from within
+      BLOW_REACH) can come at it for 30 s, whatever the straight line says. Logged when it
+      had been judged one that cannot: "the imp's blow reached the player from 43 units off
+      - it can come at the player after all, for 30 s". Alone it was not enough: on MAP05
+      the struck imp was fought, the three beside it still left alone after two shots each,
+      and the bot died the same way at the same tic.
+    - Stepped away from before it claws (`BlowFrom`): out of a fight, an awake monster in
+      sight within 96 whose blows would reach the player (`WayClear`) and the shots cannot
+      find is stepped away from to 160, as one that has clawed. With the two above only, the
+      imps were fought from further off as the shots found them, each fight over in a
+      second as they went under the edge, and the route took the bot back to the edge to be
+      clawed (dead 7 s later than before, four more kills). Once begun, the step away keeps
+      to that monster while it is within 160 and the shots cannot find it (MAP06: a spectre
+      in and out of sight below a ledge began and ended it ten times in 0.7 s). Logged:
+      "stepping away from the imp at (32,296), 90 units off - its blows would reach the
+      player where the shots cannot find it; the route waits". MAP05 salt 71 then finished
+      (221 s; 3 of 3 against 2 of 3), as did MAP03 in all three.
+  - E3M6 salt 7: held 16.5 s short of area 39 (three monsters asleep inside), the bot stood
+    sidestepping fireballs from imps on the floor below and a cacodemon's from beyond -
+    waiting brings only those inside that can come. Done (HOLD_FIRE): three hits or
+    sidesteps while holding from monsters that cannot come at the player, or in another area
+    than the one held and the player's own (not in a door or lift: those coming out are),
+    end the hold, the area not held off from again for 20 s. Those that cannot come count
+    wherever they are: in a later run of the same salt the imps in the pit below were inside
+    area 39, and the bot held 16.1 s again.
+  Side by side with 7ba26699 (Doom II 01-06, 10, 13, 15, 19; E3M1-9, E1M8, E2M8; salts 443,
+  71, 7), two rounds: 44 against 45, then 43 against 47 (87 of 126 against 92). The new
+  rules decided MAP19 salt 443 (finished, 331 s, never before), E3M6 salt 71 (stepped back
+  from a spectre at a door that bit head for 40) and MAP05 (3 of 3 in the targeted runs);
+  MAP06 salt 443 died (stepped back from a spectre below the ledge it landed on, then a
+  close fight with it and lost souls); the other differences parted before any new rule,
+  a unit or two of drift. No-monster set 29 of 29 on both, within 4 s. The sidestep's monster comes from `k_threathit_t.by` (a projectile's shooter), each
+    projectile counted once (`k_threathit_t.mo`: one fireball started up to four sidesteps
+    within a tic or two). Logged: "on into area 116 after holding 6.6 s - under fire from
+    monsters waiting does not bring (outside it, or that cannot come)".
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

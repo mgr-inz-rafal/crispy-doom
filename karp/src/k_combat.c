@@ -14,7 +14,8 @@
 //	shots can be sidestepped across a large room (a cacodemon, a baron).
 //	One that cannot come at the player (behind bars, on a ledge) is shot
 //	at on the way, a shot or two, and never fought - unless it is a gunman,
-//	or the player is comfy, with health and ammo to spare.
+//	or the player is comfy, with health and ammo to spare, or its blow has
+//	just hurt the player (from a pit below a ledge: it can come after all).
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
 //	hand (a switch takes about 0.9 s), and never instead of one whose next
@@ -100,8 +101,9 @@
 //	comes or shows itself - a door pressed, then stood back from as it
 //	rises - and, with nothing worth fighting, creeping slowly on to the way
 //	in and a little past it; once there with still nothing worth fighting,
-//	or the area safe, it goes in. Runs for items wait while such an area
-//	lies ahead (K_Combat_MonstersAhead).
+//	or the area safe, it goes in - and at once, under fire from monsters
+//	elsewhere, which waiting does not bring. Runs for items wait while such
+//	an area lies ahead (K_Combat_MonstersAhead).
 //
 //	Cover (plan, 7.8: C4): blows that need the monster to see the player -
 //	an arch-vile's flame, an arachnotron's or the spider mastermind's
@@ -592,7 +594,17 @@ extern void A_SPosAttack();
 // stands fought as any (E3M9: the cyberdemon on a ledge rocketed the bot at
 // a switch) - Doom II MAP06's hell knights up on a ledge, left alone before
 // and passed, were fought from below for 25 s, the ammo gone, and the bot
-// died in all three runs (it had finished two of three).
+// died in all three runs (it had finished two of three). Vanilla's blows
+// reach any height (P_CheckMeleeRange: within BLOW_RANGE, centre to
+// centre, and in sight): one that has blows, stopped by a step, a ledge or
+// bars so near the player that they reach it from there, can come at it
+// (the user; Doom II MAP05, E3M6: imps in a pit clawed the bot at its edge
+// from 41 and 52 units, and were left alone after two shots each, the bot
+// passing by again and again, until they killed it). And one whose blow
+// hurt the player, from within BLOW_REACH, can come at it for STRUCK_TICS
+// after, whatever the straight line says (MAP05: the struck imp alone was
+// fought, the three beside it still left alone).
+#define BLOW_RANGE 60.0
 #define REACH_TICS 17
 #define REACH_PIECE 128.0
 #define MAX_REACH_MEMO 64
@@ -600,6 +612,8 @@ extern void A_SPosAttack();
 #define OUT_SHARE 0.5
 #define COMFY_AMMO 0.75
 #define UNCOMFY_AMMO 0.5
+#define STRUCK_TICS (30 * TICRATE)
+#define MAX_STRUCK 8
 
 // Barrels (MT_BARREL, 20 health): dead, one blows up 12 to 15 tics later
 // (S_BEXP to A_Explode), hurting whatever can see it for BLAST less the
@@ -785,6 +799,18 @@ extern void A_SPosAttack();
 // spot until HOLD_MOST was up, 10 s).
 #define HOLD_STALL (2 * TICRATE)
 
+// Under fire while holding (the user, E3M6: held 16.5 s short of an area
+// with three monsters asleep inside, the bot stood sidestepping fireballs
+// from imps on the floor below and a cacodemon's from beyond - waiting
+// brings only those inside that can come): after HOLD_FIRE hits or
+// sidesteps from monsters that cannot come at the player, or in another
+// area than the one held and the player's own (not in a door or lift, as
+// those that come out are), the hold is over, the route goes on, and the
+// area is not held off from again for HOLD_SKIP. Those that cannot come
+// count wherever they are (E3M6 again: held 16.1 s, the imps in the pit
+// below this time inside the area held).
+#define HOLD_FIRE 3
+
 // Ducking (plan, 7.8: C4; the user: some threats are answered by getting
 // out of sight, not by dodging): an arch-vile winding up its flame (it
 // lands as the vile enters A_VileAttack, 66 tics after the attack starts,
@@ -852,7 +878,10 @@ extern void A_SPosAttack();
 // waiting at a door or lift - and steps away from it until it is BLOW_SAFE
 // off, where the autoaim may find it (the user, Doom II MAP03: an imp at the
 // top clawed the bot riding the lift up for 25, vanilla's blows reaching
-// any height).
+// any height). So too from an awake one there whose blows would reach the
+// player (WayClear), before they do (Doom II MAP05: imps in a pit under the
+// edge the route ran along, fought from further off as the shots found
+// them, clawed the bot each time it came back to the edge).
 #define BLOW_REACH 96.0
 #define BLOW_SAFE 160.0
 #define BLOW_HOLD 35
@@ -1152,9 +1181,10 @@ static boolean blocking_wanted;
 static k_vec2_t blocking_at;
 
 // Stepping away from a blast about to go off, or from a monster's blows
-// (dodging_blow), at DODGE_SPEED.
+// (dodging_blow: from blow_mo), at DODGE_SPEED.
 static boolean dodging;
 static boolean dodging_blow;
+static const mobj_t *blow_mo;
 static boolean dodging_primed;
 static const mobj_t *primed_mo;     // the primed barrel stepped away from last
 static int primed_tics;             // and for how long in all
@@ -1172,9 +1202,10 @@ static int battle_way = -1;
 // Holding short of an area that is not safe (HOLD_AHEAD): which, where the
 // route goes in, where the player stands (creeping on to hold_end, along
 // the way creeping goes, its point crept toward next), since when, the
-// tics with nothing worth fighting, and whether it has crept; the area
-// gone into after a hold, until when; the hold given up as its door shut,
-// its start, and until when it is taken up again from there.
+// tics with nothing worth fighting, and whether it has crept, the hits and
+// sidesteps from outside (HOLD_FIRE); the area gone into after a hold,
+// until when; the hold given up as its door shut, its start, and until when
+// it is taken up again from there.
 static boolean holding;
 static int hold_area;
 static k_vec2_t hold_spot;
@@ -1185,6 +1216,8 @@ static int creep_next;
 static int hold_since;
 static int hold_quiet;
 static boolean hold_crept;
+static int hold_fire;
+static const mobj_t *hold_fire_what;    // the projectile last counted
 static double hold_nearest;         // the nearest to the spot lately, and the
 static int hold_stall;              // tics since (HOLD_STALL)
 static int hold_skip_area = -1;
@@ -1237,6 +1270,16 @@ typedef struct
 } reachmemo_t;
 
 static reachmemo_t reach_memo[MAX_REACH_MEMO];
+
+// Monsters whose blows hurt the player, and until when they can come at it
+// (STRUCK_TICS).
+typedef struct
+{
+    const mobj_t *mo;
+    int until;
+} struck_t;
+
+static struck_t struck[MAX_STRUCK];
 
 // Comfy: those that cannot come at the player are fought as any; and the
 // shots on the way at the target that cannot.
@@ -1712,21 +1755,93 @@ static void AttackerName(const player_t *player, char *buf, int buf_len)
     }
 }
 
+// A monster's blow hurt the player from `distance` off: it can come at the
+// player for STRUCK_TICS (Reaches) - logged if it was judged one that
+// cannot.
+static void Strike(const mobj_t *mo, double distance)
+{
+    int i, slot = 0;
+
+    for (i = 0; i < MAX_STRUCK; ++i)
+    {
+        if (struck[i].mo == mo)
+        {
+            slot = i;
+            break;
+        }
+
+        if (struck[i].until < struck[slot].until)
+        {
+            slot = i;
+        }
+    }
+
+    for (i = 0; i < MAX_REACH_MEMO; ++i)
+    {
+        if (reach_memo[i].mo == mo && !reach_memo[i].reaches
+         && (struck[slot].mo != mo || leveltime >= struck[slot].until))
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s's blow reached the player from %.0f units "
+                  "off - it can come at the player after all, for %d s", ThingName(mo->type),
+                  distance, STRUCK_TICS / TICRATE);
+            break;
+        }
+    }
+
+    struck[slot].mo = mo;
+    struck[slot].until = leveltime + STRUCK_TICS;
+}
+
+static int IndexOf(const mobj_t *mo);
+static boolean Reaches(int index);
+
+// A hit on the player, or a sidestep (out of the way of `what`, once for
+// each: a fireball can start a sidestep a few times as it comes), while
+// holding, from a monster waiting does not bring (HOLD_FIRE): one that
+// cannot come at the player, or one outside the area held - in another
+// area than that and the player's own, not in a door or lift.
+static void FireOnHold(const mobj_t *from, const mobj_t *what, k_vec2_t me)
+{
+    const k_areamap_t *areas = K_Area_Get();
+    int area, i;
+
+    if (!holding || from == NULL || !IsMonster(from) || (what != NULL && what == hold_fire_what))
+    {
+        return;
+    }
+
+    area = K_Area_Of(K_Map_CellAt(ToMap(from->x), ToMap(from->y)));
+    i = IndexOf(from);
+
+    if ((i >= 0 && !Reaches(i))
+     || (area != hold_area && area != K_Area_Of(K_Map_CellAt(me.x, me.y))
+         && (area < 0 || !areas->areas[area].passage)))
+    {
+        ++hold_fire;
+        hold_fire_what = what;
+    }
+}
+
 // Hits from monsters and blasts; not from floors that hurt, which come
 // every 32 tics and are counted by the route (k_path.c). A projectile's
 // (k_threat.h) with how long it was seen coming, and what the player was
-// doing about it, and counted.
+// doing about it, and counted. A monster's blow (no projectile, no bullet,
+// from within BLOW_REACH) marks it as one that can come at the player
+// (Strike).
 static void LogHits(const player_t *player)
 {
     const k_navstatus_t *nav = K_Nav_GetStatus();
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     char name[64];
     const char *by;
     int damage, seen, foreseen;
 
     if (last_health >= 0 && player->health < last_health && player->attacker != NULL)
     {
+        const mobj_t *attacker = player->attacker;
+
         damage = last_health - player->health;
-        by = player->attacker != player->mo ? K_Threat_HitBy(&seen, &foreseen) : NULL;
+        by = attacker != player->mo ? K_Threat_HitBy(&seen, &foreseen) : NULL;
 
         if (by != NULL)
         {
@@ -1758,9 +1873,19 @@ static void LogHits(const player_t *player)
                   player->health);
         }
 
-        if (player->attacker != player->mo)
+        if (attacker != player->mo)
         {
+            k_vec2_t from = { ToMap(attacker->x), ToMap(attacker->y) };
+            double distance = Distance(me, from);
+
             hurt_tic = leveltime;
+            FireOnHold(attacker, NULL, me);
+
+            if (by == NULL && IsMonster(attacker) && !Kind(attacker->type)->hitscan
+             && distance < BLOW_REACH)
+            {
+                Strike(attacker, distance);
+            }
         }
     }
 
@@ -2094,18 +2219,23 @@ static void Track(k_vec2_t me, const k_monster_t *monster, boolean same)
 // (monsters do not step off ledges, P_TryMove). A door it can open counts
 // as open (P_UseSpecialLine: monsters work manual doors, not secret ones);
 // one that flies heeds no floors. In pieces of REACH_PIECE, for the lines
-// near each.
+// near each. Stopped short by a line that is no wall nor shut, so near the
+// player that its blows reach it over the line (BLOW_RANGE), one that has
+// blows comes at it after all.
 static boolean WayClear(const k_monster_t *monster, const mobj_t *mo, k_vec2_t me)
 {
     const k_map_t *map = K_Map_Get();
     boolean flies = (mo->flags & MF_FLOAT) != 0;
     k_vec2_t a = monster->at;
     double dx = me.x - a.x, dy = me.y - a.y;
-    int pieces = (int) (sqrt(dx * dx + dy * dy) / REACH_PIECE) + 1;
+    double length = sqrt(dx * dx + dy * dy);
+    int pieces = (int) (length / REACH_PIECE) + 1;
+    double stop = 2.0;      // along the line, monster 0 to player 1: where it is stopped
+    boolean wall = false;   // and whether by a wall, or a shut sector
     int found[128];
     int p, k, count;
 
-    for (p = 0; p < pieces; ++p)
+    for (p = 0; p < pieces && stop > 1.0; ++p)
     {
         k_vec2_t p0 = { a.x + dx * p / pieces, a.y + dy * p / pieces };
         k_vec2_t p1 = { a.x + dx * (p + 1) / pieces, a.y + dy * (p + 1) / pieces };
@@ -2122,7 +2252,7 @@ static boolean WayClear(const k_monster_t *monster, const mobj_t *mo, k_vec2_t m
             double s1 = ex * (p1.y - line->v1.y) - ey * (p1.x - line->v1.x);
             double t0 = (p1.x - p0.x) * (line->v1.y - p0.y) - (p1.y - p0.y) * (line->v1.x - p0.x);
             double t1 = (p1.x - p0.x) * (line->v2.y - p0.y) - (p1.y - p0.y) * (line->v2.x - p0.x);
-            double from_floor, from_ceiling, to_floor, to_ceiling;
+            double from_floor, from_ceiling, to_floor, to_ceiling, at, opening;
             boolean front;
 
             // Not crossed by this piece.
@@ -2131,9 +2261,17 @@ static boolean WayClear(const k_monster_t *monster, const mobj_t *mo, k_vec2_t m
                 continue;
             }
 
-            if (line->back_sector < 0 || (line->flags & (ML_BLOCKING | ML_BLOCKMONSTERS)))
+            at = (p + s0 / (s0 - s1)) / pieces;
+
+            if (line->back_sector < 0)
             {
-                return false;
+                if (at < stop)
+                {
+                    stop = at;
+                    wall = true;
+                }
+
+                continue;
             }
 
             if (line->special == 1 && !(line->flags & ML_SECRET))
@@ -2147,20 +2285,26 @@ static boolean WayClear(const k_monster_t *monster, const mobj_t *mo, k_vec2_t m
                                 &from_ceiling);
             K_Map_SectorHeights(front ? line->back_sector : line->front_sector, &to_floor,
                                 &to_ceiling);
+            opening = SDL_min(from_ceiling, to_ceiling) - SDL_max(from_floor, to_floor);
 
-            if (SDL_min(from_ceiling, to_ceiling) - SDL_max(from_floor, to_floor) < monster->height
-             || (!flies && fabs(to_floor - from_floor) > MAX_CLIMB))
+            if (((line->flags & (ML_BLOCKING | ML_BLOCKMONSTERS)) || opening < monster->height
+                 || (!flies && fabs(to_floor - from_floor) > MAX_CLIMB))
+             && at < stop)
             {
-                return false;
+                stop = at;
+                wall = opening <= 0.0;
             }
         }
     }
 
-    return true;
+    return stop > 1.0
+        || (!wall && mo->info->meleestate != S_NULL
+            && (1.0 - stop) * length + monster->radius < BLOW_RANGE);
 }
 
 // Whether the monster (by its place in this tic's list) could come at the
-// player: within CLOSE_REACH, or the way clear, judged every REACH_TICS.
+// player: within CLOSE_REACH, its blow having hurt the player lately
+// (STRUCK_TICS), or the way clear, judged every REACH_TICS.
 static boolean Reaches(int index)
 {
     const k_monster_t *monster = &monsters[index];
@@ -2172,6 +2316,14 @@ static boolean Reaches(int index)
     if (monster->distance < CLOSE_REACH)
     {
         return true;
+    }
+
+    for (k = 0; k < MAX_STRUCK; ++k)
+    {
+        if (struck[k].mo == mo && leveltime < struck[k].until)
+        {
+            return true;
+        }
     }
 
     for (k = 0; k < MAX_REACH_MEMO; ++k)
@@ -4919,20 +5071,51 @@ static int PrimedNear(const player_t *player)
 
 // The monster that hurt the player in the last BLOW_HOLD tics from within
 // BLOW_REACH (BLOW_SAFE once stepping away from it) where the shots cannot
-// find it, or -1.
+// find it; else the nearest one there, awake, in sight, not fighting
+// another, whose blows would reach the player (WayClear) - and once
+// stepping away from one, that one while it is within BLOW_SAFE and the
+// shots cannot find it (Doom II MAP06: a spectre in and out of sight, or
+// of reach, the step away begun and over ten times in 0.7 s); or -1.
 static int BlowFrom(const player_t *player)
 {
-    int i;
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double reach = dodging_blow ? BLOW_SAFE : BLOW_REACH;
+    int best = -1, i;
 
-    if (leveltime - hurt_tic > BLOW_HOLD)
+    if (dodging_blow)
     {
-        return -1;
+        i = IndexOf(blow_mo);
+
+        if (i >= 0 && !monsters[i].shootable && monsters[i].distance < BLOW_SAFE)
+        {
+            return i;
+        }
     }
 
-    i = IndexOf(player->attacker);
+    if (leveltime - hurt_tic <= BLOW_HOLD)
+    {
+        i = IndexOf(player->attacker);
 
-    return i >= 0 && !monsters[i].shootable
-        && monsters[i].distance < (dodging_blow ? BLOW_SAFE : BLOW_REACH) ? i : -1;
+        if (i >= 0 && !monsters[i].shootable && monsters[i].distance < reach)
+        {
+            return i;
+        }
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+
+        if (monster->awake && monster->visible && !monster->shootable && !monster->infighting
+         && monster->distance < reach && monster_mobjs[i]->info->meleestate != S_NULL
+         && (best < 0 || monster->distance < monsters[best].distance)
+         && WayClear(monster, monster_mobjs[i], me))
+        {
+            best = i;
+        }
+    }
+
+    return best;
 }
 
 static void StopDodge(void)
@@ -5014,6 +5197,11 @@ static void DodgeMissiles(const player_t *player)
         }
 
         status.dodges += !dodging_missile;
+
+        if (!dodging_missile)
+        {
+            FireOnHold(hit.by, hit.mo, me);
+        }
     }
 
     dodging = true;
@@ -5087,6 +5275,7 @@ static void UpdateDodge(const player_t *player)
     }
 
     from = blast >= 0 ? barrels[blast].at : monsters[blow].at;
+    blow_mo = blast >= 0 ? NULL : monster_mobjs[blow];
 
     for (k = 0; k < MOVE_WAYS; ++k)
     {
@@ -5127,9 +5316,10 @@ static void UpdateDodge(const player_t *player)
         else
         {
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "stepping away from the %s at (%.0f,%.0f), "
-                  "%.0f units off - it hurts the player where the shots cannot find it; "
-                  "the route waits", monsters[blow].name, from.x, from.y,
-                  monsters[blow].distance);
+                  "%.0f units off - %s where the shots cannot find it; the route waits",
+                  monsters[blow].name, from.x, from.y, monsters[blow].distance,
+                  monster_mobjs[blow] == player->attacker && leveltime - hurt_tic <= BLOW_HOLD
+                  ? "it hurts the player" : "its blows would reach the player");
         }
 
         dodging = true;
@@ -5549,11 +5739,13 @@ static void UpdateHold(const player_t *player)
             StopHold(NULL);
         }
         else if ((left < 1.0 && hold_quiet >= CREEP_WAIT) || leveltime - hold_since >= HOLD_MOST
-              || hold_stall >= HOLD_STALL)
+              || hold_stall >= HOLD_STALL || hold_fire >= HOLD_FIRE)
         {
             hold_skip_area = hold_area;
             hold_skip_until = leveltime + HOLD_SKIP;
-            StopHold(hold_stall >= HOLD_STALL ? "the spot is out of reach"
+            StopHold(hold_fire >= HOLD_FIRE ? "under fire from monsters waiting does not bring "
+                                              "(outside it, or that cannot come)"
+                     : hold_stall >= HOLD_STALL ? "the spot is out of reach"
                      : left < 1.0 ? "crept in, nothing came, nothing worth fighting"
                      : "held long enough");
         }
@@ -5613,6 +5805,8 @@ static void UpdateHold(const player_t *player)
                    ? hold_shut_since : leveltime;
         hold_quiet = 0;
         hold_crept = false;
+        hold_fire = 0;
+        hold_fire_what = NULL;
         hold_nearest = 1.0e9;
         hold_stall = 0;
         hold_shut_area = -1;
@@ -6246,8 +6440,10 @@ void K_Combat_Reset(void)
     blocking_wanted = false;
     dodging = false;
     dodging_blow = false;
+    blow_mo = NULL;
     hurt_tic = -BLOW_HOLD - 1;
     memset(reach_memo, 0, sizeof(reach_memo));
+    memset(struck, 0, sizeof(struck));
     comfy = false;
     out_shots = 0;
     dodging_primed = false;
@@ -6260,6 +6456,8 @@ void K_Combat_Reset(void)
     missile_on_way = false;
     battle_way = -1;
     holding = false;
+    hold_fire = 0;
+    hold_fire_what = NULL;
     hold_skip_area = -1;
     hold_skip_until = 0;
     hold_shut_area = -1;

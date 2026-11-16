@@ -31,6 +31,10 @@ typedef struct
     int tic;                // tics from now
     double cost;
     int lethal;             // it could kill
+    const struct mobj_s *mo;    // the projectile or lost soul, the monster
+                                // winding up; compared only
+    const struct mobj_s *by;    // the monster it comes from (a projectile's
+                                // shooter), compared only
 } k_threathit_t;
 
 // Called by combat on every level load.

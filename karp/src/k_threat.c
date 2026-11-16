@@ -824,6 +824,8 @@ double K_Threat_PathCost(const k_vec2_t *path, int tics, double floor, k_threath
             worst->tic = tic;
             worst->cost = cost;
             worst->lethal = lethal;
+            worst->mo = threat->mo;
+            worst->by =(threat->mo->flags & MF_MISSILE) ? threat->mo->target : threat->mo;
         }
     }
 
