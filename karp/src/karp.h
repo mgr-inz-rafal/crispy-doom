@@ -24,7 +24,7 @@ void K_EnableQuitOnExit(void);
 // -karpsalt [seed]: runs differ, from the seed given or the clock.
 void K_EnableSalt(void);
 
-// -karpdemo: the bot plays on by itself for ever (k_demo.h); implies
+// -karpdemo: the bot plays on by itself, episode after episode (k_demo.h); implies
 // -autoplay and salt, starts a game at once, overrides -quitonexit.
 void K_EnableDemo(void);
 

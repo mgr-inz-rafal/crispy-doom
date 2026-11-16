@@ -4,7 +4,8 @@
 //	level after level, for as long as the game runs - an exhibition PC
 //	showing Doom all day. Each level's start is saved; a death loads it
 //	again with another salt; intermissions and text screens move on by
-//	themselves; the end of the game starts it again from the first level.
+//	themselves; the end of an episode starts the next (after the last, the
+//	first).
 //
 //	Plain C types only.
 //

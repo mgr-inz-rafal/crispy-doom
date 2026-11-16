@@ -1484,18 +1484,22 @@ unless `-karpsalt` gives one), starts the game at once and overrides `-quitonexi
   parts from the one before. A level still going after 15 minutes (the bot stuck) is retried the
   same way - never a frozen screen. With no save of the level, it starts again from scratch.
   The bot need not clear every level with every salt: some salt clearing it is enough (the user).
+  Tried for ever, never skipped (the user: a level no salt clears sends Karp back to the drawing
+  table).
 - **The intermission** moves on after 5 s.
 - **A text screen between levels** (Doom II) stays as long as Doom 1 shows its own by itself: 3
   tics a letter, then 250 (`F_Ticker`'s TEXTSPEED, TEXTWAIT).
-- **The end of the game** - every Doom 1 finale (an episode's end), Doom II's after MAP30 (No
-  Rest for the Living's MAP08, the Master Levels' MAP20 or 21) - shows the text, then Doom 1's
-  end picture for 30 s or Doom II's cast of characters for 60 s, and starts a new game from E1M1
-  or MAP01, at the skill given.
+- **The end of an episode** - every Doom 1 finale, Doom II's after MAP30 (No Rest for the
+  Living's MAP08, the Master Levels' MAP20 or 21) - shows the text, then Doom 1's end picture for
+  30 s or Doom II's cast of characters for 60 s, and starts the next episode the WADs hold, at
+  the skill given (the user): Doom 1's E2 to E4, SIGIL's E5 and E6 (whose first level is there,
+  `P_GetNumForMap`); Doom II's No Rest for the Living as episode 2, the Master Levels as 3, as
+  crispy's menu has them. After the last, the first again.
 - **The title screen** (a game ended from the menu) starts a new game after 10 s.
 - Nothing waits while the game is paused or a menu is open; nothing happens in a netgame.
 - Logged: "demo: saving the start of MAP06 (try 1) to ...", "demo: died on MAP06 - loading its
   start, try 2", "demo: intermission over - on to the next level", "demo: the end of the
-  episode - a new game from the first level".
+  episode - a new game from episode 2".
 
 Loading a savegame needed Karp's copy of the level rebuilt (H11): `G_DoLoadGame` sets the level up
 (H4) and only then restores the saved world, every monster, item and mover replaced.

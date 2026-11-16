@@ -2389,9 +2389,9 @@ void D_DoomMain (void)
     // [Karp] Demo mode: the bot plays on by itself, for ever - a game
     // started at once (from -warp's level, or the first), each level's
     // start saved, a death retried from it with another salt, the
-    // intermissions and text screens moving on by themselves, the game
-    // begun again from the first level once it ends. Implies -autoplay and
-    // -karpsalt.
+    // intermissions and text screens moving on by themselves, the next
+    // episode begun once one ends (after the last, the first). Implies
+    // -autoplay and -karpsalt.
     //
 
     if (M_CheckParm("-karpdemo"))

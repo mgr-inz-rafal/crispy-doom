@@ -9,13 +9,15 @@
 //	  salt (k_salt.h), the run then parting from the one before - never the
 //	  same death twice; so does a level still going after LEVEL_MOST (the
 //	  bot stuck: never a frozen screen). With no save of this level (lost,
-//	  or the bot died at once), the level starts again from scratch;
+//	  or the bot died at once), the level starts again from scratch. Tried
+//	  for ever, never skipped (the user: a level no salt clears is one Karp
+//	  must learn to play);
 //	- an intermission moves on after INTERMISSION_WAIT;
 //	- a text screen between levels (Doom II) stays as long as Doom 1 shows
 //	  its own by itself - the text written out, and TEXT_WAIT more;
-//	- the end of the game - the last level's text, then Doom 1's end
-//	  picture for END_WAIT, or Doom II's cast of characters for CAST_WAIT -
-//	  starts it again from the first level (E1M1, MAP01);
+//	- the end of an episode - its last text, then Doom 1's end picture for
+//	  END_WAIT, or Doom II's cast of characters for CAST_WAIT - starts the
+//	  next one the WADs hold, after the last the first again (NextEpisode);
 //	- the title screen (a game ended from the menu) starts a new game after
 //	  TITLE_WAIT.
 //
@@ -29,10 +31,12 @@
 
 #include "SDL.h"
 
+#include "crispy.h"
 #include "d_main.h"
 #include "doomstat.h"
 #include "g_game.h"
 #include "m_misc.h"
+#include "p_local.h"
 #include "p_saveg.h"
 
 #include "k_demo.h"
@@ -189,10 +193,35 @@ static void Retry(const char *why)
     dead_tics = 0;
 }
 
-static void NewGame(const char *why)
+// The episode after this one (the user): the next whose first level the
+// WADs loaded hold - Doom 1's E2 to E4 (registered, Ultimate), SIGIL's E5
+// and E6; Doom II's No Rest for the Living as 2 and the Master Levels as 3,
+// as crispy's menu has them - else the first again.
+static int NextEpisode(void)
 {
-    K_Log(K_LOG_SYS, K_LOG_INFO, "demo: %s - a new game from the first level", why);
-    G_DeferedInitNew(startskill, 1, 1);
+    int episode;
+
+    if (gamemode == commercial)
+    {
+        return gameepisode < 2 && crispy->havenerve ? 2
+             : gameepisode < 3 && crispy->havemaster ? 3 : 1;
+    }
+
+    for (episode = gameepisode + 1; episode <= 9; ++episode)
+    {
+        if (P_GetNumForMap(episode, 1, false) >= 0)
+        {
+            return episode;
+        }
+    }
+
+    return 1;
+}
+
+static void NewGame(const char *why, int episode)
+{
+    K_Log(K_LOG_SYS, K_LOG_INFO, "demo: %s - a new game from episode %d", why, episode);
+    G_DeferedInitNew(startskill, episode, 1);
 }
 
 // Whether the finale shown ends the game: every one in Doom 1 (the end of
@@ -272,12 +301,12 @@ static void TickFinale(void)
         }
         else if (state_tics >= text_tics + CAST_WAIT)
         {
-            NewGame("the end of the game, the cast of characters shown");
+            NewGame("the end of the episode, the cast of characters shown", NextEpisode());
         }
     }
     else if (state_tics >= text_tics + END_WAIT)
     {
-        NewGame("the end of the episode");
+        NewGame("the end of the episode", NextEpisode());
     }
 }
 
@@ -306,7 +335,7 @@ void K_Demo_Tick(void)
     if (title_tics >= TITLE_WAIT && gameaction == ga_nothing)
     {
         title_tics = 0;
-        NewGame("the title screen");
+        NewGame("the title screen", 1);
         return;
     }
 
