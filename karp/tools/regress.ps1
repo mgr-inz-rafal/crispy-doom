@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Each map is a visible game (-autoplay -karpconsole -nomonsters -quitonexit, but see -NoQuit),
-    all started together, silent (-nosound) when there are several; a single map plays with sound. crispy
+    all started together, silent (-nosound; but see -Sound). crispy
     keeps karp.log, karp.cfg and crispy-doom.cfg in the exe's folder (its config directory on
     Windows), so instances sharing one folder would overwrite each other's files: each map runs
     from its own folder holding a copy of the exe, its DLLs and the cfgs. A map still running
@@ -47,6 +47,10 @@
     on past the intermission screen (press Space or fire), nor respawn when it dies; the time
     limit still applies, so pass a long -Seconds. The line printed is for the first map.
 
+.PARAMETER Sound
+    Play with sound. Off by default: test runs are often started several at once, each its own
+    call to this script, and every game would play.
+
 .PARAMETER Build
     The folder with crispy-doom.exe and its DLLs. Defaults to build\src\Release in this repo.
 
@@ -81,6 +85,7 @@ param(
     [switch]$Monsters,
     [Nullable[uint32]]$Salt = $null,
     [switch]$NoQuit,
+    [switch]$Sound,
     [string]$Build = (Join-Path $PSScriptRoot '..\..\build\src\Release'),
     [string]$Out = (Join-Path $PSScriptRoot '..\..\build\karp-regress')
 )
@@ -114,8 +119,9 @@ if (-not $NoQuit) {
     $play += @('-quitonexit')
 }
 
-# Several games at once would only make noise; one is worth hearing.
-if ($Maps.Count -gt 1) {
+# Silent unless asked: runs are often several calls at once (the user: every
+# test run's game played sound, one calls each with a single map).
+if (-not $Sound) {
     $play += @('-nosound')
 }
 
