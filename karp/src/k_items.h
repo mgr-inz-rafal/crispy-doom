@@ -17,6 +17,9 @@
 extern "C" {
 #endif
 
+// The spots on other floors kept for an item (k_item_t: off).
+#define K_ITEM_OFF 4
+
 typedef enum
 {
     K_ITEM_HEALTH,
@@ -36,6 +39,10 @@ typedef struct
     int reachable;          // some spot the player can stand at touches it
                             // (K_Graph_PickupSpot): not under a tree, say
     k_vec2_t spot;          // reachable: where to go to pick it up
+    k_vec2_t off[K_ITEM_OFF];   // reachable: spots on the floors around that
+    int num_off;                // touch it too (K_Graph_PickupSpotsOff) - for
+                                // one on a ledge, or in a recess too low to
+                                // stand in
     double worth;           // what picking it up would give now, roughly in
                             // health points; 0 if the player would not pick
                             // it up, or it would give nothing that matters
@@ -80,6 +87,10 @@ typedef struct
                             // boss on the player (K_Combat_Boss), then worth
                             // breaking it off for close by (urgent), dashed
                             // for through monsters; with a boss, run for
+    int swept;              // it goes on to the next level and the player is
+                            // short of it (k_items.c: SWEEP_STOCK): health,
+                            // armour, ammo, a weapon, a backpack - worth a
+                            // long way while the brain sweeps before the exit
 } k_item_t;
 
 // Called by Karp on every level load.
@@ -89,6 +100,16 @@ void K_Items_Reset(void);
 // lie where, and their worth now. Items keep their index for the level; one
 // dropped later (a monster's clip) gets a new one.
 void K_Items_Tick(void);
+
+// Set by the brain while it sweeps the level it is about to leave, the
+// arsenal going on to the next: what is short (swept) is worth a long way.
+void K_Items_Sweep(int on);
+
+// How many items lying about are worth a sweep (swept) from where the
+// player is - a guess: a spot touches them, they are not too well guarded,
+// and the detour a sweep allows for each covers there and back as the crow
+// flies.
+int K_Items_Sweepable(void);
 
 int K_Items_Count(void);
 const k_item_t *K_Items_Get(int index);

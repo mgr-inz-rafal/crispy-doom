@@ -3920,6 +3920,57 @@ Who controls the player in a fight (the user's model):
   and 6, E3M8 1 and 0, E4M6 0 and 1, E4M8 1 and 1) - within the noise (E4M8's head finished
   four of four in one batch, none in the next); a new spot for want of a fight 0 or 1 times a
   run, no churn.
+- **E2M9 and the arsenal carried on** (the user, 2026-11-17: an Episode 2 run from E2M1, four
+  deaths on E2M9; "as a human I would do things pretty much 100% differently on this map" -
+  loot without waking the barons, run for the cacodemons' room and its ammo, set them on each
+  other; but the bot "is still not very greedy" with ammo). Found:
+  - E2M9 is begun with what E2M1 to E2M5 left: the user's run brought 0 bullets, 42 shells, 0
+    cells and 2 rockets (no launcher) to four barons (4000 health) and ten cacodemons (4000) -
+    E2M2 to E2M5 have a rocket launcher, about 36 rockets and 440 cells lying at skill 3.
+  - Looting first cannot be done there: the barons face the start and wake on load. Running for
+    the other room and infighting need the whole map: left out.
+  - From the E2M9 save, 13 salts: the bot opened door 86 at 26 to 33 s with barons alive in 5,
+    for the switch or an item beyond it, and died in 4 of them; after the barons, low on ammo,
+    the cacodemons came through the narrow way to the hub, and the run for the shells behind
+    them stalled - kept off as hopeless at 90 units, broken off for the run, kept off again for
+    30 to 40 s, the route growing from 681 to 1371 (salt 13). Left: no door into a monster room
+    while monsters awake behind are on the player.
+  - The chainsaw against cacodemons and pain elementals the guns fall short of: done (commit
+    "The chainsaw against cacodemons...").
+- **A sweep before the exit** (the user: not the detours changed, but a guess just before
+  leaving whether too much was left lying - then even the longest detours, for cells and
+  rockets, armour - or "nah, we probably have enough for the next level"; limits generous, 5
+  minutes and about 16000). Done (`k_brain.c`: `UpdateSweep`; `k_items.c`: `Swept`):
+  once a level, GO TO EXIT the only goal and the way left to the exit 1024 or less, while the
+  arsenal goes on (not an episode's last level, not -nomonsters), if anything lying about is
+  worth it, the level is swept: health, armour better than worn, ammo of a type below half the
+  most the player may carry (rockets without the launcher too), a weapon not held or one whose
+  ammo is short, a backpack - 1000 units of detour a point of worth with those beside it, up to
+  16000, less the more it is guarded, none from 20 health at risk; ammo and weapons are worth
+  something then with every monster dead too. Over once nothing is left worth it, or after 5
+  minutes; the route to the exit goes on meanwhile. Logged: "about to leave - 15 items lying
+  about worth taking on to the next level, swept for", the arsenal at each level's start and
+  before and after a sweep.
+  Episode 2 from E2M1, salts 443, 71, 7 and 13, 25 minutes, head (the arsenal logged) against
+  new: E2M9 begun with 206 to 315 bullets, 34 to 68 shells, 0 to 20 cells, 1 to 5 rockets
+  (head 0 to 292, 21 to 49, 0 to 2, 1 to 2); E2M7 with 97, 99 and 100 shells and 20 to 36
+  rockets (head 16 to 63 and 8 to 10). E2M9 cleared in all 8, deaths 3 and 3. Slower: E2M2 by
+  about 50 s, E2M6 by 100 to 200 s (a sweep of 3.5 minutes); E2M4 faster (more ammo). Deaths
+  elsewhere: new once on E2M2 (a floor that hurts) and on E2M7 (an imp).
+- **Items touched from the floors around** (the user, E2M2: the blue armour at (112,368), in a
+  recess 32 high, ignored in every sweep with the bot right by it, at 70 armour): its only
+  spot was where it lies, which the route cannot reach; the engine picks it up from the floor
+  beside it. Done, as for keys on a ledge: an item's spots on the floors around that touch it
+  (`K_Graph_PickupSpotsOff`, up to 4) count too - its detour from the best of them
+  (`ItemSpotDetour`), and the goal goes for any (the route picks). E2M2 from a pistol start,
+  salts 443 and 13: picked up at 59.5 and 94.0 s ("1 of 2 reachable").
+- **Items near crowded out by the ammo running out** (the user, E2M2: a green armour on the
+  floor, the bot running close by it at 0 armour, never gone for). The two items looked at by
+  route each second are the best by reach over distance; with firepower LOW the shells pay any
+  detour (reach 1e6), so shells 2000 off scored 480 and the armour 240 off, unguarded, reach
+  1024, scored 3 - the looks all went to shells that then had no way there. Done: ranked as if
+  none paid more than 3000 (`RANK_REACH`); which of those that fit is gone for is unchanged.
+  Salts 443 and 13: the green armour gone for at 4.9 and 5.3 s, 544 out of the way.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

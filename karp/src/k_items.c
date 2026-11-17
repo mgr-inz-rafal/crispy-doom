@@ -11,7 +11,8 @@
 //	comfortable level is worth more a round, the less there is, and any
 //	ammo there is room for is worth a short detour, however much the player
 //	has. Nothing it would not pick up counts. With no monster left alive,
-//	weapons, ammo and the power-ups for fighting are worth nothing.
+//	weapons, ammo and the power-ups for fighting are worth nothing - but
+//	while the brain sweeps before the exit.
 //
 //	The worth, weighted by need, becomes how far out of its way the player
 //	may go for the item (plan, 7.5), and the more an item is worth, the
@@ -25,7 +26,9 @@
 //	ammo running out pays for any detour at all, unguarded. Items
 //	lying together are picked up on one trip, so each counts with those
 //	beside it (Doom II MAP02: three stimpacks side by side, 30 health on
-//	one trip, were left at 25 health as worth 10 each).
+//	one trip, were left at 25 health as worth 10 each). About to leave the
+//	level, while the brain sweeps it (SWEEP_UNITS), what goes on to the
+//	next level and is short is worth a long way.
 //
 //	Some items are worth breaking a fight off for, close by (urgent):
 //	health when LOW or CRITICAL (not a lone health bonus), a weapon the
@@ -53,7 +56,10 @@
 //	the pistol alone, a weapon's guards count a quarter.
 //
 //	An item no spot the player can stand at touches - under a tree, a big
-//	column - is out of reach; under a barrel, until the barrel goes.
+//	column - is out of reach; under a barrel, until the barrel goes. One on
+//	a ledge, or in a recess too low to stand in, is touched from the floors
+//	around too (the user, E2M2: the blue armour at (112,368), in a recess 32
+//	high, was left "no way there" in every sweep, the bot right by it).
 //
 //	Items are found by place and sprite each tic, so each keeps its index
 //	for the level, and an item no longer found has been picked up.
@@ -111,6 +117,26 @@
 #define ROOM_REACH 512.0
 #define DROP_REACH 1024.0
 #define ROOM_DANGER 20.0
+
+// Sweeping before the exit (the user: a human finishes a level with far more
+// ammo, picking up whatever there is; E2M9 was begun with no bullets, 42
+// shells, no cells and 2 rockets, four barons in sight, after E2M2 to E2M5
+// had left a rocket launcher, about 36 rockets and 440 cells lying): while
+// the brain sweeps the level it is about to leave (K_Items_Sweep), what goes
+// on to the next level and is short (Swept) is worth a long way, however
+// far but for heavy guards (the user: two minutes' detour for a BFG and 400
+// cells lying unguarded is worth it, a hard fight across the level for one
+// plasma rifle is not) - SWEEP_UNITS of detour a point of worth with those
+// beside it (a clip or a health bonus far less), up to SWEEP_REACH, less the
+// more it is guarded, none from ROOM_DANGER: ammo of a type below
+// SWEEP_STOCK of the most the player may carry (above it, enough for the
+// next level), for a weapon held or not (rockets keep for the launcher); a
+// weapon not held, or one whose ammo is short; a backpack; armour better
+// than what is worn; health. Ammo, weapons and backpacks are worth something
+// then with no monster left alive, too.
+#define SWEEP_UNITS 1000.0
+#define SWEEP_REACH 16000.0
+#define SWEEP_STOCK 0.5
 
 // The same for health, to keep near 100 between fights (the user, Doom II
 // MAP10: at 40 health the bot went on into fights with hitscanners, stimpacks
@@ -199,6 +225,7 @@ typedef struct
     double weighted;        // its worth, weighted by need
     double most;            // the longest detour its need allows
     boolean running_out;    // it gives the ammo running out (RunningOut)
+    double sweep_reach;     // the detour a sweep would allow for it alone
 } entry_t;
 
 static entry_t *entries;
@@ -206,6 +233,7 @@ static int num_entries;
 static int capacity;
 static int buckets[BUCKETS];
 static double danger_here;
+static boolean sweep;               // the brain sweeps before the exit
 
 // P_GiveAmmo's clip sizes, and what a round of each is worth: clip,
 // shell, cell, rocket.
@@ -240,6 +268,7 @@ void K_Items_Reset(void)
 
     num_entries = 0;
     danger_here = 0.0;
+    sweep = false;
 
     for (i = 0; i < BUCKETS; ++i)
     {
@@ -546,6 +575,44 @@ static boolean GivesAmmo(const player_t *player, const entry_t *entry)
         || entry->sprite == SPR_BPAK;
 }
 
+// Whether the player is short of the ammo for the next level (SWEEP_STOCK).
+static boolean Short(const player_t *player, ammotype_t ammo)
+{
+    return ammo != am_noammo && player->ammo[ammo] < player->maxammo[ammo] * SWEEP_STOCK;
+}
+
+// Whether the item is worth a sweep before the exit (SWEEP_UNITS), worth
+// `carried` as the arsenal goes on: health or armour; ammo the player is
+// short of; a weapon not held, or one whose ammo is short; a backpack.
+static boolean Swept(const player_t *player, const entry_t *entry, double carried)
+{
+    ammotype_t ammo;
+    weapontype_t weapon;
+    int clips;
+
+    if (carried <= 0.0)
+    {
+        return false;
+    }
+
+    if (entry->item.kind == K_ITEM_HEALTH || entry->item.kind == K_ITEM_ARMOUR)
+    {
+        return true;
+    }
+
+    if (AmmoItem(entry->sprite, &ammo, &clips))
+    {
+        return Short(player, ammo);
+    }
+
+    if (WeaponItem(entry->sprite, &weapon))
+    {
+        return !player->weaponowned[weapon] || Short(player, weaponinfo[weapon].ammo);
+    }
+
+    return entry->sprite == SPR_BPAK;
+}
+
 // P_GiveArmor: only armour better than what is worn is taken, and it takes
 // a third (green) or a half (blue) of the damage.
 static double ArmourWorth(const player_t *player, int armour_class)
@@ -786,11 +853,13 @@ void K_Items_Tick(void)
     {
         entry_t *entry = &entries[i];
         k_item_t *item = &entry->item;
-        double weight = 1.0;
+        double weight = 1.0, carried;
         weapontype_t weapon;
 
         item->present = entry->seen == stamp;
-        item->worth = item->present ? Worth(player, entry, fights) : 0.0;
+        item->worth = item->present ? Worth(player, entry, fights || sweep) : 0.0;
+        carried = item->present ? Worth(player, entry, true) : 0.0;
+        item->swept = Swept(player, entry, carried);
         entry->running_out = item->worth > 0.0
                           && RunningOut(player, entry, condition->ammo == K_NEED_LOW);
         item->beats = item->worth > 0.0 && BeatsWith(player, entry);
@@ -804,12 +873,15 @@ void K_Items_Tick(void)
         entry->most = REACH_MOST;
 
         // Its guards and spot, about once a second; at once when it has been
-        // worth nothing for a while.
-        if (item->worth > 0.0
+        // worth nothing for a while. Those worth a sweep too, for the brain
+        // to judge one (K_Items_Sweepable).
+        if ((item->worth > 0.0 || item->swept)
          && ((leveltime + i) % LOOK_TICS == 0 || leveltime - entry->looked_tic > LOOK_TICS))
         {
             entry->guards = K_Combat_Danger(item->at.x, item->at.y, entry->z);
             item->reachable = K_Graph_PickupSpot(item->at, &item->spot);
+            item->num_off = item->reachable
+                          ? K_Graph_PickupSpotsOff(item->at, item->off, K_ITEM_OFF) : 0;
             entry->looked_tic = leveltime;
         }
 
@@ -821,6 +893,11 @@ void K_Items_Tick(void)
         {
             item->danger *= PISTOL_START_GUARDS;
         }
+
+        entry->sweep_reach = item->swept && item->reachable && item->danger < ROOM_DANGER
+                           ? SDL_min(carried * SWEEP_UNITS, SWEEP_REACH)
+                             * (1.0 - item->danger / ROOM_DANGER)
+                           : 0.0;
 
         switch (item->kind)
         {
@@ -910,6 +987,12 @@ void K_Items_Tick(void)
             item->reach = SDL_max(item->reach, ARMOUR_REACH * (1.0 - item->danger / ROOM_DANGER));
         }
 
+        if (sweep && item->swept && item->danger < ROOM_DANGER)
+        {
+            item->reach = SDL_max(item->reach, SDL_min(item->together * SWEEP_UNITS, SWEEP_REACH)
+                                               * (1.0 - item->danger / ROOM_DANGER));
+        }
+
         if (item->first && item->danger < ROOM_DANGER)
         {
             item->reach = SDL_max(item->reach, FIRST_REACH * (1.0 - item->danger / ROOM_DANGER));
@@ -932,6 +1015,27 @@ void K_Items_Tick(void)
                         || (entry->running_out && (condition->ammo == K_NEED_LOW
                                                    || condition->firepower == K_NEED_CRITICAL)));
     }
+}
+
+void K_Items_Sweep(int on)
+{
+    sweep = on;
+}
+
+int K_Items_Sweepable(void)
+{
+    const mobj_t *mo = players[consoleplayer].mo;
+    int count = 0, i;
+
+    for (i = 0; i < num_entries && mo != NULL; ++i)
+    {
+        const entry_t *entry = &entries[i];
+        double dx = entry->item.at.x - ToMap(mo->x), dy = entry->item.at.y - ToMap(mo->y);
+
+        count += entry->item.present && entry->sweep_reach >= 2.0 * sqrt(dx * dx + dy * dy);
+    }
+
+    return count;
 }
 
 int K_Items_Count(void)

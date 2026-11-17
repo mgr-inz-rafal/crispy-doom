@@ -200,7 +200,47 @@ void K_Condition_Tick(void)
               need_names[status.armour], status.armour_points);
     }
 
+    if (!judged)
+    {
+        K_Condition_LogArsenal("at the level's start");
+    }
+
     judged = true;
+}
+
+void K_Condition_LogArsenal(const char *when)
+{
+    static const char *weapon_names[NUMWEAPONS] =
+    {
+        "fist", "pistol", "shotgun", "chaingun", "rocket launcher", "plasma rifle", "BFG",
+        "chainsaw", "super shotgun"
+    };
+    static const char *ammo_names[NUMAMMO] = { "bullets", "shells", "cells", "rockets" };
+    const player_t *player = &players[consoleplayer];
+    char weapons[160] = "", ammo[160] = "", one[48];
+    int w, a;
+
+    for (w = wp_shotgun; w < NUMWEAPONS; ++w)
+    {
+        if (player->weaponowned[w])
+        {
+            M_StringConcat(weapons, weapons[0] != '\0' ? ", " : "", sizeof(weapons));
+            M_StringConcat(weapons, weapon_names[w], sizeof(weapons));
+        }
+    }
+
+    for (a = 0; a < NUMAMMO; ++a)
+    {
+        M_snprintf(one, sizeof(one), "%s%s %d of %d", a > 0 ? ", " : "", ammo_names[a],
+                   player->ammo[a], player->maxammo[a]);
+        M_StringConcat(ammo, one, sizeof(ammo));
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "arsenal %s: %d health, %d armour%s; %s%s; %s", when,
+          player->health, player->armorpoints,
+          player->armortype == 2 ? " (blue)" : player->armortype == 1 ? " (green)" : "",
+          weapons[0] != '\0' ? weapons : "the pistol only",
+          player->backpack ? ", a backpack" : "", ammo);
 }
 
 const k_conditionstatus_t *K_Condition_Get(void)

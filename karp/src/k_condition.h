@@ -65,6 +65,11 @@ int K_Condition_AmmoLow(int ammo);
 // the chainsaw or the pistol.
 int K_Condition_Strong(int weapon);
 
+// Logs what the player carries, `when` ("at the level's start"): health,
+// armour, the weapons and the ammo of the most it may carry - all of it
+// carried on to the next level (logged at each level's start).
+void K_Condition_LogArsenal(const char *when);
+
 #ifdef __cplusplus
 }
 #endif

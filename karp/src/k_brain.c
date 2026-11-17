@@ -177,11 +177,30 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // ROUTE_AHEAD ahead if less: an item by the route ahead costs a step aside,
 // however far off it is (Doom II MAP31: the clips of two SS just killed lay
 // by the route 340 off, past the 256 they were worth, and were run past).
+// They are ranked as if none paid more than RANK_REACH: one any detour pays
+// for (the ammo running out) does not crowd out what lies near (the user,
+// E2M2: a green armour 240 off, unguarded, at 0 armour, never looked at -
+// every second's looks went to shells 2000 off, any detour paying, which
+// then had no way there).
 #define ITEM_CHECK_TICS TICRATE
 #define ITEM_ROUTES 2
 #define MAX_ITEM_ROUTES 4
 #define ITEM_SKIP_TICS (10 * TICRATE)
 #define ROUTE_AHEAD 1024.0
+#define RANK_REACH 3000.0
+
+// A sweep before the exit (k_items.c: SWEEP_UNITS; the user: not the
+// detours changed, but a guess just before leaving whether too much ammo
+// was left lying - then even the longest detours for it, cells and rockets,
+// armour - or "nah, we probably have enough for the next level"): once a
+// level, GO TO EXIT the only goal and the way left to the exit no longer
+// than SWEEP_NEAR, while the arsenal goes on to a next level (ArsenalGoesOn)
+// and the level has monsters - when something lying about is worth one
+// (K_Items_Sweepable). Over once nothing is, or after SWEEP_MOST (the user:
+// limits, but generous - never an endless run); the route to the exit goes
+// on all the while, so with nothing in reach the player just leaves.
+#define SWEEP_NEAR 1024.0
+#define SWEEP_MOST (5 * 60 * TICRATE)
 
 // Some items go first (GoesFirst): a weapon at a pistol start (k_items.h:
 // first; the user: a health bonus far off was gone for, a shotgun by the
@@ -582,6 +601,8 @@ static int chase_kind = -1;             // the boss last on the player
 static int chase_check_tic;             // when to look at the chase next
 static int pass_excused = -1;           // when one missed so: the way shut
                                         // is not counted (MAX_SHUT)
+static int sweep_since;                 // when the sweep before the exit
+                                        // began; 0 before, -1 once over
 
 //
 // Names
@@ -1312,14 +1333,16 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
             {
                 const k_item_t *item = K_Items_Get(goal->param);
 
-                if (item->present && item->reachable)
+                // From where it lies, or from a floor around (k_items.h: off).
+                for (i = -1; item->present && item->reachable && i < item->num_off
+                             && count < max; ++i)
                 {
-                    out[0].at = item->spot;
-                    out[0].kind = K_GOAL_POINT;
-                    out[0].line = -1;
-                    M_snprintf(out[0].what, sizeof(out[0].what), "%s at (%.0f,%.0f)",
+                    out[count].at = i < 0 ? item->spot : item->off[i];
+                    out[count].kind = K_GOAL_POINT;
+                    out[count].line = -1;
+                    M_snprintf(out[count].what, sizeof(out[count].what), "%s at (%.0f,%.0f)",
                                item->name, item->at.x, item->at.y);
-                    count = 1;
+                    ++count;
                 }
             }
             break;
@@ -3411,6 +3434,48 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
     return true;
 }
 
+// ItemDetour for an item from the best of its spots: where it lies, and the
+// floors around that touch it (k_items.h: off) - the route picks, as for a
+// key on a ledge.
+static boolean ItemSpotDetour(const k_item_t *item, k_vec2_t start, int cell, k_vec2_t end,
+                              double remaining, double remaining_damage, boolean fixes,
+                              double *detour, double *way, double *damage, boolean *fixed,
+                              double *risk, double *through)
+{
+    boolean found = false;
+    int k;
+
+    for (k = -1; k < item->num_off; ++k)
+    {
+        double d, w, dm, r = 0.0, t = 0.0;
+        boolean f;
+
+        if (ItemDetour(start, cell, k < 0 ? item->spot : item->off[k], end, remaining,
+                       remaining_damage, fixes, &d, &w, &dm, &f, risk != NULL ? &r : NULL,
+                       through != NULL ? &t : NULL)
+         && (!found || d < *detour))
+        {
+            found = true;
+            *detour = d;
+            *way = w;
+            *damage = dm;
+            *fixed = f;
+
+            if (risk != NULL)
+            {
+                *risk = r;
+            }
+
+            if (through != NULL)
+            {
+                *through = t;
+            }
+        }
+    }
+
+    return found;
+}
+
 // Going on by a radiation suit: what the way there costs, and the way on
 // from it with a fresh suit worn, the waits and the floors counted
 // (WAIT_WAY, DAMAGE_WAY); the way there; and the extra way, less the way
@@ -3672,7 +3737,8 @@ static boolean ConsiderItems(goal_t *goal)
 
         // The sphere run for before even those that go first (SphereRun).
         score = item->invuln && item->escape ? 2.0 * FIRST_SCORE - distance
-              : GoesFirst(item, critical) ? FIRST_SCORE - distance : reach / (distance + 64.0);
+              : GoesFirst(item, critical) ? FIRST_SCORE - distance
+              : SDL_min(reach, RANK_REACH) / (distance + 64.0);
 
         // Kept best first.
         if (found == routes && score <= order_score[routes - 1])
@@ -3730,8 +3796,8 @@ static boolean ConsiderItems(goal_t *goal)
             reach = SDL_min(reach * STACK_SHARE, STACK_MOST);
         }
 
-        if (!ItemDetour(start, player.cell, item->spot, end, remaining_way, remaining_damage,
-                        !fighting && !stacks, &detour, &way, &damage, &fixed, &risk, &through))
+        if (!ItemSpotDetour(item, start, player.cell, end, remaining_way, remaining_damage,
+                            !fighting && !stacks, &detour, &way, &damage, &fixed, &risk, &through))
         {
             item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
             continue;
@@ -3859,8 +3925,8 @@ static boolean ConsiderItems(goal_t *goal)
         // counted as out of reach, the shells won - and the box the next
         // second, for 12 s). The monsters on the way counted, as above.
         fixes_stacked = true;
-        ItemDetour(start, player.cell, on->spot, end, remaining_way, remaining_damage, true,
-                   &on_detour, &on_way, &on_damage, &on_fixed, NULL, &on_through);
+        ItemSpotDetour(on, start, player.cell, end, remaining_way, remaining_damage, true,
+                       &on_detour, &on_way, &on_damage, &on_fixed, NULL, &on_through);
         fixes_stacked = false;
 
         if (best_cost + REPLACE_MARGIN >= on_way + on_through * DAMAGE_WAY)
@@ -4113,6 +4179,67 @@ static void UpdateEscape(void)
     {
         K_Combat_Escape(NULL);
     }
+}
+
+// Whether what the player carries goes on to a next level: not from the
+// last level of an episode (k_demo.c: GameEnds) - a new game follows, from
+// the pistol.
+static boolean ArsenalGoesOn(void)
+{
+    if (gamemode != commercial || gamemission == pack_nerve)
+    {
+        return gamemap != 8;
+    }
+
+    if (gamemission == pack_master)
+    {
+        return gamemap != 20 && gamemap != 21;
+    }
+
+    return gamemap != 30;
+}
+
+// Each tic: the sweep before the exit (SWEEP_NEAR) - judged, begun, over.
+static void UpdateSweep(void)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    int count;
+
+    if (sweep_since == 0 && depth == 1 && goals[0].type == GOAL_EXIT && goals[0].planned
+     && nav->state == K_NAV_DRIVING && nav->remaining <= SWEEP_NEAR)
+    {
+        count = K_Items_Sweepable();
+
+        if (nomonsters || !ArsenalGoesOn())
+        {
+            sweep_since = -1;
+        }
+        else if (count == 0)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: about to leave - nothing lying about "
+                  "worth a sweep");
+            K_Condition_LogArsenal("on leaving");
+            sweep_since = -1;
+        }
+        else
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: about to leave - %d items lying about "
+                  "worth taking on to the next level, swept for", count);
+            K_Condition_LogArsenal("before the sweep");
+            sweep_since = SDL_max(leveltime, 1);
+        }
+    }
+    else if (sweep_since > 0
+          && ((count = K_Items_Sweepable()) == 0 || leveltime - sweep_since >= SWEEP_MOST))
+    {
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: the sweep is over after %.1f s - %s",
+              (double) (leveltime - sweep_since) / TICRATE,
+              count == 0 ? "nothing left worth it" : "time up");
+        K_Condition_LogArsenal("after the sweep");
+        sweep_since = -1;
+    }
+
+    K_Items_Sweep(sweep_since > 0);
 }
 
 // The kind of monster the level needs dead for the goals on the chain (KILL
@@ -4900,6 +5027,8 @@ void K_Brain_Reset(void)
     pass_excused = -1;
     chase_kind = -1;
     chase_check_tic = 0;
+    sweep_since = 0;
+    K_Items_Sweep(0);
 
     if (item_skip != NULL)
     {
@@ -4980,6 +5109,7 @@ void K_Brain_Tick(void)
     TrackArrival();
     UpdatePassing();
     UpdateEscape();
+    UpdateSweep();
 
     if (K_Combat_Boss() >= 0)
     {
