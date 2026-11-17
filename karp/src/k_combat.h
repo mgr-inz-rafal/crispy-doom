@@ -148,6 +148,19 @@ void K_Combat_Needed(int type);
 // invulnerability sphere is for (k_items.h: invuln).
 int K_Combat_HardFight(void);
 
+// The kind (a mobjtype_t) of a boss on the player - a Cyberdemon, a spider
+// mastermind, an arch-vile awake in sight and not fighting another, or one
+// that hurt the player - now or within the last 15 s; -1 if none.
+// What makes an invulnerability sphere worth a run out of a fight
+// (k_items.h: escape).
+int K_Combat_Boss(void);
+
+// Whether the player is invulnerable for long enough to chase a boss:
+// combat closes in on one in sight, never keeping it off, and the brain goes
+// after it out of sight. Once not, the boss is kept off and hidden from
+// again, before it wears off.
+int K_Combat_Chasing(void);
+
 // The kind (a mobjtype_t) of the toughest monster - of the tough tier: a
 // mancubus, an arch-vile, a baron, the spider mastermind, the Cyberdemon -
 // that a player teleported to (x, y) would kill there (PIT_StompThing: their

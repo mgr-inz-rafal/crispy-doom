@@ -59,8 +59,10 @@ typedef struct
                             // while firepower is LOW or CRITICAL (any, while
                             // ammo is LOW), from ammo, a weapon or a backpack
     int escape;             // urgent, and worth leaving a fight for however
-                            // far: the health, when LOW or CRITICAL, and the
-                            // ammo when ammo is LOW or firepower CRITICAL
+                            // far: the health, when LOW or CRITICAL, the
+                            // ammo when ammo is LOW or firepower CRITICAL,
+                            // and invulnerability with a boss on the player
+                            // (K_Combat_Boss)
     int first;              // a weapon better than the pistol while nothing
                             // better is held (a pistol start), or one not
                             // held that beats a monster the player is
@@ -74,9 +76,10 @@ typedef struct
                             // monster the player met that what it holds
                             // cannot (K_Combat_Beats): running out
     int invuln;             // an invulnerability sphere: worth something only
-                            // in a hard fight (K_Combat_HardFight), then
-                            // worth breaking it off for close by (urgent),
-                            // dashed for through monsters
+                            // in a hard fight (K_Combat_HardFight) or with a
+                            // boss on the player (K_Combat_Boss), then worth
+                            // breaking it off for close by (urgent), dashed
+                            // for through monsters; with a boss, run for
 } k_item_t;
 
 // Called by Karp on every level load.

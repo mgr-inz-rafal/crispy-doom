@@ -193,6 +193,21 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 #define DASH_CLEAR 128.0
 #define DASH_FREE 384.0
 
+// An invulnerability sphere run for, a boss on the player (SphereRun), is
+// gone for with its way there no longer than SPHERE_RUN - some 7 s at a run;
+// its 30 s begin when it is picked up (Doom II MAP10: by the windows where
+// the bot met the Cyberdemon, the nearer sphere was 3412 off by route, round
+// the rooms between). One with no open way there that short is not looked
+// at again for SPHERE_SKIP (MAP10: with the far sphere taken for one, the
+// health gone for at 14 was dropped every second).
+#define SPHERE_RUN 4096.0
+#define SPHERE_SKIP (30 * TICRATE)
+
+// A boss chased while invulnerable (ConsiderChase) only within CHASE_REACH
+// by route (Doom II MAP10, salt 7: the Cyberdemon teleported to the other
+// room, 3062 off, and the bot spent 16 s of the 22 running after it).
+#define CHASE_REACH 1536.0
+
 // Stacked detours (plan, 7.8: detours are sticky; the user, E1M8: going for
 // the first shotgun, the bot ran up the stairs 140 off the soulsphere behind
 // the secret door there and never went back for it, one detour at a time):
@@ -285,7 +300,8 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // player anywhere, and running gives up the shots (E1M8: falling back from
 // the two barons, it died 3 s later, where it had stood and won before). Not
 // while holding already (MAP10: holding short of ten monsters as they came,
-// the bot fell back 1331 units and died on the way), nor further than
+// the bot fell back 1331 units and died on the way), nor invulnerable for a
+// chase (ConsiderChase), nor further than
 // FALL_REACH; not again for FALL_AGAIN; with no such area, looked for again
 // in a second.
 #define FALL_LOSS 25
@@ -424,6 +440,8 @@ typedef struct
                                 // (WAY_BACK_REACH)
     boolean wander;             // GOAL_GOTO: out of a loop GO TO EXIT went
                                 // round (BreakLoop)
+    boolean chase;              // GOAL_KILL: a boss chased while invulnerable
+                                // (ConsiderChase)
     int plans;                  // times planned since plans_since, within
     int plans_since;            // LOOP_TICS (BreakLoop)
 
@@ -529,6 +547,8 @@ static int pass_until;
 static boolean pass_routed;             // the route has gone through it
 static boolean pass_past;               // the player has got past it
 static boolean pass_fought;             // a fight took the window
+static int chase_kind = -1;             // the boss last on the player
+static int chase_check_tic;             // when to look at the chase next
 static int pass_excused = -1;           // when one missed so: the way shut
                                         // is not counted (MAX_SHUT)
 
@@ -561,7 +581,8 @@ static void GoalName(const goal_t *goal, char *buf, int len)
             break;
 
         case GOAL_KILL:
-            M_snprintf(buf, len, "KILL EVERY %s", K_Combat_KindName(goal->param));
+            M_snprintf(buf, len, "%s %s", goal->chase ? "CHASE THE" : "KILL EVERY",
+                       K_Combat_KindName(goal->param));
             M_ForceUppercase(buf);
             break;
 
@@ -2002,8 +2023,8 @@ static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 // is a detour, not a fix for the goals below it, which have their way: only
 // the item and the fixes pushed for it count (Doom II MAP04: the switch for
 // the bars before a shotgun was dropped with the shotgun, every second); so
-// is a telefrag, a fall back, a way back opened (ConsiderWayBack), and a
-// wander out of a loop (BreakLoop). Each goal is looked at with the stack as
+// is a telefrag, a fall back, a way back opened (ConsiderWayBack), a wander
+// out of a loop (BreakLoop), and a chase (ConsiderChase). Each goal is looked at with the stack as
 // it would be once those above it are gone, as it is planned then: a fix on
 // the stack is not allowed again (Allowed), and the crossing it is for costs
 // a route as one nothing fixes (Doom II MAP15: at 10 health, with GET RED KEY
@@ -2023,7 +2044,7 @@ static boolean DropNeedless(void)
     for (i = depth - 1; i >= 0; --i)
     {
         if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG || goals[i].fallback
-         || goals[i].way_back || goals[i].wander)
+         || goals[i].way_back || goals[i].wander || goals[i].chase)
         {
             base = i;
             break;
@@ -2779,6 +2800,22 @@ static int OpeningWayBack(void)
     return -1;
 }
 
+// The chase on the stack (ConsiderChase), -1 if none.
+static int ChaseOn(void)
+{
+    int i;
+
+    for (i = depth - 1; i >= 0; --i)
+    {
+        if (goals[i].chase)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 // Whether the item (by its index) is gone for already, somewhere on the
 // chain.
 static boolean OnChain(int item)
@@ -2799,17 +2836,19 @@ static boolean OnChain(int item)
 // Whether the item goes before the others (FIRST_SCORE): one worth leaving a
 // fight for however far (k_items.h: escape) - but when CRITICAL only health
 // (Doom II MAP15: at 9 health a clip for the chaingun, firepower LOW, was
-// added over the medikits and dropped for them every second) - and but when
-// CRITICAL a weapon at a pistol start.
+// added over the medikits and dropped for them every second), and
+// invulnerability with a boss on the player - and but when CRITICAL a weapon
+// at a pistol start.
 static boolean GoesFirst(const k_item_t *item, boolean critical)
 {
-    return (item->escape && (item->kind == K_ITEM_HEALTH || !critical))
+    return (item->escape && (item->kind == K_ITEM_HEALTH || item->invuln || !critical))
         || (item->first && !critical);
 }
 
 // Whether something worth leaving a fight for (k_items.h: escape) lies in
 // reach: health, when LOW or CRITICAL; but for health CRITICAL, ammo when
-// ammo is LOW or firepower CRITICAL. *health tells which.
+// ammo is LOW or firepower CRITICAL. *health tells which. Invulnerability is
+// not counted: it goes before either (SphereRun).
 static boolean EscapeFor(boolean critical, boolean *health)
 {
     boolean ammo = false;
@@ -2821,7 +2860,7 @@ static boolean EscapeFor(boolean critical, boolean *health)
     {
         const k_item_t *item = K_Items_Get(i);
 
-        if (item->escape && item->present && item->reach > 0.0)
+        if (item->escape && item->present && item->reach > 0.0 && !item->invuln)
         {
             *health |= item->kind == K_ITEM_HEALTH;
             ammo |= item->kind != K_ITEM_HEALTH && !critical;
@@ -2831,10 +2870,61 @@ static boolean EscapeFor(boolean critical, boolean *health)
     return *health || ammo;
 }
 
+// Whether an invulnerability sphere is worth a run out of the fight, a boss
+// on the player (k_items.h: escape; K_Combat_Boss), with an open way there
+// no longer than SPHERE_RUN - not one given up on lately; one with none is
+// not looked at for SPHERE_SKIP. It goes before any other item: one gone for
+// is dropped for it, and none is gone for over it.
+static boolean SphereRun(void)
+{
+    k_pose_t player;
+    k_vec2_t start;
+    int i;
+
+    if (!K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+
+    for (i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+
+        if (!item->invuln || !item->escape || !item->present || item->reach <= 0.0
+         || (i < item_skip_size && leveltime < item_skip[i]) || IsFailed(GOAL_ITEM, i))
+        {
+            continue;
+        }
+
+        K_Path_Find(&probe, start, player.cell, item->spot);
+
+        if (probe.result == K_PATH_FOUND && probe.length + probe.wait * WAIT_WAY <= SPHERE_RUN)
+        {
+            return true;
+        }
+
+        if (i < item_skip_size)
+        {
+            item_skip[i] = leveltime + SPHERE_SKIP;
+        }
+    }
+
+    return false;
+}
+
 // How far out of its way the player may go for an item now: in a fight, a
-// dash at most, but for one worth leaving the fight for (escape).
+// dash at most, but for one worth leaving the fight for (escape). For the
+// sphere run for (SphereRun), how far its way there may be.
 static double ItemReach(const k_item_t *item, boolean fighting)
 {
+    if (item->invuln && item->escape && item->reach > 0.0)
+    {
+        return SPHERE_RUN;
+    }
+
     if (fighting && !item->escape)
     {
         return SDL_min(item->reach, FIGHT_REACH);
@@ -3173,6 +3263,7 @@ static boolean ConsiderItems(goal_t *goal)
     double best_risk = 0.0, best_cost = 0.0, best_through = 0.0;
     double remaining_way = 0.0, remaining_damage = 0.0, remaining_cost = 0.0;
     boolean best_fixed = false, best_first = false, best_suit = false, suits = false;
+    boolean best_sphere = false;
     const k_item_t *chosen;
     k_pose_t player;
     k_vec2_t start, end;
@@ -3203,9 +3294,10 @@ static boolean ConsiderItems(goal_t *goal)
     // use the look up: it comes once it is. Nothing takes the player off the
     // exit floor (E1M8: health is what it takes), nor off a fall back, the
     // fix in its way included, nor off a way back being opened, nor past a
-    // lift or a door that goes back but for health at CRITICAL (PASS_TICS).
+    // lift or a door that goes back but for health at CRITICAL (PASS_TICS),
+    // nor off a chase (ConsiderChase).
     if (leveltime < item_check_tic || !goal->planned || goal->staying || FallingBack() >= 0
-     || OpeningWayBack() >= 0 || (pass_portal >= 0 && !critical))
+     || OpeningWayBack() >= 0 || (pass_portal >= 0 && !critical) || ChaseOn() >= 0)
     {
         return false;
     }
@@ -3249,6 +3341,25 @@ static boolean ConsiderItems(goal_t *goal)
         }
 
         on = K_Items_Get(goals[i].param);
+
+        // Running for the sphere, nothing else meanwhile; any other gives way
+        // to it (SphereRun).
+        if (on->invuln && on->escape)
+        {
+            return false;
+        }
+
+        if (i > 0 && !on->invuln && SphereRun())
+        {
+            GoalName(&goals[i], name, sizeof(name));
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s dropped - the %s on the player, the "
+                  "invulnerability goes first", name, K_Combat_KindName(K_Combat_Boss()));
+            depth = i;
+            goals[depth - 1].planned = false;
+            K_Nav_Clear();
+            item_check_tic = 0;
+            return true;
+        }
 
         if (i > 0 && GoesFirst(on, critical) && (on->kind == K_ITEM_HEALTH || !critical))
         {
@@ -3353,7 +3464,9 @@ static boolean ConsiderItems(goal_t *goal)
             continue;
         }
 
-        score = GoesFirst(item, critical) ? FIRST_SCORE - distance : reach / (distance + 64.0);
+        // The sphere run for before even those that go first (SphereRun).
+        score = item->invuln && item->escape ? 2.0 * FIRST_SCORE - distance
+              : GoesFirst(item, critical) ? FIRST_SCORE - distance : reach / (distance + 64.0);
 
         // Kept best first.
         if (found == routes && score <= order_score[routes - 1])
@@ -3402,6 +3515,7 @@ static boolean ConsiderItems(goal_t *goal)
         double reach = ItemReach(item, fighting);
         boolean first = GoesFirst(item, critical);
         boolean stacks = stacking && !(detour_at >= 0 && first);
+        boolean sphere = item->invuln && item->escape;
         double detour, way, damage, risk, through, cost;
         boolean fixed;
 
@@ -3429,19 +3543,38 @@ static boolean ConsiderItems(goal_t *goal)
             reach = RISKY_REACH;
         }
 
+        // The sphere run for, a boss on the player (SphereRun): the way there
+        // is what counts, whatever is on it - the boss is worse, and nothing
+        // hurts the player once it is in hand.
+        if (sphere)
+        {
+            detour = way;
+            risk = 0.0;
+            through = 0.0;
+        }
+
         detour += (damage + risk) * DAMAGE_WAY;
+
+        if (sphere && detour > reach)
+        {
+            item_skip[order[k]] = leveltime + ITEM_SKIP_TICS;
+            continue;
+        }
 
         // Of those that go first, the soonest in hand, the monsters inside
         // the areas on the way there counted too, the route's as well: the
         // run leaves it (the user, E2M9: out of plasma and shells, the bot
         // held short of three barons with the pistol for 20 s, the rocket
-        // launcher beyond them 534 off, a chaingun behind it clear).
+        // launcher beyond them 534 off, a chaingun behind it clear). But the
+        // sphere run for before any.
         cost = way + through * DAMAGE_WAY;
 
         if (detour <= reach
-         && (best < 0 || (first && !best_first)
-             || (first && best_first && cost < best_cost)
-             || (!first && !best_first && reach - detour > best_slack)))
+         && (best < 0 || (sphere && !best_sphere)
+             || (!best_sphere
+                 && ((first && !best_first)
+                     || (first && best_first && cost < best_cost)
+                     || (!first && !best_first && reach - detour > best_slack)))))
         {
             best = order[k];
             best_slack = reach - detour;
@@ -3454,6 +3587,7 @@ static boolean ConsiderItems(goal_t *goal)
             best_fixed = fixed;
             best_first = first;
             best_stack = stacks;
+            best_sphere = sphere;
         }
 
         if (stacks && detour <= reach && (alt < 0 || reach - detour > alt_slack))
@@ -3589,6 +3723,12 @@ static boolean ConsiderItems(goal_t *goal)
         --line_uses[goal->chosen.line];
     }
 
+    if (best_sphere && K_Combat_Boss() >= 0)
+    {
+        M_snprintf(below, sizeof(below), " (the way there: a run for it, the %s on the player)",
+                   K_Combat_KindName(K_Combat_Boss()));
+    }
+
     item_goal = Push(GOAL_ITEM, best);
     item_goal->fixable = best_fixed;
     GoalName(item_goal, name, sizeof(name));
@@ -3672,7 +3812,7 @@ static void UpdateEscape(void)
 {
     const goal_t *goal = NULL;
     const k_item_t *item = NULL;
-    char why[64];
+    char why[96];
     k_pose_t player;
     int i;
 
@@ -3710,12 +3850,22 @@ static void UpdateEscape(void)
             return;
         }
 
-        M_snprintf(why, sizeof(why), "%s, going for the %s",
-                   item->kind != K_ITEM_HEALTH
-                   ? (K_Condition_Get()->firepower == K_NEED_CRITICAL ? "firepower CRITICAL"
-                                                                      : "ammo LOW")
-                   : K_Condition_Get()->health == K_NEED_CRITICAL ? "health CRITICAL"
-                   : "health LOW", item->name);
+        if (item->invuln)
+        {
+            M_snprintf(why, sizeof(why), "the %s on the player, going for the %s",
+                       K_Combat_Boss() >= 0 ? K_Combat_KindName(K_Combat_Boss()) : "boss",
+                       item->name);
+        }
+        else
+        {
+            M_snprintf(why, sizeof(why), "%s, going for the %s",
+                       item->kind != K_ITEM_HEALTH
+                       ? (K_Condition_Get()->firepower == K_NEED_CRITICAL ? "firepower CRITICAL"
+                                                                          : "ammo LOW")
+                       : K_Condition_Get()->health == K_NEED_CRITICAL ? "health CRITICAL"
+                       : "health LOW", item->name);
+        }
+
         K_Combat_Escape(why);
         return;
     }
@@ -3761,20 +3911,125 @@ static void UpdateEscape(void)
 
 // The kind of monster the level needs dead for the goals on the chain (KILL
 // EVERY <kind>): combat fights it with what the player holds once nothing
-// that would beat it is left to fetch (K_Combat_Needed); -1 if none.
+// that would beat it is left to fetch (K_Combat_Needed); -1 if none. Not a
+// chase: the level does not need it dead.
 static int NeededKind(void)
 {
     int i;
 
     for (i = depth - 1; i >= 0; --i)
     {
-        if (goals[i].type == GOAL_KILL)
+        if (goals[i].type == GOAL_KILL && !goals[i].chase)
         {
             return goals[i].param;
         }
     }
 
     return -1;
+}
+
+// The way by route to the nearest live monster of the kind, -1 if there is
+// no open way to any.
+static double BossWay(int kind)
+{
+    k_vec2_t at[MAX_CANDIDATES];
+    k_pose_t player;
+    k_vec2_t start;
+    double best = -1.0;
+    int count, i;
+
+    if (!K_Map_GetPlayer(&player))
+    {
+        return -1.0;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+    count = SDL_min(K_Specials_FindMonsters(kind, at, MAX_CANDIDATES), MAX_CANDIDATES);
+
+    for (i = 0; i < count; ++i)
+    {
+        K_Path_Find(&probe, start, player.cell, at[i]);
+
+        if (probe.result == K_PATH_FOUND && (best < 0.0 || probe.length < best))
+        {
+            best = probe.length;
+        }
+    }
+
+    return best;
+}
+
+// Invulnerable (the user, Doom II MAP10: then chase the boss, as long as it
+// lasts - the Cyberdemon teleports from room to room): while long enough
+// for it (K_Combat_Chasing), the kind of boss last on the player is gone
+// after, CHASE THE <kind> on top - a KILL EVERY <kind> as the level's bosses
+// are, to where each one is now; once in sight combat closes in. Only while
+// one is within CHASE_REACH by route, looked at every second. No item is
+// gone for meanwhile, nor fallen back to safety. With not long enough left,
+// or none near, it is dropped with the goals above it; combat keeps the
+// boss off and hides from it again before it wears off. With two bosses and
+// one sphere, the nearer by route. Returns true if the stack changed.
+static boolean ConsiderChase(void)
+{
+    char name[64], why[96];
+    goal_t *chase;
+    double way;
+    int on = ChaseOn();
+
+    if (on >= 0 && !K_Combat_Chasing())
+    {
+        M_snprintf(why, sizeof(why), "the invulnerability runs out in %.0f s",
+                   (double) players[consoleplayer].powers[pw_invulnerability] / TICRATE);
+    }
+    else if (leveltime < chase_check_tic || (on < 0 && (!K_Combat_Chasing() || chase_kind < 0
+                                                  || depth >= MAX_GOALS
+                                                  || !Allowed(GOAL_KILL, chase_kind))))
+    {
+        return false;
+    }
+    else
+    {
+        chase_check_tic = leveltime + TICRATE;
+        way = BossWay(on >= 0 ? goals[on].param : chase_kind);
+
+        if (on < 0 && way >= 0.0 && way <= CHASE_REACH)
+        {
+            chase = Push(GOAL_KILL, chase_kind);
+            chase->chase = true;
+            GoalName(chase, name, sizeof(name));
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s - invulnerable for %.0f s more, %.0f off "
+                  "by route", name,
+                  (double) players[consoleplayer].powers[pw_invulnerability] / TICRATE, way);
+            return true;
+        }
+
+        if (on < 0 || (way >= 0.0 && way <= CHASE_REACH))
+        {
+            return false;
+        }
+
+        if (way < 0.0)
+        {
+            M_StringCopy(why, "no way to it now", sizeof(why));
+        }
+        else
+        {
+            M_snprintf(why, sizeof(why), "%.0f off by route, too far to chase", way);
+        }
+    }
+
+    GoalName(&goals[on], name, sizeof(name));
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s over - %s", name, why);
+    depth = on;
+
+    if (depth > 0)
+    {
+        goals[depth - 1].planned = false;
+    }
+
+    K_Nav_Clear();
+    return true;
 }
 
 // The teleporter the topmost TELEFRAG goes through, -1 if none: combat
@@ -4090,7 +4345,7 @@ static boolean ConsiderFallBack(void)
     goal_t *goal;
 
     if (!K_Combat_GetStatus()->battle || K_Combat_GetStatus()->holding
-     || leveltime < fall_again || depth >= MAX_GOALS - 1
+     || leveltime < fall_again || depth >= MAX_GOALS - 1 || K_Combat_Chasing()
      || FallingBack() >= 0 || !K_Map_GetPlayer(&player)
      || (here = K_Area_Of(player.cell)) < 0 || K_Area_Safe(here))
     {
@@ -4437,6 +4692,8 @@ void K_Brain_Reset(void)
     telefrag_check_tic = 0;
     pass_portal = -1;
     pass_excused = -1;
+    chase_kind = -1;
+    chase_check_tic = 0;
 
     if (item_skip != NULL)
     {
@@ -4517,6 +4774,11 @@ void K_Brain_Tick(void)
     TrackArrival();
     UpdatePassing();
     UpdateEscape();
+
+    if (K_Combat_Boss() >= 0)
+    {
+        chase_kind = K_Combat_Boss();
+    }
     UpdateShooting();
     K_Combat_Needed(NeededKind());
     telefrag = TelefragOn();
@@ -4616,8 +4878,8 @@ void K_Brain_Tick(void)
         return;
     }
 
-    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderFallBack() || ConsiderWayBack(goal)
-     || ConsiderTelefrag(goal) || ConsiderItems(goal))
+    if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderChase() || ConsiderFallBack()
+     || ConsiderWayBack(goal) || ConsiderTelefrag(goal) || ConsiderItems(goal))
     {
         return;
     }

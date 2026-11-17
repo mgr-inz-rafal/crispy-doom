@@ -128,7 +128,10 @@
 // a run there and back well inside its 30 s - whoever guards it: they
 // cannot hurt the player once it is picked up. In the fight a dash only
 // (urgent), not a run out of it (escape): E3M9, a run of 2063 for it went
-// past the Cyberdemon, and the bot's own rocket killed it on the way. Not
+// past the Cyberdemon, and the bot's own rocket killed it on the way - but
+// with a boss on the player (K_Combat_Boss; the user, Doom II MAP10: run
+// for it more eagerly when the Cyberdemon comes after the player), a run
+// out of the fight, the way there within INVULN_REACH (k_brain.c). Not
 // while the player has INVULN_KEEP of it left. Walked over on the way, it
 // is picked up as any item.
 #define INVULN_WORTH 100.0
@@ -626,8 +629,8 @@ static double Worth(const player_t *player, const entry_t *entry, boolean fights
     switch (entry->sprite)
     {
         case SPR_PINV:
-            return K_Combat_HardFight() && player->powers[pw_invulnerability] < INVULN_KEEP
-                 ? INVULN_WORTH : 0.0;
+            return (K_Combat_HardFight() || K_Combat_Boss() >= 0)
+                && player->powers[pw_invulnerability] < INVULN_KEEP ? INVULN_WORTH : 0.0;
 
         case SPR_PINS: return 10.0;
 
@@ -925,6 +928,7 @@ void K_Items_Tick(void)
 
         item->escape = item->urgent
                     && (item->kind == K_ITEM_HEALTH
+                        || (item->invuln && K_Combat_Boss() >= 0)
                         || (entry->running_out && (condition->ammo == K_NEED_LOW
                                                    || condition->firepower == K_NEED_CRITICAL)));
     }

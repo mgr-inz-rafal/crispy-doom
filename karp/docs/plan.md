@@ -3805,6 +3805,37 @@ Who controls the player in a fight (the user's model):
   combat run as for an item the while (`K_Combat_Escape`: no fight begun but with blows near,
   shooting on the way, no hold) - it also broke off keeping off the Cyberdemon, and E3M9 died
   3 runs of 3 by lift 27, under its rockets (head finished 2).
+- **The invulnerability sphere against a boss** (the user, 2026-11-16, Doom II MAP10: why is the
+  sphere not picked up for the Cyberdemon? It teleports between two rooms after the player, the
+  sphere in one of them; and what of one sphere and two bosses?). The sphere at (-1152,-1696)
+  was worth something only in a hard fight, and then in a fight only a dash, 400 out of the way
+  at most; out of a fight a detour, charged for the monsters in the areas on its way - the
+  Cyberdemon among them. Taken in 1 run of 6 (182 and 328 out of the way, out of a fight); in
+  the others the bot met the Cyberdemon by the windows some 700 from it, kept off and hid from
+  it, and died (salt 443: 130 off it at the door at line 715, dead 5 s later). Done (the user:
+  run for it more eagerly when the boss is on the player, then chase the boss while it lasts):
+  - A boss on the player (`K_Combat_Boss`): a Cyberdemon, spider mastermind or arch-vile awake
+    in sight within 1024, not fighting another, or one that hurt the player, within 15 s (at
+    5 s a run of 2110 was given up half way, the Cyberdemon teleported out of sight).
+  - Then the sphere is a run out of the fight (`k_items.c`: escape), its way there (not the
+    detour) within 4096 whatever is on it (`SPHERE_RUN`: by the windows where the bot meets the
+    Cyberdemon, the nearer sphere is 3412 off by route; its 30 s begin when it is picked up),
+    before any other item (`SphereRun`): one gone for is dropped for it, none gone for over it,
+    and it is weighed before even those that go first. Combat runs, shooting on the way. A
+    sphere with no open way there that short is not looked at for 30 s (first try: the sphere was
+    not among the few items weighed - two nearer boxes of shells were - yet the item gone for was
+    dropped for it every second, MAP11's shells for 15 s, MAP10's health at 14).
+  - Invulnerable for 8 s more at least (`CHASE_LEFT`): a boss is the target before any other,
+    never kept off, each fight step scoring as it goes toward it while further than 128 - no
+    leash, no rocket room, no other monster's sight counted. Out of sight, CHASE THE <kind>
+    (`ConsiderChase`): a KILL EVERY <kind> on top, to where each one is; no item nor fall back
+    meanwhile; only while one is within 1536 by route (`CHASE_REACH`; MAP10 salt 7: the
+    Cyberdemon teleported to the other room, 3062 off, and the bot spent 16 s of the 22 running
+    after it). With less left the chase is over, and a hopeless monster is hopeless again
+    (`Hopeless`, before at 2 s left): kept off and hidden from in time (E3M9 before: closing in
+    all the while, the bot stood 190 from the Cyberdemon as it wore off, and died).
+  - Two bosses and one sphere: whichever is on the player brings the run; the chase goes after
+    the nearer of that kind, and combat after any boss in sight.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

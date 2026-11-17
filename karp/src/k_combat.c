@@ -484,6 +484,28 @@ extern void A_SPosAttack();
 // bot stood 190 from it, and died to its rockets.
 #define INVULN_BOLD (4 * TICRATE)
 
+// A boss on the player (the user, Doom II MAP10: the Cyberdemon teleports
+// between two rooms after the player, the sphere in one of them): a monster
+// whose kind costs HARD_ONE or more - the Cyberdemon, the spider mastermind,
+// the arch-vile - awake in sight within HARD_REACH, not fighting another, or
+// one that hurt the player, within BOSS_LINGER (K_Combat_Boss): what makes an
+// invulnerability sphere worth a run out of the fight (k_items.h) - long
+// enough to finish the run (MAP10: at 5 s, a run of 2110 was given up half
+// way, the Cyberdemon out of sight, teleported to the other room). And then
+// chase it (the user), while CHASE_LEFT of the sphere is left at least: the
+// boss is the target before any other (CHASE_FIRST), never kept off, each
+// way scoring CHASE_WEIGHT as it goes toward it while it is further than
+// CHASE_NEAR, where every shot lands - no leash, no room for rockets, no
+// other monster's sight counted: none of them can hurt the player. Out of
+// sight, the brain goes after it. With less left, a hopeless monster is
+// hopeless again (Hopeless): the boss is kept off and hidden from in time -
+// see above, E3M9, 190 off it as it wore off.
+#define BOSS_LINGER (15 * TICRATE)
+#define CHASE_LEFT (8 * TICRATE)
+#define CHASE_FIRST 4.0
+#define CHASE_WEIGHT 2.0
+#define CHASE_NEAR 128.0
+
 // A hard fight, which an invulnerability sphere is for (the user: grab it
 // when preparing for tough fights - a Cyberdemon, masses of monsters): awake
 // in sight within HARD_REACH, not fighting another, a monster whose kind
@@ -555,7 +577,7 @@ extern void A_SPosAttack();
 // as far as a fight keeps the monster off (kind_t: keep): a projectile's
 // FLIES_HIT of its damage (a big, slow target, kept where rockets fire), a
 // bullet's or a pellet's as the spread and range allow (HitShare). Melee
-// never counts; invulnerable for INVULN_LEFT more, nothing is hopeless.
+// never counts; invulnerable for CHASE_LEFT more, nothing is hopeless.
 // A hopeless monster is no target - no round is spent on it - and one
 // awake in sight within its kind's distance (AVOID_PAST beyond it once kept
 // off), whether it can come at the player or shoots from where it stands,
@@ -1097,7 +1119,7 @@ static int ahead_area = -1;
 // Fights broken off: the brain goes for health, CRITICAL, or dashes for a
 // weapon or ammo close by (K_Combat_Escape), and why.
 static boolean escape;
-static char escape_why[64];
+static char escape_why[96];
 
 // Rockets and cells kept for the tough monsters (RESERVE_SHARE).
 static boolean reserve;
@@ -1140,6 +1162,8 @@ static const mobj_t *bfg_logged;
 static boolean bold;
 static int hard_seen;
 static int beset_seen;
+static int boss_seen;               // a boss last on the player (BOSS_LINGER),
+static int boss_type = -1;          // and its kind
 
 // The spot the brain goes to land on, to telefrag what stands there
 // (K_Combat_Telefrag), and its area.
@@ -1885,6 +1909,12 @@ static void LogHits(const player_t *player)
             hurt_tic = leveltime;
             FireOnHold(attacker, NULL, me);
 
+            if (IsMonster(attacker) && Kind(attacker->type)->cost >= HARD_ONE)
+            {
+                boss_seen = leveltime;
+                boss_type = attacker->type;
+            }
+
             if (by == NULL && IsMonster(attacker) && !Kind(attacker->type)->hitscan
              && distance < BLOW_REACH)
             {
@@ -2478,14 +2508,22 @@ static double InHand(const player_t *player, const k_monster_t *monster)
 
 // Whether the monster (by its place in this tic's list) is hopeless: not
 // weak, and what is in hand would not take HOPELESS_SHARE of its health.
+// Never while invulnerable for CHASE_LEFT more.
 static boolean Hopeless(const player_t *player, int index)
 {
     const k_monster_t *monster = &monsters[index];
     double share = battle && monster_mobjs[index] == target_mo ? HOPELESS_KEEP : HOPELESS_SHARE;
 
     return SpawnHealth(monster->type) > WEAK_HEALTH && Kind(monster->type)->cost > 0.0
-        && player->powers[pw_invulnerability] < INVULN_LEFT
+        && player->powers[pw_invulnerability] < CHASE_LEFT
         && InHand(player, monster) < monster->health * share;
+}
+
+// Whether a monster of the kind is chased (CHASE_LEFT): a boss, the player
+// invulnerable for long enough.
+static boolean Chased(const player_t *player, int type)
+{
+    return player->powers[pw_invulnerability] >= CHASE_LEFT && Kind(type)->cost >= HARD_ONE;
 }
 
 // Whether an item that would beat a hopeless monster met lies in reach, worth
@@ -2600,6 +2638,12 @@ static void UpdateHard(const player_t *player)
         {
             crowd += Kind(monster->type)->cost;
             one |= Kind(monster->type)->cost >= HARD_ONE || hopeless[i];
+
+            if (Kind(monster->type)->cost >= HARD_ONE)
+            {
+                boss_seen = leveltime;
+                boss_type = monster->type;
+            }
             beset += monster->distance <= BESET_REACH && SpawnHealth(monster->type) > WEAK_HEALTH
                   && SpawnHealth(monster->type) < TOUGH_HEALTH ? Kind(monster->type)->cost : 0.0;
         }
@@ -2906,6 +2950,11 @@ static void ChooseTarget(const player_t *player)
         if (monster->type == MT_SKULL && pain_near)
         {
             score *= SOUL_SHARE;
+        }
+
+        if (Chased(player, monster->type))
+        {
+            score *= CHASE_FIRST;
         }
 
         if (score > best_score)
@@ -4156,7 +4205,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
     double gun = GunHeight(player->mo);
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
     boolean threats = K_Threat_Count() > 0;
-    boolean rockets = !standoff
+    boolean chase = !standoff && Chased(player, target->type);
+    boolean rockets = !standoff && !chase
                    && (wanted == wp_missile
                        || (RocketsFor(target) && CanFire(player, WeaponOf(wp_missile))
                            && !OtherGun(player, false) && !KeptFrom(player, target)));
@@ -4193,7 +4243,7 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
         double keep = Kind(monster->type)->keep;
 
         if (!monster->awake || monster->distance < 1e-6
-         || (i == status.target && MeleeFor(player, monster)))
+         || (i == status.target && MeleeFor(player, monster)) || (i == round && chase))
         {
             continue;
         }
@@ -4221,6 +4271,12 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
             press = (keep - monster->distance) / KEEP_AWAY;
             presser = i;
         }
+    }
+
+    // Chasing, where the fight began moves along too: no leash after.
+    if (chase)
+    {
+        anchor = me;
     }
 
     // Pressed: where the fight began moves along as the player backs off.
@@ -4291,13 +4347,20 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
             score -= BFG_HOLD;
         }
 
-        score -= EXPOSE_WEIGHT * Exposure(far, floor);
+        if (chase)
+        {
+            score += target->distance > CHASE_NEAR ? CHASE_WEIGHT * (ux * tx + uy * ty) : 0.0;
+        }
+        else
+        {
+            score -= EXPOSE_WEIGHT * Exposure(far, floor);
+        }
 
         if (pressed)
         {
             score += ROOM_WEIGHT * press * Room(me, ux, uy, floor, hurts);
         }
-        else
+        else if (!chase)
         {
             from_anchor = Distance(far, holding ? hold_spot : anchor);
 
@@ -6440,6 +6503,8 @@ void K_Combat_Reset(void)
     bold = false;
     hard_seen = -HARD_LINGER - 1;
     beset_seen = -BESET_LINGER - 1;
+    boss_seen = -BOSS_LINGER - 1;
+    boss_type = -1;
     bfg_pending = false;
     bfg_spraying = false;
     bfg_mo = NULL;
@@ -7196,6 +7261,16 @@ void K_Combat_Needed(int type)
 int K_Combat_HardFight(void)
 {
     return leveltime - hard_seen <= HARD_LINGER;
+}
+
+int K_Combat_Boss(void)
+{
+    return leveltime - boss_seen <= BOSS_LINGER ? boss_type : -1;
+}
+
+int K_Combat_Chasing(void)
+{
+    return players[consoleplayer].powers[pw_invulnerability] >= CHASE_LEFT;
 }
 
 int K_Combat_OnSpot(double x, double y)
