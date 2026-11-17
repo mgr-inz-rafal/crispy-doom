@@ -142,6 +142,31 @@
 
 static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 
+// A Cyberdemon or a spider mastermind the level needs dead (KILL EVERY
+// <kind>) is fought from a firing spot, not walked up to (the user, E4M6:
+// the route led to the Cyberdemon, met at the door of its room 130 to 250
+// off - too near for rockets or cover, dead every time; peek from cover,
+// then fight it from where rockets reach it): one FIRE_RINGS from it - as
+// near as it is kept off, no further than aim suffers - in FIRE_WAYS
+// directions, on floor the player can stand on that does not hurt, a
+// radiation suit worn or not (the user, E4M6: at 512 to 768, a spot down in
+// the nukage, the suit on, far off for the rockets to find it; a dry ledge
+// over it was better), the boss in sight from the gun - the FIRE_MOST
+// nearest the player as the crow flies are planned to, the nearest by route
+// gone to. Got there, the player stays while combat fights it
+// (K_Combat_Needed: fought as far as it targets); a new spot once it has
+// moved KILL_DRIFT, or after FIRE_IDLE out of a fight. Only while it can be
+// fought: met as hopeless, it is gone for itself as before - kept off,
+// passed, what beats it fetched (E4M8: from spot after spot in its sight,
+// no fight there, the spider mastermind shot the bot dead in 4 salts of 4;
+// head killed it in all four). With no open way to any spot, the boss
+// itself is gone for, as before, until it moves.
+#define FIRE_WAYS 24
+#define FIRE_MOST 16
+#define FIRE_IDLE (3 * TICRATE)
+
+static const double fire_rings[] = { 512.0, 576.0, 640.0 };
+
 // Items worth a detour (k_items.h, plan 7.5) are looked for every
 // ITEM_CHECK_TICS while the player follows a route, the ITEM_ROUTES most
 // promising by worth and distance looked at by route (MAX_ITEM_ROUTES when
@@ -400,7 +425,8 @@ typedef struct
     k_vec2_t at;
     k_goalkind_t kind;
     int line;               // the line to work, -1 for a key or a point
-    k_vec2_t aim;           // GOAL_BARREL: the barrel to shoot from there
+    k_vec2_t aim;           // GOAL_BARREL: the barrel to shoot from there;
+                            // GOAL_KILL: where the monster stood
     char what[64];          // "exit switch at line 162", "blue keycard"...
 } candidate_t;
 
@@ -430,7 +456,8 @@ typedef struct
     boolean staying;            // GO TO EXIT: on the exit floor, waiting for
                                 // it to end the level
     boolean shooting;           // GOAL_BARREL: at the spot, combat shooting
-                                // (wait counts the tics)
+                                // (wait counts the tics); GOAL_KILL: at the
+                                // firing spot, combat fighting
     boolean fixable;            // GOAL_ITEM: gone for through a fix in its
                                 // way (FIX_WORK), pushed in front of it
     boolean fallback;           // GOAL_GOTO: falling back to a safe area out
@@ -442,6 +469,10 @@ typedef struct
                                 // round (BreakLoop)
     boolean chase;              // GOAL_KILL: a boss chased while invulnerable
                                 // (ConsiderChase)
+    boolean near;               // GOAL_KILL: no way to a firing spot - the
+                                // boss itself gone for (FIRE_RINGS)
+    int quiet;                  // GOAL_KILL: tics at the firing spot out of a
+                                // fight (FIRE_IDLE)
     int plans;                  // times planned since plans_since, within
     int plans_since;            // LOOP_TICS (BreakLoop)
 
@@ -1016,6 +1047,118 @@ static int BarrelSpots(int block, candidate_t *out, int max)
     return count;
 }
 
+// Whether the KILL goal is planned to a firing spot (FIRE_RINGS): a
+// Cyberdemon or a spider mastermind the level needs dead, not chased, none
+// of them hopeless, a spot to get to.
+static boolean FiresFrom(const goal_t *goal)
+{
+    return goal->type == GOAL_KILL && !goal->chase && !goal->near
+        && (goal->param == MT_CYBORG || goal->param == MT_SPIDER)
+        && !K_Combat_Hopeless(goal->param);
+}
+
+// Whether a KILL goal's candidate is a firing spot, not the monster itself.
+static boolean IsSpot(const candidate_t *candidate)
+{
+    return hypot(candidate->at.x - candidate->aim.x, candidate->at.y - candidate->aim.y) > 1.0;
+}
+
+// Whether the KILL goal went for a firing spot.
+static boolean SpotChosen(const goal_t *goal)
+{
+    return IsSpot(&goal->chosen);
+}
+
+// Spots to fight the bosses of the kind from (FIRE_RINGS), the nearest to
+// the player first. Returns how many.
+static int FireSpots(int kind, candidate_t *out, int max)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t at[MAX_CANDIDATES];
+    double height = (double) mobjinfo[kind].height / FRACUNIT;
+    double away[MAX_CANDIDATES];
+    k_pose_t player;
+    int bosses = SDL_min(K_Specials_FindMonsters(kind, at, MAX_CANDIDATES), MAX_CANDIDATES);
+    int count = 0;
+    int m, r, k, i;
+
+    max = SDL_min(max, MAX_CANDIDATES);
+
+    if (!K_Map_GetPlayer(&player))
+    {
+        return 0;
+    }
+
+    for (m = 0; m < bosses; ++m)
+    {
+        int boss_cell = K_Map_CellAt(at[m].x, at[m].y);
+        double bottom = boss_cell >= 0 ? K_Map_CellFloor(boss_cell) : 0.0;
+
+        for (r = 0; r < arrlen(fire_rings); ++r)
+        {
+            for (k = 0; k < FIRE_WAYS; ++k)
+            {
+                double angle = k * 2.0 * 3.14159265358979323846 / FIRE_WAYS;
+                k_vec2_t spot = { at[m].x + cos(angle) * fire_rings[r],
+                                  at[m].y + sin(angle) * fire_rings[r] };
+                int cell = K_Map_CellAt(spot.x, spot.y);
+                double floor, distance;
+                int worst;
+
+                if (cell < 0 || K_Graph_Clearance(spot, 17.0) < 17.0
+                 || K_Map_SuitFloorDamage(map->subsectors[map->cells[cell].subsector].sector,
+                                          false) > 0.0)
+                {
+                    continue;
+                }
+
+                floor = K_Map_CellFloor(cell);
+
+                if (boss_cell < 0
+                 || !K_Sight_Aim(spot.x, spot.y, floor + GUN_HEIGHT, at[m].x, at[m].y, bottom,
+                                 bottom + height))
+                {
+                    continue;
+                }
+
+                // Kept the FIRE_MOST nearest the player.
+                distance = hypot(spot.x - player.x, spot.y - player.y);
+
+                if (count < FIRE_MOST && count < max)
+                {
+                    worst = count++;
+                }
+                else
+                {
+                    for (worst = 0, i = 1; i < count; ++i)
+                    {
+                        if (away[i] > away[worst])
+                        {
+                            worst = i;
+                        }
+                    }
+
+                    if (distance >= away[worst])
+                    {
+                        continue;
+                    }
+                }
+
+                away[worst] = distance;
+                out[worst].at = spot;
+                out[worst].kind = K_GOAL_POINT;
+                out[worst].line = -1;
+                out[worst].aim = at[m];
+                M_snprintf(out[worst].what, sizeof(out[worst].what),
+                           "spot (%.0f,%.0f), %.0f from the %s at (%.0f,%.0f)", spot.x, spot.y,
+                           fire_rings[r], K_Combat_KindName(kind), at[m].x, at[m].y);
+            }
+        }
+    }
+
+    return count;
+}
+
 // Where to go to pick up a key lying at `at` (K_Graph_PickupSpot); with no
 // spot to stand at, the key itself: the route finds the way or not. A key
 // on a ledge is also a candidate from the floors around it that reach it,
@@ -1199,16 +1342,23 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
             }
             break;
 
-        // Where each one is now: once in sight, combat fights it.
+        // Where each one is now: once in sight, combat fights it. A boss
+        // from a firing spot (FIRE_RINGS), if there is any.
         case GOAL_KILL:
             {
                 k_vec2_t at[MAX_CANDIDATES];
+
+                if (FiresFrom(goal) && (count = FireSpots(goal->param, out, max)) > 0)
+                {
+                    break;
+                }
 
                 count = SDL_min(K_Specials_FindMonsters(goal->param, at, max), max);
 
                 for (i = 0; i < count; ++i)
                 {
                     out[i].at = at[i];
+                    out[i].aim = at[i];
                     out[i].kind = K_GOAL_POINT;
                     out[i].line = -1;
                     M_snprintf(out[i].what, sizeof(out[i].what), "%s at (%.0f,%.0f)",
@@ -2254,6 +2404,12 @@ static void PlanGoal(goal_t *goal)
     GoalName(goal, name, sizeof(name));
     num_reasons = 0;
 
+    // No spot sees the boss now: the boss itself, until it moves.
+    if (FiresFrom(goal) && count > 0 && !IsSpot(&candidates[0]))
+    {
+        goal->near = true;
+    }
+
     M_snprintf(reason, sizeof(reason), "%s",
                goal->type == GOAL_EXIT ? "the map has no exit line or floor"
              : goal->type == GOAL_KEY ? "no such key lies in the level"
@@ -2401,6 +2557,14 @@ static void PlanGoal(goal_t *goal)
     if (best_open >= 0)
     {
         Go(goal, &candidates[best_open], open_length, reachable, count);
+    }
+    else if (FiresFrom(goal) && count > 0 && IsSpot(&candidates[0]))
+    {
+        // No open way to a spot to fight it from: the boss itself, planned
+        // next tic, fixes and all.
+        goal->near = true;
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: no open way to any of %d spots to fight it from - "
+              "going for the %s itself", name, count, K_Combat_KindName(goal->param));
     }
     else if ((goal->type == GOAL_ITEM
               && (!(goal->fixable || goal->shut > 0) || best_blocked < 0 || fix_type == GOAL_KEY))
@@ -2763,8 +2927,10 @@ static boolean UpdateExitFloor(goal_t *goal)
 }
 
 // The monster of the kind gone for has moved KILL_DRIFT from where it stood
-// then (looked at every KILL_LOOK_TICS, not in a fight): planned again.
-// Returns true if it was.
+// then (looked at every KILL_LOOK_TICS, not in a fight): planned again - a
+// firing spot too, the boss itself gone for no more (FIRE_RINGS); so is a
+// boss that can be fought now, gone for itself as hopeless, or one hopeless
+// now, gone for from a spot. Returns true if it was.
 #define KILL_DRIFT 256.0
 #define KILL_LOOK_TICS TICRATE
 
@@ -2784,7 +2950,7 @@ static boolean UpdateKill(goal_t *goal)
 
     for (i = 0; i < count; ++i)
     {
-        double distance = hypot(at[i].x - goal->chosen.at.x, at[i].y - goal->chosen.at.y);
+        double distance = hypot(at[i].x - goal->chosen.aim.x, at[i].y - goal->chosen.aim.y);
 
         if (nearest < 0.0 || distance < nearest)
         {
@@ -2792,12 +2958,14 @@ static boolean UpdateKill(goal_t *goal)
         }
     }
 
-    if (nearest >= 0.0 && nearest < KILL_DRIFT)
+    if (nearest >= 0.0 && nearest < KILL_DRIFT && SpotChosen(goal) == FiresFrom(goal))
     {
         return false;
     }
 
     goal->planned = false;
+    goal->shooting = false;
+    goal->near = false;
     K_Nav_Clear();
     return true;
 }
@@ -4954,6 +5122,27 @@ void K_Brain_Tick(void)
         return;
     }
 
+    // At the firing spot, combat fights the boss; out of a fight too long,
+    // a new spot (FIRE_IDLE).
+    if (goal->type == GOAL_KILL && goal->shooting)
+    {
+        goal->quiet = K_Combat_GetStatus()->battle ? 0 : goal->quiet + 1;
+
+        if (goal->quiet > FIRE_IDLE)
+        {
+            char name[64];
+
+            GoalName(goal, name, sizeof(name));
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: no fight from the spot for %d s - another "
+                  "spot", name, FIRE_IDLE / TICRATE);
+            goal->planned = false;
+            goal->shooting = false;
+            K_Nav_Clear();
+        }
+
+        return;
+    }
+
     switch (K_Nav_Tick())
     {
         case K_NAV_ARRIVED:
@@ -4983,6 +5172,13 @@ void K_Brain_Tick(void)
                 goal->shooting = true;
                 goal->wait = 0;
                 M_StringCopy(goal->note, "shooting it", sizeof(goal->note));
+            }
+            else if (goal->type == GOAL_KILL && SpotChosen(goal))
+            {
+                // At the firing spot: combat fights it from here.
+                goal->shooting = true;
+                goal->quiet = 0;
+                M_StringCopy(goal->note, "fighting it from the spot", sizeof(goal->note));
             }
             else if (goal->type == GOAL_KILL)
             {

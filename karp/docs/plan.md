@@ -3898,6 +3898,28 @@ Who controls the player in a fight (the user's model):
   of 6 (31 to 51 s against 68 to 93): the hold had kept the bot out of the spider
   mastermind's open arena, and runs for single rockets in its sight, with no duck on a run,
   killed it. E4M6 wants a fight from where rockets reach it, not a hold rule.
+- **A boss fought from a firing spot** (the user, 2026-11-17: clear episode 4; E4M6 - the KILL
+  goal's route led up to the Cyberdemon, met at its door 130 to 250 off). Done: a Cyberdemon
+  or a spider mastermind the level needs dead, none of them hopeless, is gone for at a spot 512,
+  576 or 640 from it (`FireSpots`), in 24 directions, on floor the player stands on that does
+  not hurt, a radiation suit or not (the user: the first try, out to 768 and the suit on, picked
+  a spot down in E4M6's nukage pit, far off for the rockets; a dry ledge over it was better),
+  the boss in sight from the gun; the 16 nearest the player planned to, the nearest by route
+  gone to. There the player stays while combat fights it ("fighting it from the spot"); a new
+  spot once it has moved 256, or after 3 s out of a fight. With no open way to any spot, or none
+  that sees it, the boss itself, until it moves. Combat fights that boss as far as it targets
+  (1024; `FoughtFar`): no fight left for nearer than 512, none left alone across a large room,
+  fought as any though it may not come at the player (E4M6: "left alone for 10 s - it cannot
+  come at the player"). Hopeless, it is gone for itself as before - kept off, passed, what
+  beats it fetched (first try: from spot after spot in its sight, no fight there, the spider
+  mastermind shot the bot dead in E4M8's four salts, head finishing all four).
+  E4M6 salt 13: finished for the first time - the Cyberdemon fought from spots 500 to 1000
+  off with rockets (4000 down to 3185), then out of ammo and gone for itself while the
+  BFG was fetched; at 190 to 210 off, ducking its volleys between BFG shots, dead at 7:47.5.
+  Two samples of four salts, E2M8, E3M8, E4M6, E4M8: head finished 7 of 32, new 8 (E2M8 5
+  and 6, E3M8 1 and 0, E4M6 0 and 1, E4M8 1 and 1) - within the noise (E4M8's head finished
+  four of four in one batch, none in the next); a new spot for want of a fight 0 or 1 times a
+  run, no churn.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

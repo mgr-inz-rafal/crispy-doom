@@ -2233,11 +2233,25 @@ static void LogSpray(const player_t *player)
           BfgSees(me, GunHeight(player->mo)) ? "in sight" : "out of its sight or cone", count);
 }
 
+// Whether the monster is fought from afar: a Cyberdemon or a spider
+// mastermind the level needs dead (K_Combat_Needed) - the brain takes the
+// player to a spot that sees it from out to 768 (k_brain.c: FIRE_RINGS),
+// not up to it, and it is fought from there as from anywhere in sight
+// within TARGET_REACH: no fight left for nearer (BATTLE_REACH), none left
+// alone across a large room (LEAVE_REACH), fought as any though it may not
+// come at the player (the user, E4M6: met at the door of its room 130 to
+// 250 off, too near for rockets or cover; left alone for 10 s as one that
+// cannot come, shot at on the way).
+static boolean FoughtFar(int type)
+{
+    return type == needed && (type == MT_CYBORG || type == MT_SPIDER);
+}
+
 // A tough monster with no bullets across a large room (LEAVE_REACH).
 static boolean FarAndDodgeable(const k_monster_t *monster, const mobj_t *mo)
 {
     return !monster->hitscan && monster->type != MT_VILE && monster->type != MT_PAIN
-        && monster->health > LEAVE_HEALTH
+        && monster->health > LEAVE_HEALTH && !FoughtFar(monster->type)
         && monster->distance > (mo == target_mo ? LEAVE_KEEP : LEAVE_REACH);
 }
 
@@ -2433,10 +2447,10 @@ static void UpdateComfy(const player_t *player)
 }
 
 // Whether the target must be fought as any: a gunman, or one that can come
-// at the player, or comfy.
+// at the player, or comfy, or one fought from afar (FoughtFar).
 static boolean FoughtAsAny(int index)
 {
-    return monsters[index].hitscan || comfy || Reaches(index);
+    return monsters[index].hitscan || comfy || FoughtFar(monsters[index].type) || Reaches(index);
 }
 
 // Whether a monster (by its place in this tic's list) is left alone as a
@@ -4600,7 +4614,8 @@ static boolean WorthFighting(void)
     }
 
     target = &monsters[status.target];
-    return (!target->awake || target->distance <= (bold ? TARGET_REACH : BATTLE_REACH))
+    return (!target->awake
+            || target->distance <= (bold || FoughtFar(target->type) ? TARGET_REACH : BATTLE_REACH))
         && FoughtAsAny(status.target);
 }
 
@@ -7344,6 +7359,21 @@ int K_Combat_Beats(int weapon)
 void K_Combat_Needed(int type)
 {
     needed = type;
+}
+
+int K_Combat_Hopeless(int type)
+{
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (monsters[i].type == type && LeftAlone(i))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 int K_Combat_HardFight(void)

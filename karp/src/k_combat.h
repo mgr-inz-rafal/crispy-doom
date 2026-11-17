@@ -142,6 +142,11 @@ int K_Combat_Beats(int weapon);
 // would beat it is left to fetch (k_items.h: beats).
 void K_Combat_Needed(int type);
 
+// Whether a monster of the kind (a mobjtype_t) is left alone now as one the
+// player cannot kill with what it holds (hopeless) - not fought anyway as
+// the one the level needs dead.
+int K_Combat_Hopeless(int type);
+
 // Whether a hard fight is on, or was within the last few seconds: in sight,
 // awake, a Cyberdemon, a spider mastermind, an arch-vile or a monster the
 // player cannot kill with what it holds (hopeless), or a crowd. What an
