@@ -3862,6 +3862,35 @@ Who controls the player in a fight (the user's model):
   (thing 78, in the pit at (1328,-464), floor -200, left through a tunnel 64 high) was never
   gone for; the one in the Cyberdemon's room is for skills 1 and 2 only. E1M8, E4M8, MAP07 as
   before.
+  - The pit sphere is out of reach: five pillars 16 square, 48 above the pit floor, fence its
+    corner off with gaps of 16 to 24 (the route to it: "a gap narrower than the player at
+    (1216,-536)"). Tried and dropped: the boss on the KILL goal making the sphere worth a run
+    before the meeting - no vanilla map has such a boss and a sphere to reach (E1M8, E2M8,
+    E3M8, E4M8, MAP07 have none).
+- **The Cyberdemon fought from cover** (the user, 2026-11-17, E4M6: died fighting it with the
+  shotgun or chaingun, its rockets landing in the face while dodging on the stairs; asked: peek
+  from cover). The fight there: held at the door of its room, "letting them come", on three
+  steps of 16 with a strip 48 deep and a drop into lava (special 5) behind; it came to 190 to
+  280 off, inside where rockets are held back, so the chaingun; backing off, kept 512 off, went
+  nowhere; the rockets that killed were seen 0.2 s before. Done: its next rocket is a blow to
+  duck from (`DuckThreat`, as the arch-vile's flame): the first 6 tics after its volley begins,
+  the next two 24 apart, landing a flight later at 20 a tic; out of its sight before it lands,
+  and the fight brings the player back into sight to fire. Only for one that is fought: not
+  one left alone as hopeless (hidden from instead: E2M8 with the pistol, six ducks in 6 s cut
+  the hide short and the bot died at 20 s), not in a retreat, not while invulnerable till it
+  lands.
+- **Run past a boss** (the user, E2M8: with the pistol only, the bot would not leave the room
+  for the rocket launcher with the Cyberdemon roaming outside, then crept straight into it and
+  took a rocket in the face). The rocket launcher's way went through the Cyberdemon's area:
+  held short of it ("letting them come"), the run "fought for, not run for" (k_brain.c:
+  `UpdateEscape`), and with nothing worth fighting, crept in at 3 a tic. Done: monsters left
+  alone as hopeless are no risk for holding (`AreaRisk`): no hold, no creep, and a run for an
+  item through their area is a run past them (an escape: shooting on the way, nothing kept
+  off). E2M8, four salts: the rocket launcher in all at 17 to 24 s (head: three, at 27 to 35);
+  with the duck, of 15 runs head finished 5, new 6 (E2M8 3 and 3, MAP10 1 and 2, E3M9 1 and
+  1, E4M6 none).
+  Left: a boss that is fought is still held for - E2M8 salt 13 and E4M6 met it 133 to 184 off
+  at the hold, no cover in time, dead.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

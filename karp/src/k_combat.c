@@ -149,6 +149,7 @@
 extern void A_VileAttack();
 extern void A_BspiAttack();
 extern void A_SPosAttack();
+extern void A_CyberAttack();
 
 // Monsters further off are not sight-checked: far beyond any target.
 #define SIGHT_REACH 2048.0
@@ -853,7 +854,18 @@ extern void A_SPosAttack();
 // and only if the vile still sees the player), an arachnotron or the
 // spider mastermind winding up its stream or firing it (it stops once they
 // lose sight: A_SpidRefire), a revenant's homing missile coming (in the
-// open it turns back for pass after pass; it meets a wall). From when the
+// open it turns back for pass after pass; it meets a wall), the next rocket
+// of a Cyberdemon that is fought (the user, E4M6: peeking from cover - the
+// bot met the Cyberdemon at the door of its room 200 off, its back to a
+// drop, and died to its rockets every time): the first 6 tics after its
+// volley begins, the next two 24 apart, each landing its flight later at
+// ROCKET_SPEED, aimed where the player is as it leaves. Once the volley is
+// past, the fight brings the player back into its sight to fire (ChooseMove
+// scores a step out of the line of fire less). Not while the player is
+// invulnerable till it lands, nor from one left alone as hopeless, nor in a
+// retreat: that one is hidden from instead (E2M8, the pistol only: six ducks
+// in 6 s cut the hide round the corner short, the bot dithering 170 to 280
+// off it, dead at 20 s). From when the
 // blow is coming the nearest spot out of its sight (as the monster sees:
 // P_CheckSight from its eyes; the missile's, where it will be when the
 // player gets there, on its way to the player) is looked for every
@@ -5461,12 +5473,30 @@ static void UpdateDodge(const player_t *player)
 }
 
 // What is at stake in an area for holding: the monsters inside it, those
-// that could come out. Not those elsewhere that could see into it: waiting
-// does not bring them (E1M8: a hold short of an empty area, 66 of danger
-// from monsters away from it).
+// that could come out (k_area.h: inside, the asleep at half). Not those
+// elsewhere that could see into it: waiting does not bring them (E1M8: a
+// hold short of an empty area, 66 of danger from monsters away from it).
+// Nor those left alone as hopeless (LeftAlone), never fought: waiting only
+// lets them come, creeping walks up to them, and a run for an item through
+// their area is a run past them (the user, E2M8: the pistol only, the
+// rocket launcher's way through the Cyberdemon's area - held short of it
+// three times, "letting them come", the run "fought for, not run for",
+// and then crept in at 3 a tic, into a rocket).
 static double AreaRisk(int area)
 {
-    return K_Area_Get()->areas[area].inside;
+    double risk = K_Area_Get()->areas[area].inside;
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (LeftAlone(i) && Kind(monsters[i].type)->cost > 0.0
+         && K_Area_Of(K_Map_CellAt(monsters[i].at.x, monsters[i].at.y)) == area)
+        {
+            risk -= Kind(monsters[i].type)->cost * (monsters[i].awake ? 1.0 : 0.5);
+        }
+    }
+
+    return risk;
 }
 
 // Where the route ahead goes into an area that is not safe, with HOLD_RISK
@@ -6003,8 +6033,8 @@ static int TicsUntil(const mobj_t *mo, actionf_v action)
 
 // The most pressing blow to duck from, if any: a monster in sight winding
 // up a blow at the player, a stream going on (it may land once more before
-// the monster loses sight: DUCK_STREAM to get away), or a homing missile
-// coming within DUCK_MISSILE_REACH.
+// the monster loses sight: DUCK_STREAM to get away), a Cyberdemon's next
+// rocket, or a homing missile coming within DUCK_MISSILE_REACH.
 static boolean DuckThreat(const player_t *player, duckfrom_t *from)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -6014,14 +6044,15 @@ static boolean DuckThreat(const player_t *player, duckfrom_t *from)
     for (i = 0; i < num_monsters; ++i)
     {
         const mobj_t *mo = monster_mobjs[i];
-        boolean stream = mo->type != MT_VILE;
+        boolean stream = mo->type == MT_BABY || mo->type == MT_SPIDER;
         int tics;
 
         // As the monster sees (A_VileAttack, A_SpidRefire), not as the
         // player does (Doom II MAP14: riding a lift, the player did not see
         // the vile that saw it, and took the flame unducked).
         if (mo->target != player->mo || mo->state == NULL || !attack_states[mo->state - states]
-         || (mo->type != MT_VILE && mo->type != MT_BABY && mo->type != MT_SPIDER)
+         || (mo->type != MT_VILE && mo->type != MT_BABY && mo->type != MT_SPIDER
+             && mo->type != MT_CYBORG)
          || monsters[i].distance > SIGHT_REACH || !K_Sight_Things(mo, player->mo))
         {
             continue;
@@ -6029,6 +6060,7 @@ static boolean DuckThreat(const player_t *player, duckfrom_t *from)
 
         tics = TicsUntil(mo, mo->type == MT_VILE ? (actionf_v) A_VileAttack
                            : mo->type == MT_BABY ? (actionf_v) A_BspiAttack
+                           : mo->type == MT_CYBORG ? (actionf_v) A_CyberAttack
                            : (actionf_v) A_SPosAttack);
 
         if (tics < 0)
@@ -6036,7 +6068,16 @@ static boolean DuckThreat(const player_t *player, duckfrom_t *from)
             continue;
         }
 
-        if (stream && mo->state != &states[mo->info->missilestate])
+        if (mo->type == MT_CYBORG)
+        {
+            tics += (int) (monsters[i].distance / ROCKET_SPEED);
+
+            if (player->powers[pw_invulnerability] > tics || LeftAlone(i) || retreating)
+            {
+                continue;
+            }
+        }
+        else if (stream && mo->state != &states[mo->info->missilestate])
         {
             tics = SDL_max(tics, DUCK_STREAM);
         }
@@ -6047,7 +6088,7 @@ static boolean DuckThreat(const player_t *player, duckfrom_t *from)
             from->mo = mo;
             from->name = monsters[i].name;
             from->blow = mo->type == MT_VILE ? "flame" : mo->type == MT_BABY ? "plasma"
-                       : "bullets";
+                       : mo->type == MT_CYBORG ? "rocket" : "bullets";
             from->at = monsters[i].at;
             from->eye = monsters[i].z + monsters[i].height * 0.75;
             from->tics = tics;
