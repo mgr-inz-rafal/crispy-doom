@@ -403,7 +403,12 @@ extern void A_CyberAttack();
 //   player. Against them it rates SAW_GAIN times its damage (it saves the
 //   ammo), never less for their health, and is brought up MELEE_IN inside
 //   its reach and kept up while they stay within MELEE_KEEP - they come
-//   back for the next bite;
+//   back for the next bite. A cacodemon or a pain elemental the guns held
+//   fall short of (Outgunned) is sawn wherever it is, others about or not:
+//   no gun fires at it, the chainsaw comes up and the player goes at it
+//   (Sawn; the user, E2M9: low on ammo among cacodemons, the bot kept them
+//   off as hopeless, the chainsaw in its pocket, and was cornered - "it
+//   breaks their attack");
 // - the berserk fist is for the weakest, zombiemen and imps, MELEE_IN inside
 //   its reach: aimed badly, a punch that misses lets anything tougher answer
 //   hard;
@@ -588,7 +593,8 @@ extern void A_CyberAttack();
 // as far as a fight keeps the monster off (kind_t: keep): a projectile's
 // FLIES_HIT of its damage (a big, slow target, kept where rockets fire), a
 // bullet's or a pellet's as the spread and range allow (HitShare). Melee
-// never counts; invulnerable for CHASE_LEFT more, nothing is hopeless.
+// never counts - but one the chainsaw is for wherever it is (Sawn) is never
+// hopeless; invulnerable for CHASE_LEFT more, nothing is.
 // A hopeless monster is no target - no round is spent on it - and one
 // awake in sight within its kind's distance (AVOID_PAST beyond it once kept
 // off), whether it can come at the player or shoots from where it stands,
@@ -2542,9 +2548,26 @@ static double InHand(const player_t *player, const k_monster_t *monster)
     return can;
 }
 
+// Whether the guns held fall short of a monster of its kind: what is in
+// hand would not take HOPELESS_SHARE of the health it is spawned with - not
+// of what it has left, which the chainsaw wears down while the ammo stays.
+static boolean Outgunned(const player_t *player, const k_monster_t *monster)
+{
+    return InHand(player, monster) < SpawnHealth(monster->type) * HOPELESS_SHARE;
+}
+
+// Whether the chainsaw is the weapon for the monster wherever it is: a
+// cacodemon or a pain elemental, which it keeps in pain, the player holding
+// it and the guns held falling short (Outgunned).
+static boolean Sawn(const player_t *player, const k_monster_t *monster)
+{
+    return (monster->type == MT_HEAD || monster->type == MT_PAIN)
+        && player->weaponowned[wp_chainsaw] && Outgunned(player, monster);
+}
+
 // Whether the monster (by its place in this tic's list) is hopeless: not
-// weak, and what is in hand would not take HOPELESS_SHARE of its health.
-// Never while invulnerable for CHASE_LEFT more.
+// weak, and what is in hand would not take HOPELESS_SHARE of its health -
+// unless it is sawn. Never while invulnerable for CHASE_LEFT more.
 static boolean Hopeless(const player_t *player, int index)
 {
     const k_monster_t *monster = &monsters[index];
@@ -2552,7 +2575,7 @@ static boolean Hopeless(const player_t *player, int index)
 
     return SpawnHealth(monster->type) > WEAK_HEALTH && Kind(monster->type)->cost > 0.0
         && player->powers[pw_invulnerability] < CHASE_LEFT
-        && InHand(player, monster) < monster->health * share;
+        && InHand(player, monster) < monster->health * share && !Sawn(player, monster);
 }
 
 // Whether a monster of the kind is chased (CHASE_LEFT): a boss, the player
@@ -3235,12 +3258,12 @@ static boolean Bunched(const k_monster_t *monster)
     return false;
 }
 
-// Whether the monster is what the chainsaw is for (SAW_ALONE).
-static boolean SawFor(const k_monster_t *monster)
+// Whether the monster is what the chainsaw is for (SAW_ALONE, Sawn).
+static boolean SawFor(const player_t *player, const k_monster_t *monster)
 {
     int i;
 
-    if (BitesOnly(monster->type))
+    if (BitesOnly(monster->type) || Sawn(player, monster))
     {
         return true;
     }
@@ -3317,7 +3340,7 @@ static boolean MeleeWorth(const player_t *player, const weapon_t *weapon,
     boolean punches = weapon->weapon == wp_fist && player->powers[pw_strength];
     int i;
 
-    if (weapon->weapon == wp_chainsaw && SawFor(monster)
+    if (weapon->weapon == wp_chainsaw && SawFor(player, monster)
      && edge <= (in_hand ? MELEE_KEEP : in))
     {
         return true;
@@ -3415,8 +3438,8 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
 // (KeptFrom), nor for a gun that would not kill one that is not weak in
 // time (InTime: E2M8, the pistol brought up whenever the cyberdemon came too
 // near for rockets, and put away as the player backed off - a switch each
-// way, the fight going on without either); more for the chainsaw against
-// what it is for.
+// way, the fight going on without either), nor for a gun against one sawn
+// (Sawn); more for the chainsaw against what it is for.
 static double Preference(const player_t *player, const weapon_t *weapon,
                          const k_monster_t *monster, boolean pistol_right, boolean in_hand)
 {
@@ -3424,6 +3447,7 @@ static double Preference(const player_t *player, const weapon_t *weapon,
 
     if (rating > 0.0
      && ((Reserved(weapon) && KeptFrom(player, monster))
+         || (weapon->reach <= 0.0 && Sawn(player, monster))
          || (weapon->reach <= 0.0 && SpawnHealth(monster->type) > WEAK_HEALTH
              && !InTime(weapon, monster))))
     {
@@ -3440,7 +3464,7 @@ static double Preference(const player_t *player, const weapon_t *weapon,
     {
         rating = 0.0;
     }
-    else if (weapon->weapon == wp_chainsaw && SawFor(monster))
+    else if (weapon->weapon == wp_chainsaw && SawFor(player, monster))
     {
         rating *= SAW_GAIN;
     }
@@ -3514,7 +3538,7 @@ static void ChooseWeapon(const player_t *player)
 
     // The chainsaw stays up while what it is for stays near, out of reach a
     // moment (MELEE_KEEP).
-    if (current != NULL && current->weapon == wp_chainsaw && SawFor(monster)
+    if (current != NULL && current->weapon == wp_chainsaw && SawFor(player, monster)
      && monster->distance - monster->radius <= MELEE_KEEP)
     {
         best = current;
@@ -3527,6 +3551,13 @@ static void ChooseWeapon(const player_t *player)
      && RocketsFor(monster) && monster->distance >= KEEP_AWAY && !KeptFrom(player, monster))
     {
         best = current;
+    }
+
+    // The chainsaw against one sawn, wherever it is: the player goes at it
+    // (MeleeFor).
+    if (Sawn(player, monster))
+    {
+        best = WeaponOf(wp_chainsaw);
     }
 
     if (best != NULL && best != current
@@ -4156,7 +4187,7 @@ static double Exposure(k_vec2_t at, double floor)
 // as the last resort (MeleeLast).
 static boolean MeleeFor(const player_t *player, const k_monster_t *monster)
 {
-    return (wanted == wp_chainsaw && SawFor(monster))
+    return (wanted == wp_chainsaw && SawFor(player, monster))
         || (wanted == wp_fist && player->powers[pw_strength]
             && (monster->type == MT_POSSESSED || monster->type == MT_TROOP))
         || ((wanted == wp_fist || wanted == wp_chainsaw) && MeleeLast(player, monster));
@@ -4275,7 +4306,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
     boolean rockets = !standoff && !chase
                    && (wanted == wp_missile
                        || (RocketsFor(target) && CanFire(player, WeaponOf(wp_missile))
-                           && !OtherGun(player, false) && !KeptFrom(player, target)));
+                           && !OtherGun(player, false) && !KeptFrom(player, target)
+                           && !Sawn(player, target)));
     boolean melee = !standoff && MeleeFor(player, target)
                  && target->distance - target->radius > WeaponOf(wanted)->reach - MELEE_IN;
     double tx = target->at.x - me.x, ty = target->at.y - me.y;
