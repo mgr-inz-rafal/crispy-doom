@@ -3890,7 +3890,14 @@ Who controls the player in a fight (the user's model):
   with the duck, of 15 runs head finished 5, new 6 (E2M8 3 and 3, MAP10 1 and 2, E3M9 1 and
   1, E4M6 none).
   Left: a boss that is fought is still held for - E2M8 salt 13 and E4M6 met it 133 to 184 off
-  at the hold, no cover in time, dead.
+  at the hold, no cover in time, dead. Tried and dropped: no hold for the Cyberdemon and the
+  spider mastermind, fought or not (three samples, E2M8, E3M8, E3M9, E4M6, E4M8, MAP10, nine
+  salts in all): the Cyberdemon maps 8 finished against 4 with the run past it too, 4 against 5
+  with the hold alone; E4M6 none either way - the door is the only sight into the
+  Cyberdemon's room, held for or walked up to, met 130 to 250 off; E3M8 died sooner in 4 salts
+  of 6 (31 to 51 s against 68 to 93): the hold had kept the bot out of the spider
+  mastermind's open arena, and runs for single rockets in its sight, with no duck on a run,
+  killed it. E4M6 wants a fight from where rockets reach it, not a hold rule.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
