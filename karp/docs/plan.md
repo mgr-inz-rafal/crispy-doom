@@ -3846,6 +3846,22 @@ Who controls the player in a fight (the user's model):
     all the while, the bot stood 190 from the Cyberdemon as it wore off, and died).
   - Two bosses and one sphere: whichever is on the player brings the run; the chase goes after
     the nearer of that kind, and combat after any boss in sight.
+- **A gap only a boss's death opens** (E4M6, 2026-11-17, both builds, every run that got
+  there: GO TO EXIT idled for minutes, "a gap narrower than the player at (1620,-456)"). The
+  bars before the exit (sectors 37, 38, 39, 41, tag 666) open as the last Cyberdemon dies, or by
+  switch 1331 - in a closet (sector 25) whose door (26) opens from inside only (line 1337; the
+  face toward the room, line 1336, has no special). Each bar's USE TRIGGER was tried and failed
+  ("only 0 units of headroom at line 1336"), and then nothing: for a gap too narrow, the bosses
+  were looked for only among the sectors either side of it, never those narrowing it. Done:
+  with no line to work for any of them, the boss whose death opens one (`BossOpens`) - at a
+  crossing and within a cell. E4M6, nine salts: three reached the bars, each pushed KILL EVERY
+  CYBERDEMON once the four triggers failed, stocked up (medikits, rockets, bullets: "can be
+  fought now - 2324 of its 4000 in hand") and went for it - and died in 1 to 15 s, met 200 off
+  through the door with the chaingun up, a rocket for 95 to 100. The other six died before. Never
+  finished, and the Cyberdemon never killed, in 19 logs so far: the fight is next. Its sphere
+  (thing 78, in the pit at (1328,-464), floor -200, left through a tunnel 64 high) was never
+  gone for; the one in the Cyberdemon's room is for skills 1 and 2 only. E1M8, E4M8, MAP07 as
+  before.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

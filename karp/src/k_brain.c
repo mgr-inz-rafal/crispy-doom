@@ -1367,37 +1367,6 @@ static int OpenSoonest(const int *narrowing, int count)
     return best;
 }
 
-// What would get the player through a gap inside a cell: as for a gap too
-// narrow at a crossing, opening a sector that narrows it (Doom II MAP11: a
-// fence of pillars 16 apart, the gaps between them 24 long, behind the red
-// door; walk-over lines open or lower every other pillar for a while).
-static boolean FixForPinch(int cell, k_vec2_t at, goal_type_t *type, int *param, int *want)
-{
-    int narrowing[8];
-    int count = K_Graph_PinchSectors(cell, at, narrowing, arrlen(narrowing));
-    int best = OpenSoonest(narrowing, count);
-    int barrel = K_Graph_PinchBarrel(cell, at);
-
-    // A barrel narrowing it: shot.
-    if (barrel >= 0 && Allowed(GOAL_BARREL, barrel))
-    {
-        *type = GOAL_BARREL;
-        *param = barrel;
-        *want = 0;
-        return true;
-    }
-
-    if (best < 0)
-    {
-        return false;
-    }
-
-    *type = GOAL_TRIGGER;
-    *param = narrowing[best];
-    *want = OPENING_MOVES | K_MOVE_DOOR;
-    return true;
-}
-
 // The kind of boss whose death moves the sector one of the ways wanted
 // (k_specials.h: A_BossDeath; E1M8: the barons lower the star-shaped wall
 // before the teleporter to the exit floor), with some still alive and the
@@ -1422,6 +1391,67 @@ static int BossFor(int sector, int want)
     }
 
     return -1;
+}
+
+// Of the sectors narrowing a gap, the kind of boss whose death opens one
+// (BossFor), for when no line can be worked for any (OpenSoonest); -1 if
+// none. E4M6: the bars before the exit open as the Cyberdemon dies, or by
+// switch 1331 - in a closet whose door opens from inside only; every
+// switch tried and failed, the bot stood there for minutes.
+static int BossOpens(const int *narrowing, int count)
+{
+    int i, boss;
+
+    for (i = 0; i < count; ++i)
+    {
+        if ((boss = BossFor(narrowing[i], OPENING_MOVES | K_MOVE_DOOR)) >= 0)
+        {
+            return boss;
+        }
+    }
+
+    return -1;
+}
+
+// What would get the player through a gap inside a cell: as for a gap too
+// narrow at a crossing, opening a sector that narrows it (Doom II MAP11: a
+// fence of pillars 16 apart, the gaps between them 24 long, behind the red
+// door; walk-over lines open or lower every other pillar for a while), or
+// killing the boss whose death opens one.
+static boolean FixForPinch(int cell, k_vec2_t at, goal_type_t *type, int *param, int *want)
+{
+    int narrowing[8];
+    int count = K_Graph_PinchSectors(cell, at, narrowing, arrlen(narrowing));
+    int best = OpenSoonest(narrowing, count);
+    int barrel = K_Graph_PinchBarrel(cell, at);
+    int boss;
+
+    // A barrel narrowing it: shot.
+    if (barrel >= 0 && Allowed(GOAL_BARREL, barrel))
+    {
+        *type = GOAL_BARREL;
+        *param = barrel;
+        *want = 0;
+        return true;
+    }
+
+    if (best < 0 && (boss = BossOpens(narrowing, count)) >= 0)
+    {
+        *type = GOAL_KILL;
+        *param = boss;
+        *want = 0;
+        return true;
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    *type = GOAL_TRIGGER;
+    *param = narrowing[best];
+    *want = OPENING_MOVES | K_MOVE_DOOR;
+    return true;
 }
 
 // What would get the player past a blocked crossing, if anything: the key
@@ -1482,12 +1512,20 @@ static boolean FixFor(int portal, int from, k_crossing_t crossing, goal_type_t *
     {
         int narrowing = K_Graph_NarrowSectors(portal, from, sectors_, arrlen(sectors_));
         int best = OpenSoonest(sectors_, narrowing);
+        int boss;
 
         if (best >= 0)
         {
             *type = GOAL_TRIGGER;
             *param = sectors_[best];
             *want = OPENING_MOVES | K_MOVE_DOOR;
+            return true;
+        }
+
+        if ((boss = BossOpens(sectors_, narrowing)) >= 0)
+        {
+            *type = GOAL_KILL;
+            *param = boss;
             return true;
         }
 
