@@ -243,7 +243,9 @@ extern void A_SPosAttack();
 // ROCKET_ROOM beyond where rockets stop (ShotDamage), and each way scores
 // ROCKET_TOWARD less as it goes toward it: running at it, rockets burst
 // nearer (RocketGain). The target of a
-// melee weapon (MeleeFor) is not backed off from: it must come close. And
+// melee weapon (MeleeFor) is not backed off from: it must come close - less
+// than MELEE_IN inside the weapon's reach, each way scores MELEE_TOWARD as it
+// goes toward it (strafing alone, the player soon leaves its reach). And
 // no step in a fight, nor a sidestep or step away out of one, crosses a
 // walk-over line that would change something for good (Trips; as creeping,
 // CreepStops) - a lighting line, a WR lift or door that goes back by
@@ -259,6 +261,7 @@ extern void A_SPosAttack();
 #define ROOM_STEP 16.0
 #define ROOM_WEIGHT 1.0
 #define ROCKET_TOWARD 1.0
+#define MELEE_TOWARD 2.0
 #define MAX_PUSHERS 32
 #define MAX_TRIPS 64
 #define MOVE_LOOK 32.0
@@ -406,14 +409,21 @@ extern void A_SPosAttack();
 // - the bare fist is useless but when nothing else can fire and no ammo lies
 //   in reach to be fetched.
 // With nothing else to fire, the chainsaw and the berserk fist go against
-// anything. Not for a weapon in hand that cannot fire for now (rockets too
-// close). On a tie, a weapon that shoots wins.
+// anything. And any of them, the bare fist too, whatever ammo lies about,
+// against one of the weakest - LAST_HEALTH at spawn or less: zombiemen,
+// shotgun guys, chaingunners, SS, imps - MELEE_IN inside its reach, when no
+// gun held can hurt it from there, rockets too close (MeleeLast; the user,
+// Doom II MAP15: rockets only, a shotgun guy in the way, the bot pressed on
+// it to get past, rightly holding the rockets, and it had shot after shot).
+// Not against a tougher one for a weapon in hand that cannot fire for now
+// (rockets too close). On a tie, a weapon that shoots wins.
 #define FIST_SHARE 0.25
 #define MELEE_HEALTH 200
 #define MELEE_IN 16.0
 #define MELEE_KEEP 128.0
 #define SAW_ALONE 512.0
 #define SAW_GAIN 2.0
+#define LAST_HEALTH 70
 
 // Rockets (the user: the rocket launcher was a suicide on most levels). The
 // blast reaches BLAST less the larger of the x and y distances, less the
@@ -3245,26 +3255,54 @@ static boolean AmmoLying(void)
     return false;
 }
 
+// Whether melee is the last resort against the monster (LAST_HEALTH): one
+// of the weakest, and no gun held can hurt it from here.
+static boolean MeleeLast(const player_t *player, const k_monster_t *monster)
+{
+    int i;
+
+    if (SpawnHealth(monster->type) > LAST_HEALTH)
+    {
+        return false;
+    }
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        if (weapons[i].reach <= 0.0 && Selectable(player, &weapons[i])
+         && ShotDamage(player, &weapons[i], monster->distance, monster->radius, &monster->at) > 0.0)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Whether melee is worth having up against the monster: the chainsaw
-// against what it is for, the berserk fist against the weakest, in reach -
-// well in (MELEE_IN) to be brought up, the chainsaw within MELEE_KEEP to be
-// kept in hand - or else only when no other weapon can fire, and, for the
-// bare fist, no ammo lies in reach.
+// against what it is for, the berserk fist against the weakest, any as the
+// last resort (MeleeLast), in reach - well in (MELEE_IN) to be brought up,
+// the chainsaw within MELEE_KEEP to be kept in hand - or else only when no
+// other weapon can fire, and, for the bare fist, no ammo lies in reach.
 static boolean MeleeWorth(const player_t *player, const weapon_t *weapon,
                           const k_monster_t *monster, boolean in_hand)
 {
     double edge = monster->distance - monster->radius;
+    double in = weapon->reach - (in_hand ? 0.0 : MELEE_IN);
     boolean punches = weapon->weapon == wp_fist && player->powers[pw_strength];
     int i;
 
     if (weapon->weapon == wp_chainsaw && SawFor(monster)
-     && edge <= (in_hand ? MELEE_KEEP : weapon->reach - MELEE_IN))
+     && edge <= (in_hand ? MELEE_KEEP : in))
     {
         return true;
     }
 
-    if (punches && (monster->type == MT_POSSESSED || monster->type == MT_TROOP)
-     && edge <= weapon->reach - (in_hand ? 0.0 : MELEE_IN))
+    if (punches && (monster->type == MT_POSSESSED || monster->type == MT_TROOP) && edge <= in)
+    {
+        return true;
+    }
+
+    if (edge <= in && MeleeLast(player, monster))
     {
         return true;
     }
@@ -4088,12 +4126,14 @@ static double Exposure(k_vec2_t at, double floor)
 }
 
 // Whether the weapon wanted is a melee one for the monster (MeleeWorth): the
-// chainsaw against what it is for, the berserk fist against the weakest.
+// chainsaw against what it is for, the berserk fist against the weakest, any
+// as the last resort (MeleeLast).
 static boolean MeleeFor(const player_t *player, const k_monster_t *monster)
 {
     return (wanted == wp_chainsaw && SawFor(monster))
         || (wanted == wp_fist && player->powers[pw_strength]
-            && (monster->type == MT_POSSESSED || monster->type == MT_TROOP));
+            && (monster->type == MT_POSSESSED || monster->type == MT_TROOP))
+        || ((wanted == wp_fist || wanted == wp_chainsaw) && MeleeLast(player, monster));
 }
 
 // This tic's trips: the walk-over lines within reach of me that do
@@ -4210,6 +4250,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
                    && (wanted == wp_missile
                        || (RocketsFor(target) && CanFire(player, WeaponOf(wp_missile))
                            && !OtherGun(player, false) && !KeptFrom(player, target)));
+    boolean melee = !standoff && MeleeFor(player, target)
+                 && target->distance - target->radius > WeaponOf(wanted)->reach - MELEE_IN;
     double tx = target->at.x - me.x, ty = target->at.y - me.y;
     double length = sqrt(tx * tx + ty * ty);
     double face = atan2(ty, tx);
@@ -4381,6 +4423,11 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
         if (rockets)
         {
             score -= ROCKET_TOWARD * SDL_max(0.0, ux * tx + uy * ty);
+        }
+
+        if (melee)
+        {
+            score += MELEE_TOWARD * (ux * tx + uy * ty);
         }
 
         // Out of the blast of barrels the monsters' shots may set off, and

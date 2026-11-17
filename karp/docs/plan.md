@@ -2762,6 +2762,16 @@ Who controls the player in a fight (the user's model):
   to hit it in the face, so the shotgun guy had shot after shot. An exception to "no fist"
   wanted: against a weak monster in reach, when every gun held is barred at that range (or has
   no ammo), punch rather than stand under fire. Probably a small change in the weapon rating.
+  Done: melee is the last resort (MeleeLast) against one of the weakest - 70 health at spawn or
+  less: zombiemen, shotgun guys, chaingunners, SS, imps - 16 inside its reach, when no gun held
+  can hurt it from there (out of ammo, rockets too close, a lost soul near): the bare fist too,
+  whatever ammo lies about, or the chainsaw if held. Not demons, spectres or lost souls (they
+  bite: backed off from for the rockets, as before), nor anything tougher (E2M8: the fist up for
+  the cyberdemon 104 off). The target of any melee weapon, not backed off from as before, is now
+  also stepped in on while out of reach (2 for each way toward it): strafing alone soon left
+  its reach. Rare in real runs (MAP15, six salts, all dead before the launcher; E3M5/E3M6 the
+  same as before); with rockets only forced (E1M2, E1M3, MAP02, MAP04, three salts each): the
+  fist up 42 times, 33 of those monsters punched dead, most within 1 to 3 s.
 - **Seen in salted runs, to look into with logs** (the user, jotted, Doom and Doom II):
   1. The fist brought up at close range, once even against a baron of hell, with ammo full. A
      guess: a berserk pack in hand, which makes the fist rate ten times and skips its quarter
