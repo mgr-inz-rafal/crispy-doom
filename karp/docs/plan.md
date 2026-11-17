@@ -3993,9 +3993,14 @@ Who controls the player in a fight (the user's model):
     (floor 16) and the big one (32) are 8 apart, the room's floor (0) between them in a cell
     256 long that runs on into the room, so the thin-cell rule (`K_Map_CellFloor`) leaves it at
     0: a drop, then a step of 32. The engine stands the player on the highest floor under its
-    box, so it steps 16 straight across. Wanted: a step across such a strip when the floors on
-    either side are within a step of each other - a crossing between the two cells, or the
-    thin-cell rule for the stretch between them only (next to the jumps, which scan gaps).
+    box, so it steps 16 straight across. Done (2026-11-17, `k_jump.c`: `StripBeyond`): the
+    jump search, whose runs already step as the engine does (the highest floor under the box),
+    also tries edges the floor drops 24 or less across where, within the player's width beyond,
+    a floor rises too high to climb from the lower one but within a step of the takeoff; the
+    run decides as for any jump. E2M7: 14 jumps more (24 to 38), 5 edges more tried, 1 ms -
+    the room floor and the first crate onto the second (32), it and its step onto the top
+    (64); from a pistol start, salts 443 and 13, the box gone for by the run up the crates and
+    picked up at 1:05.9 and 0:57.6 (head: no way there).
   - E1M7's gap and E2M8's start: done, above.
   - MAP05 riding a lift up and dropping off it, over and over; MAP06 teleporting to and fro
     between two pads.

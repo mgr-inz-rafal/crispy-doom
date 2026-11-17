@@ -7,7 +7,10 @@
 //	and ceiling under the box from the lines it straddles, and P_SlideMove
 //	along a wall that stops a move.
 //
-//	Takeoff edges are the portals the floor drops more than 24 across.
+//	Takeoff edges are the portals the floor drops more than 24 across, and
+//	those it drops less across to a strip narrower than the player, beyond
+//	which a floor rises that it could not climb to from the strip but can
+//	step to from the edge (StripBeyond).
 //	From points along each, rays go out straight and to either side; each
 //	gets as long a run-up as the takeoff floor allows behind the edge (or,
 //	where that makes no jump, a longer one down steps), and
@@ -876,9 +879,43 @@ static boolean InBox(k_vec2_t p, const k_vec2_t *min, const k_vec2_t *max)
     return p.x >= min->x && p.x <= max->x && p.y >= min->y && p.y <= max->y;
 }
 
+// Whether, within the player's width beyond the edge (along normal), a
+// floor rises that is more than a step above `low`, the floor the edge
+// drops to, and no more than a step above `from_floor`: a strip narrower
+// than the player between two floors a step apart, which the engine steps
+// across, the box on both (the user, E2M7: the box of shells on a crate
+// up small crates 16 apart, the room's floor 8 wide between the first two).
+static boolean StripBeyond(const k_portal_t *portal, k_vec2_t normal, double from_floor,
+                           double low)
+{
+    int s, d;
+
+    for (s = 1; s <= 3; ++s)
+    {
+        double t = s * 0.25;
+
+        for (d = 1; d <= 4; ++d)
+        {
+            double beyond = d * PLAYER_RADIUS * 0.5;
+            double floor = Floor(SectorAt(portal->a.x + (portal->b.x - portal->a.x) * t
+                                              + normal.x * beyond,
+                                          portal->a.y + (portal->b.y - portal->a.y) * t
+                                              + normal.y * beyond));
+
+            if (floor > low + MAX_STEP + 0.01 && floor <= from_floor + MAX_STEP + 0.01)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // Tries the jumps off every edge the floor drops more than 24 across (the
-// shared stretches of border, not jumps), or only those with an end in the
-// box (min, max) if one is given. Returns how many edges were tried.
+// shared stretches of border, not jumps), and off those it drops less across
+// to a strip the player steps over (StripBeyond), or only those with an end
+// in the box (min, max) if one is given. Returns how many edges were tried.
 static int SearchEdges(const k_vec2_t *min, const k_vec2_t *max)
 {
     const k_graph_t *graph = K_Graph_Get();
@@ -906,7 +943,7 @@ static int SearchEdges(const k_vec2_t *min, const k_vec2_t *max)
             const k_vec2_t *inside = &map->cells[to].centroid;
             int samples;
 
-            if (from_floor - CellFloor(to) <= MAX_STEP)
+            if (from_floor <= CellFloor(to))
             {
                 continue;
             }
@@ -916,6 +953,12 @@ static int SearchEdges(const k_vec2_t *min, const k_vec2_t *max)
             {
                 normal.x = -normal.x;
                 normal.y = -normal.y;
+            }
+
+            if (from_floor - CellFloor(to) <= MAX_STEP
+             && !StripBeyond(portal, normal, from_floor, CellFloor(to)))
+            {
+                continue;
             }
 
             ++edges;

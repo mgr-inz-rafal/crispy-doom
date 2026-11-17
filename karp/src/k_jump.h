@@ -46,8 +46,11 @@ typedef struct
 
 // Called by the graph build, once the line grid and the portals are there,
 // and the specials: looks for jumps off every edge the floor drops more than
-// 24 from, across whatever lies beyond. A jump is kept only if it works with
-// a margin: with 85% of the thrust, and from starts 6 units to either side.
+// 24 from, across whatever lies beyond - and off those it drops less from to
+// a strip narrower than the player, a floor a step up beyond it (E2M7's
+// crates, stepped across with the box on both). A jump is kept only if it
+// works with a margin: with 85% of the thrust, and from starts 6 units to
+// either side.
 // Where no run-up of up to 128 units gives one, a long one of up to 320,
 // down steps too, is tried, kept with 90% of the thrust.
 // Then again around each sector a line moves, as if it were where the line
