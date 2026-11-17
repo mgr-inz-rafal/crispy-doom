@@ -41,6 +41,7 @@ static boolean console_enabled;
 static boolean console_open;
 static boolean quit_on_exit;
 static boolean level_completed;     // reported for this level
+static int world_tic = -1;          // leveltime Karp last looked at the level
 
 extern boolean secretexit;          // g_game.c
 
@@ -220,6 +221,7 @@ void K_LevelLoaded(void)
     K_Items_Reset();
     K_Trace_Reset();
     level_completed = false;
+    world_tic = -1;
 
     if (K_Salt_Enabled())
     {
@@ -255,6 +257,15 @@ boolean K_OwnsControls(void)
 void K_Ticker(void)
 {
     static boolean netgame_logged = false;
+    boolean moved = leveltime != world_tic;
+
+    // Only as the world moves: paused, or in a menu (P_Ticker), leveltime
+    // stands still and so does Karp's picture of the level - looked at again
+    // within the same tic, every item would be taken for a new one, and the
+    // one gone for as picked up (the user, E2M2: paused to write a note, the
+    // cell pack gone for "picked up" 3600 units off; every item listed once
+    // more each tic paused).
+    world_tic = leveltime;
 
     if (autoplay_enabled && netgame && !netgame_logged)
     {
@@ -265,7 +276,7 @@ void K_Ticker(void)
 
     // A human drives: the log follows what the player does. First, so the
     // exit line crossed shows before the level ends.
-    if (console_enabled && !autoplay_enabled && gamestate == GS_LEVEL)
+    if (moved && console_enabled && !autoplay_enabled && gamestate == GS_LEVEL)
     {
         K_Trace_Tick();
     }
@@ -273,7 +284,7 @@ void K_Ticker(void)
     // Jumps that moving sectors made possible (k_graph.h); how the player
     // is doing, what it can see, how dangerous each area is, and what the
     // items lying about are worth to it.
-    if ((autoplay_enabled || console_enabled) && gamestate == GS_LEVEL)
+    if (moved && (autoplay_enabled || console_enabled) && gamestate == GS_LEVEL)
     {
         K_Graph_Tick();
         K_Condition_Tick();
