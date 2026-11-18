@@ -4064,6 +4064,23 @@ Who controls the player in a fight (the user's model):
     for good, nothing logged. Now, landed with it still there, a step aside (`StepOff`, 32 units,
     a spot the player fits at with a way back): the first step touches it (the user's seed,
     180696880: picked up 0.3 s after landing).
+  - And a jump across a door's slot (the user, E3 demo, explorer: "stuck on E3M5 ... constantly
+    re-aligning itself on a switch and then slides on the wall"): the secret door at line 1329
+    (special 31) is a slot 8 wide and 48 deep between two floors at 0, stepped across once it
+    is open; the jump search, which counts manual doors open on the run-up, found the step and
+    took it as working with the door shut, and nav works no door on a jump - 26 run-ups into
+    it, one item of the pile behind it after another. Now (`k_jump.c`: `shut_door`) a door shut
+    now that a run's centre goes over makes the jump not work until it is open, and the jump
+    keeps it, so the brain opens it first (the fix for a jump found with a door open). From
+    the user's save: 43 run-ups before, none after; the door opened at 5:13.
+  - And the explorer's sweep (the user, E3M4: "not that much of exploration happened"): it went
+    for the place least out of the way to the exit - the area by the exit, through door 1041,
+    which opens one way only, at 2:03 - and left 26 places behind it out of reach. Now the
+    nearest by the way there, the danger counted; one with no way back to where the player is
+    only once no other is left; and no place within 128 of a walk-over exit line (E3M5: an area
+    44 off the exit line, the level ended the tic after it was reached). E3M5 from the user's
+    save: kills 59 of 63 (13 before), items 32 of 35 (2), secrets 8 of 10 (3), 460 s (151);
+    E3M4 from a pistol start: 63 of 76 areas, kills 82 of 90, items 31 of 48, secrets 3 of 4.
   Episode 1 from E1M1, default, head against new, salts 443, 71, 7 and 13, 25 minutes: the same
   but for drift in a close fight (443: E1M5 parted at a spectre's step, then a death on E1M6,
   finished on the retry); 71 stuck on E1M5 in both (above).

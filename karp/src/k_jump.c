@@ -133,6 +133,9 @@ typedef struct
     int land_sector;
     int door;               // the first door it took as open that is closed,
                             // -1 if none
+    int shut_door;          // a door shut now that its centre went over (a
+                            // strip it steps across): opened first, -1 if
+                            // none
     boolean as_if_used;     // it went over the sector searched as if moved
 } run_t;
 
@@ -571,7 +574,11 @@ static boolean StopsOn(body_t body, double floor)
 // falls, is stopped, or MAX_TICS run out. Manual doors count as open while
 // it is on the takeoff floor: the box can overlap a door it came through,
 // and it holds that door open (Doom II MAP08: the hop onto the first
-// sinking pillar, off a strip 8 units wide behind the red door).
+// sinking pillar, off a strip 8 units wide behind the red door). But not one
+// its centre goes over, shut now (shut_door): that one it has to open
+// (the user, E3M5: the secret door at line 1329, its sector a slot 8 wide
+// and 48 deep that the player steps across once it is open; taken as open,
+// the bot ran into it 26 times, nav opening no door on a jump).
 static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
 {
     body_t body;
@@ -582,6 +589,7 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
     memset(run, 0, sizeof(*run));
     run->land_sector = -1;
     run->door = -1;
+    run->shut_door = -1;
     run->edge = start;
     doors_open = true;
     assumed_door = -1;
@@ -631,6 +639,12 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
         under = SectorAt(body.x, body.y);
         lowest = SDL_min(lowest, Floor(under));
 
+        if (run->shut_door < 0 && K_Graph_IsDoor((int) (under - sectors))
+         && K_Graph_OpeningCeiling((int) (under - sectors)) - Floor(under) < PLAYER_HEIGHT)
+        {
+            run->shut_door = (int) (under - sectors);
+        }
+
         // On the ground, its centre over the floor it stands on: landed if
         // that is too high to climb to from the lowest floor passed over,
         // and it stops there; if it cannot stop, it runs on (a pillar's top
@@ -648,7 +662,7 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
                     run->land.y = body.y;
                     run->land_floor = body.floorz;
                     run->land_sector = (int) (under - sectors);
-                    run->door = assumed_door;
+                    run->door = assumed_door >= 0 ? assumed_door : run->shut_door;
                     run->as_if_used = as_if_used;
                     return;
                 }
@@ -1206,12 +1220,12 @@ int K_Jump_Possible(int jump)
 
     judged[jump] = leveltime + 1;
     Run(j->start, j->dir, THRUST, &run);
-    possible[jump] = Lands(&run, j->land_sector);
+    possible[jump] = Lands(&run, j->land_sector) && run.shut_door < 0;
 
     if (possible[jump])
     {
         Run(j->start, j->dir, THRUST * j->margin, &run);
-        possible[jump] = Lands(&run, j->land_sector);
+        possible[jump] = Lands(&run, j->land_sector) && run.shut_door < 0;
     }
 
     return possible[jump];

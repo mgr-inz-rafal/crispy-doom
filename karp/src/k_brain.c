@@ -479,10 +479,18 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // again for ITEM_SKIP_TICS. One with no way there, or that did not work out
 // (the user: decoys, secrets a map's bugs put out of reach), is set aside
 // for PLACE_SKIP, and dropped for the level after PLACE_TRIES such. No more
-// places after EXPLORE_MOST spent on them in a level. An explorer's sweep
+// places after EXPLORE_MOST spent on them in a level. None within EXIT_CLEAR
+// of a walk-over exit line: passed on the way out anyway, and gone to, the
+// player may run on over it (E3M5: an area 44 off the exit line, the level
+// ended the tic after it was reached). An explorer's sweep
 // before the exit is for every level, and for the places not seen yet too,
 // any way off (PLACE_SWEEP_REACH; E1M2: those left lay 8000 to 13000 off,
-// the other half of the map), the nearest first, the waits at doors and lifts on
+// the other half of the map), the nearest by the way there first, not the
+// least out of the way to the exit, and one with no way back to where the
+// player is (a drop, a door that opens from one side) only once no other is
+// left (the user, E3M4: "not that much exploration"; the area by the exit,
+// on the way, was gone to first, through door 1041 that opens one way only,
+// and 26 places were out of reach behind it), the waits at doors and lifts on
 // the way up to PLACE_WAIT_MOST (an item's ITEM_WAIT_MOST: E1M2, the rooms
 // left were 9 s of doors and lifts away and more): begun once GO TO EXIT is all
 // there is left to do and has a way, however far (E1M2: begun 339 off the
@@ -506,6 +514,7 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 #define PLACE_TRIES 3
 #define EXPLORE_MOST (15 * 60 * TICRATE)
 #define EXPLORE_STALL (2 * 60 * TICRATE)
+#define EXIT_CLEAR 128.0
 #define MAX_BOSSES 8
 
 typedef enum
@@ -644,6 +653,8 @@ typedef struct
     k_vec2_t spot;          // where to go
     int skip;               // not looked at before this
     int tries;              // times set aside (PLACE_TRIES)
+    int later;              // no way back from it, other places first: not
+                            // looked at before this (PLACE_SWEEP_REACH)
 } place_t;
 
 static place_t *places;
@@ -4345,6 +4356,35 @@ static boolean RoomAt(int cell, k_vec2_t *spot)
         && K_Map_CellAt(spot->x, spot->y) == cell;
 }
 
+// Whether a point lies within EXIT_CLEAR of a walk-over exit line.
+static boolean NearExitLine(k_vec2_t at)
+{
+    const k_map_t *map = K_Map_Get();
+    int i, secret;
+
+    for (i = 0; i < map->num_lines; ++i)
+    {
+        const k_line_t *line = &map->lines[i];
+        double dx = line->v2.x - line->v1.x, dy = line->v2.y - line->v1.y;
+        double length2 = dx * dx + dy * dy, t;
+
+        if (K_Specials_ExitTrigger(line->special, &secret) != K_TRIGGER_CROSS)
+        {
+            continue;
+        }
+
+        t = length2 > 0.0 ? ((at.x - line->v1.x) * dx + (at.y - line->v1.y) * dy) / length2 : 0.0;
+        t = SDL_max(0.0, SDL_min(1.0, t));
+
+        if (hypot(line->v1.x + dx * t - at.x, line->v1.y + dy * t - at.y) < EXIT_CLEAR)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // An explorer's places, on level load: the areas worth a visit and the
 // secrets (PLACE_AREA_REACH), each with a spot to go to - an area's largest
 // cell's middle, else any of its cells' the player fits at; a secret's
@@ -4381,7 +4421,7 @@ static void BuildPlaces(void)
             fits = RoomAt(areamap->cells[area->first_cell + i], &place->spot);
         }
 
-        if (fits)
+        if (fits && !NearExitLine(place->spot))
         {
             place->area = a;
             place->sector = -1;
@@ -4412,7 +4452,7 @@ static void BuildPlaces(void)
             }
         }
 
-        if (largest > 0.0)
+        if (largest > 0.0 && !NearExitLine(place->spot))
         {
             place->area = -1;
             place->sector = i;
@@ -4490,10 +4530,11 @@ static boolean ConsiderPlaces(goal_t *goal)
     double order_score[PLACE_SWEEP_ROUTES];
     int boss_areas[2 * MAX_BOSSES];
     k_vec2_t at[MAX_BOSSES];
-    int found = 0, best = -1, num_boss = 0, count, i, k;
-    double best_slack = 0.0, best_detour = 0.0, best_risk = 0.0;
+    int found = 0, best = -1, best_one_way = -1, num_boss = 0, count, i, k;
+    double best_cost = 0.0, best_detour = 0.0, best_risk = 0.0;
+    double one_way_cost = 0.0, one_way_detour = 0.0, one_way_risk = 0.0;
     double remaining_way, remaining_damage = 0.0;
-    boolean best_fixed = false;
+    boolean best_fixed = false, one_way_fixed = false;
     boolean stacking;           // on top of an item gone for (STACK_SHARE)
     k_pose_t player;
     k_vec2_t start, end;
@@ -4565,7 +4606,8 @@ static boolean ConsiderPlaces(goal_t *goal)
             boss |= boss_areas[k] >= 0 && boss_areas[k] == place->in_area;
         }
 
-        if (place->tries >= PLACE_TRIES || leveltime < place->skip || boss || PlaceDone(i))
+        if (place->tries >= PLACE_TRIES || leveltime < place->skip || leveltime < place->later
+         || boss || PlaceDone(i))
         {
             continue;
         }
@@ -4623,8 +4665,8 @@ static boolean ConsiderPlaces(goal_t *goal)
     {
         place_t *place = &places[order[k]];
         double reach = PlaceReach(place, stacking);
-        double detour, way, damage, risk;
-        boolean fixed;
+        double detour, way, damage, risk, cost;
+        boolean fixed, one_way = false;
 
         if (!ItemDetour(start, player.cell, place->spot, end, remaining_way, remaining_damage,
                         !stacking, sweep_since > 0 ? PLACE_WAIT_MOST : ITEM_WAIT_MOST, &detour,
@@ -4650,13 +4692,63 @@ static boolean ConsiderPlaces(goal_t *goal)
             continue;
         }
 
-        if (best < 0 || reach - detour > best_slack)
+        // In the sweep the nearest by the way there, the danger on it
+        // counted; one with no way back only once nothing else is left
+        // (PLACE_SWEEP_REACH). Else the least out of the way.
+        if (sweep_since > 0)
+        {
+            K_Path_Find(&probe, place->spot, -1, start);
+            one_way = probe.result != K_PATH_FOUND;
+            cost = way + (damage + risk) * DAMAGE_WAY;
+        }
+        else
+        {
+            cost = detour - reach;
+        }
+
+        if (one_way)
+        {
+            if (best_one_way < 0 || cost < one_way_cost)
+            {
+                best_one_way = order[k];
+                one_way_cost = cost;
+                one_way_detour = detour;
+                one_way_risk = risk;
+                one_way_fixed = fixed;
+            }
+
+            continue;
+        }
+
+        if (best < 0 || cost < best_cost)
         {
             best = order[k];
-            best_slack = reach - detour;
+            best_cost = cost;
             best_detour = detour;
             best_risk = risk;
             best_fixed = fixed;
+        }
+    }
+
+    // Only places with no way back looked at: gone to when they are all
+    // there is left (fewer than were looked at), or looked past once
+    // already; else looked past for a while, for the others.
+    if (best < 0 && best_one_way >= 0
+     && (found < routes || places[best_one_way].later != 0))
+    {
+        best = best_one_way;
+        best_detour = one_way_detour;
+        best_risk = one_way_risk;
+        best_fixed = one_way_fixed;
+    }
+    else if (best < 0)
+    {
+        for (k = 0; k < found; ++k)
+        {
+            if (places[order[k]].later == 0)
+            {
+                places[order[k]].later = leveltime + ITEM_SKIP_TICS;
+            }
         }
     }
 
