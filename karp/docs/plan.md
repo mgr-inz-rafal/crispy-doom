@@ -4056,6 +4056,14 @@ Who controls the player in a fight (the user's model):
     the start; planned again from there, up lift 48 and past the tip again - 42 teleports in 9
     minutes with salt 71, 16 in 5 with 443 (head the same). Left: the route along a teleport
     line's front at a hair's breadth (the MAP06 to-and-fro may be the same).
+  - And an item or key got to in the air (the user, E3 demo, explorer: "the bot got stuck at
+    E3M3, mid level, no visible reason - the bot stands still"): dropping 48 into the alcove of
+    the cell pack at (-592,304), nav reached its spot falling, stopped dead there and was done;
+    the brain waited for the pick-up on landing, but the engine touches things only as the
+    player moves across (P_TryMove) - landed on it straight down, the bot stood on the cell pack
+    for good, nothing logged. Now, landed with it still there, a step aside (`StepOff`, 32 units,
+    a spot the player fits at with a way back): the first step touches it (the user's seed,
+    180696880: picked up 0.3 s after landing).
   Episode 1 from E1M1, default, head against new, salts 443, 71, 7 and 13, 25 minutes: the same
   but for drift in a close fight (443: E1M5 parted at a spectre's step, then a death on E1M6,
   finished on the retry); 71 stuck on E1M5 in both (above).

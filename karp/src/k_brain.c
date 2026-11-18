@@ -436,6 +436,16 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 #define HOLD_GAP 24.0
 #define PLAYER_RADIUS 16.0
 
+// Got to an item or a key in the air, falling onto it (Doom II MAP03: a box
+// of shells at the foot of a drop): the engine touches things only as the
+// player moves across (P_TryMove), and one landed on straight down, nav
+// done, stays lying (the user, E3M3: the cell pack at the foot of a drop of
+// 48, the bot stood on it for good, nothing logged). Landed with it still
+// there, the player steps STEP_OFF aside, to a spot it fits at with a way
+// back - the first step touches it; with no such spot, the spot did not
+// work out.
+#define STEP_OFF 32.0
+
 // Going round in a loop (the user: whatever the cause, break it; Doom II
 // MAP15 pushed and dropped a key for 13 minutes): a goal planned LOOP_PLANS
 // times within LOOP_TICS - a wait for moving sectors plans once a second,
@@ -547,6 +557,8 @@ typedef struct
     int num_tried;
     int shut;                   // times its way shut on the way (MAX_SHUT)
     boolean idle;               // GO TO EXIT: no way for now, waiting
+    boolean landing;            // GOAL_KEY, GOAL_ITEM: got there in the air,
+                                // falling onto it (STEP_OFF)
     boolean staying;            // GO TO EXIT: on the exit floor, waiting for
                                 // it to end the level
     boolean shooting;           // GOAL_BARREL: at the spot, combat shooting
@@ -2291,6 +2303,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
     goal->wait = 0;
     goal->waited = 0;
     goal->idle = false;
+    goal->landing = false;
     goal->shooting = false;
     idling = false;
 
@@ -5660,6 +5673,63 @@ static boolean ConsiderHeldUp(const goal_t *goal)
     return true;
 }
 
+// Landed on the item or key gone for, still lying there (STEP_OFF): a step
+// aside goes on top. Returns false if there is no spot for it.
+static boolean StepOff(void)
+{
+    static const double ways[8][2] =
+    {
+        { 1.0, 0.0 }, { 0.7071, 0.7071 }, { 0.0, 1.0 }, { -0.7071, 0.7071 },
+        { -1.0, 0.0 }, { -0.7071, -0.7071 }, { 0.0, -1.0 }, { 0.7071, -0.7071 },
+    };
+    k_pose_t player;
+    k_vec2_t start, spot;
+    goal_t *step;
+    int i;
+
+    if (depth >= MAX_GOALS || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+
+    for (i = 0; i < 8; ++i)
+    {
+        spot.x = start.x + ways[i][0] * STEP_OFF;
+        spot.y = start.y + ways[i][1] * STEP_OFF;
+
+        if (K_Map_CellAt(spot.x, spot.y) < 0
+         || K_Graph_Clearance(spot, PLAYER_RADIUS + 1.0) <= PLAYER_RADIUS)
+        {
+            continue;
+        }
+
+        K_Path_Find(&probe, start, player.cell, spot);
+
+        if (probe.result != K_PATH_FOUND || probe.length > 2.0 * STEP_OFF || probe.damage > 0.0)
+        {
+            continue;
+        }
+
+        K_Path_Find(&probe, spot, -1, start);
+
+        if (probe.result != K_PATH_FOUND || probe.length > 2.0 * STEP_OFF)
+        {
+            continue;
+        }
+
+        step = Push(GOAL_GOTO, -1);
+        step->point = spot;
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "landed on it, untouched - added GO TO (%.0f, %.0f), a "
+              "step aside", spot.x, spot.y);
+        return true;
+    }
+
+    return false;
+}
+
 // At the spot for a barrel in the way, combat shoots it.
 static void UpdateShooting(void)
 {
@@ -5995,6 +6065,25 @@ void K_Brain_Tick(void)
         return;
     }
 
+    // Fallen onto the item or key, landed, and it still lies there: stood on,
+    // untouched (STEP_OFF).
+    if (goal->landing)
+    {
+        k_pose_t pose;
+
+        if (K_Map_GetPlayer(&pose) && pose.onground)
+        {
+            goal->landing = false;
+
+            if (!StepOff())
+            {
+                CandidateFailed(goal, "landed on it, but did not pick it up");
+            }
+        }
+
+        return;
+    }
+
     switch (K_Nav_Tick())
     {
         case K_NAV_ARRIVED:
@@ -6012,11 +6101,15 @@ void K_Brain_Tick(void)
             {
                 k_pose_t pose;
 
-                // Still falling onto it (Doom II MAP03: a box of shells at
-                // the foot of a drop): it is picked up on landing.
+                // Still falling onto it: looked at again on landing
+                // (STEP_OFF).
                 if (!K_Map_GetPlayer(&pose) || pose.onground)
                 {
                     CandidateFailed(goal, "got there, but did not pick it up");
+                }
+                else
+                {
+                    goal->landing = true;
                 }
             }
             else if (goal->type == GOAL_BARREL)
