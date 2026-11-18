@@ -194,11 +194,12 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // was left lying - then even the longest detours for it, cells and rockets,
 // armour - or "nah, we probably have enough for the next level"): once a
 // level, GO TO EXIT the only goal and the way left to the exit no longer
-// than SWEEP_NEAR, while the arsenal goes on to a next level (ArsenalGoesOn)
-// and the level has monsters - when something lying about is worth one
-// (K_Items_Sweepable). Over once nothing is, or after SWEEP_MOST (the user:
-// limits, but generous - never an endless run); the route to the exit goes
-// on all the while, so with nothing in reach the player just leaves.
+// than SWEEP_NEAR, while the arsenal goes on to a next level
+// (K_Condition_ArsenalGoesOn) and the level has monsters - when something
+// lying about is worth one (K_Items_Sweepable). Over once nothing is, or
+// after SWEEP_MOST (the user: limits, but generous - never an endless run);
+// the route to the exit goes on all the while, so with nothing in reach the
+// player just leaves.
 #define SWEEP_NEAR 1024.0
 #define SWEEP_MOST (5 * 60 * TICRATE)
 
@@ -4041,8 +4042,12 @@ static boolean ConsiderItems(goal_t *goal)
 // corridor, clawed; Doom II MAP14: a hold that had killed five was broken
 // off for a medikit among the monsters held short of) - until the fight
 // for it is over. Not for health at CRITICAL: worth any risk; nor for
-// invulnerability, which makes the monsters there harmless. Logged once a
-// run.
+// invulnerability, which makes the monsters there harmless; nor into an
+// area with a boss inside, never held short of (k_combat.c: BossInside) -
+// run past it, the boss's rockets left behind by a running player (the
+// user, E2M8: at 36 health the soulsphere's way went into the Cyberdemon's
+// area, "fought for, not run for", and the bot stood in its rockets until
+// it died). Logged once a run.
 static boolean RunWaits(const goal_t *goal, const k_item_t *item)
 {
     char name[64];
@@ -4181,24 +4186,6 @@ static void UpdateEscape(void)
     }
 }
 
-// Whether what the player carries goes on to a next level: not from the
-// last level of an episode (k_demo.c: GameEnds) - a new game follows, from
-// the pistol.
-static boolean ArsenalGoesOn(void)
-{
-    if (gamemode != commercial || gamemission == pack_nerve)
-    {
-        return gamemap != 8;
-    }
-
-    if (gamemission == pack_master)
-    {
-        return gamemap != 20 && gamemap != 21;
-    }
-
-    return gamemap != 30;
-}
-
 // Each tic: the sweep before the exit (SWEEP_NEAR) - judged, begun, over.
 static void UpdateSweep(void)
 {
@@ -4210,7 +4197,7 @@ static void UpdateSweep(void)
     {
         count = K_Items_Sweepable();
 
-        if (nomonsters || !ArsenalGoesOn())
+        if (nomonsters || !K_Condition_ArsenalGoesOn())
         {
             sweep_since = -1;
         }

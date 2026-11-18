@@ -243,6 +243,21 @@ void K_Condition_LogArsenal(const char *when)
           player->backpack ? ", a backpack" : "", ammo);
 }
 
+int K_Condition_ArsenalGoesOn(void)
+{
+    if (gamemode != commercial || gamemission == pack_nerve)
+    {
+        return gamemap != 8;
+    }
+
+    if (gamemission == pack_master)
+    {
+        return gamemap != 20 && gamemap != 21;
+    }
+
+    return gamemap != 30;
+}
+
 const k_conditionstatus_t *K_Condition_Get(void)
 {
     return &status;

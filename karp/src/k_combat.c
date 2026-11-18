@@ -22,10 +22,12 @@
 //	shot should kill the target. The pistol is the last resort: for
 //	monsters with little health sniped at from far off, not closing in,
 //	with the area clear, and when nothing better can hurt the target; the
-//	bare fist comes after it, and melee is for weak monsters only. Rockets
+//	bare fist comes after it, and melee is for weak monsters only, swung
+//	with the monster's middle in reach, the player pushing into it. Rockets
 //	and cells are kept for the tough monsters left (barons, arch-viles,
 //	mancubi, the Cyberdemon, the spider mastermind) while there are no more
-//	than their health takes: the weaker ones get the other guns. Nav
+//	than their health takes, and some for the levels ahead: the weaker ones
+//	get the other guns, unless they press the player. Nav
 //	faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
@@ -45,9 +47,11 @@
 //	Pistol and chaingun shots stray only when the trigger is held through
 //	a shot (P_GunShot is accurate while refire is 0): far off they are
 //	tapped, fired only from the ready state. The plasma rifle is held: let
-//	go, it pauses 20 tics after each ball. Rockets are fired only where
-//	they would burst well clear of the player, as the blast measures it,
-//	their path clear of walls and other monsters, no lost soul near; and
+//	go, it pauses 20 tics after each ball - mid-burst the trigger stays down
+//	while the aim is near. Rockets are fired only where they would burst
+//	well clear of the player, as the blast measures it, their path clear of
+//	walls and other monsters, no lost soul near, and not while the player
+//	is about to move as that cannot tell (ducking, retreating, a run); and
 //	only at tough monsters, or bunched ones, unless the player is
 //	invulnerable. A BFG ball's spray leaves from where the player stands
 //	once it has burst: till then its burst is kept in sight (BFG_HOLD).
@@ -104,7 +108,8 @@
 //	in and a little past it; once there with still nothing worth fighting,
 //	or the area safe, it goes in - and at once, under fire from monsters
 //	elsewhere, which waiting does not bring. Runs for items wait while such
-//	an area lies ahead (K_Combat_MonstersAhead).
+//	an area lies ahead (K_Combat_MonstersAhead). Never short of a boss's
+//	area (the Cyberdemon, the spider mastermind), nor creeping toward it.
 //
 //	Cover (plan, 7.8: C4): blows that need the monster to see the player -
 //	an arch-vile's flame, an arachnotron's or the spider mastermind's
@@ -218,7 +223,11 @@ extern void A_CyberAttack();
 
 // A target MISS_SHOTS shots have not hurt is out of reach of them, as far
 // as can be told (a sliver of it through a gap, the autoaim missing it): it
-// is left alone for MISS_IGNORE_TICS (the user).
+// is left alone for MISS_IGNORE_TICS (the user). Those of a projectile still
+// in the air at it aside (InFlight; the user, E2M8: plasma at the
+// Cyberdemon 450 off, a ball every 3 tics, each flying 18 - left alone
+// after the fifth, before the first had got there, 7 times; with nothing to
+// shoot, the bot crept on toward it).
 #define MISS_SHOTS 5
 #define MISS_IGNORE_TICS 70
 
@@ -244,9 +253,12 @@ extern void A_CyberAttack();
 // ROCKET_ROOM beyond where rockets stop (ShotDamage), and each way scores
 // ROCKET_TOWARD less as it goes toward it: running at it, rockets burst
 // nearer (RocketGain). The target of a
-// melee weapon (MeleeFor) is not backed off from: it must come close - less
-// than MELEE_IN inside the weapon's reach, each way scores MELEE_TOWARD as it
-// goes toward it (strafing alone, the player soon leaves its reach). And
+// melee weapon (MeleeFor) is not backed off from: it must come close - its
+// middle less than MELEE_IN inside the weapon's reach, each way scores
+// MELEE_TOWARD as it goes toward it (strafing alone, the player soon leaves
+// its reach): pushed into it (the user, E2M9: "the chainsaw kept missing the
+// cacodemon - push forward"; the push ended at its front 48 off, its middle
+// 79, and the saw reaches 64 to the middle). And
 // no step in a fight, nor a sidestep or step away out of one, crosses a
 // walk-over line that would change something for good (Trips; as creeping,
 // CreepStops) - a lighting line, a WR lift or door that goes back by
@@ -333,6 +345,16 @@ extern void A_CyberAttack();
 // Pistol and chaingun shots are tapped beyond this distance.
 #define TAP_DISTANCE 192.0
 
+// The plasma rifle fires again only with the trigger down as a shot ends
+// (A_ReFire, as S_PLASMA2 begins); let go then, it waits out S_PLASMA2's 20
+// tics - six balls' time (the user, E2M9: "it shoots a short burst at a
+// cacodemon and then tries to shoot again, but the weapon has a cooldown;
+// with the plasma it's better to keep the trigger on"). Mid-burst the
+// trigger stays down while the facing is within PLASMA_HOLD times the
+// aim's tolerance of the target and no barrel is at risk, whatever else
+// would let go of it: a ball astray costs a cell, a burst broken 0.6 s.
+#define PLASMA_HOLD 3.0
+
 // A weapon is brought up only if it rates SWITCH_GAIN times the one in
 // hand, and not within SWITCH_WAIT tics of the last switch; if the one in
 // hand cannot hurt the target at all, after SWITCH_TICS. A switch takes
@@ -414,6 +436,11 @@ extern void A_CyberAttack();
 //   hard;
 // - the bare fist is useless but when nothing else can fire and no ammo lies
 //   in reach to be fetched.
+// A melee weapon reaches its 64 to the monster's middle, not its front: the
+// engine's line attack meets a thing at the line through its middle, corner
+// to corner (PIT_AddThingIntercepts) - it is swung only with the middle in
+// reach (a cacodemon, radius 31: swung from 95 off before, hitting only
+// within about 64 - "it kept missing").
 // With nothing else to fire, the chainsaw and the berserk fist go against
 // anything. And any of them, the bare fist too, whatever ammo lies about,
 // against one of the weakest - LAST_HEALTH at spawn or less: zombiemen,
@@ -459,7 +486,19 @@ extern void A_CyberAttack();
 // share - at a full run a fifth as far (the user, E2M6: 64 health off its
 // own rocket; E1M9: shots on the way at imps and zombiemen 400 to 500 off,
 // the player running after each rocket at 13 to 16 a tic and caught in the
-// burst, on the imp, a barrel or a ledge - once killed).
+// burst, on the imp, a barrel or a ledge - once killed). None pressed while
+// the player is about to move as the check cannot tell (the user, E2: 5 of
+// its own rockets in one run, one killing): ducking out of sight, or with a
+// duck due within the rocket's lead (8 tics from the press, the duck taking
+// the player behind the wall it then leaves into; E2M8, 53), retreating
+// round a corner, stepping out of the way of something, running for an
+// item (escape); and a fight is not broken off for a run while the
+// player's rocket is on its way (E2M9: one at a cacodemon, the fight broken
+// off for the soulsphere, the route ran the player at its burst, 42). With
+// so little health one blast could kill (the armour's share counted), none
+// on the way, nor at what is nearer than rockets are brought up for
+// (ROCKET_MIN and ROCKET_ROOM beyond its front; E2M8: at 51 health, no
+// armour, shot on the way to the soulsphere, killed by its own blast).
 #define ROCKET_RADIUS 11.0
 #define ROCKET_SPEED 20.0
 #define MISSILE_SPAWN 32.0
@@ -579,6 +618,24 @@ extern void A_CyberAttack();
 #define BESET_REACH 512.0
 #define BESET_COST 30.0
 #define BESET_LINGER (2 * TICRATE)
+
+// Rockets and cells are kept for the levels ahead too (the user, E2: the
+// plasma rifle brought up for a lone imp, the cells gone by E2M5, E2M9's
+// barons and cacodemons met with none - "keep a reserve even if no boss on
+// the map; the shotgun and the chaingun for easier enemies, unless under
+// pressure"): while the arsenal goes on to a next level
+// (K_Condition_ArsenalGoesOn), up to CARRY_DAMAGE of their damage in hand
+// (two barons' health, FLIES_HIT of their damage a round; no more than
+// RESERVE_SHARE of what they could do with as many as the player can carry),
+// they rate nothing against a monster that is not tough while a gun but the
+// pistol has CARRY_SPARE times its ammo's low mark (k_condition.c) - but for
+// a fight the player is pressed in (UnderPressure): beset (BESET_COST),
+// monsters but the tough costing CARRY_CROWD in all on it, weak ones too
+// (BESET_LINGER after), or health CRITICAL. On the last level of an episode
+// they are spent as before.
+#define CARRY_DAMAGE 2000.0
+#define CARRY_SPARE 2
+#define CARRY_CROWD 40.0
 
 // Hopeless (plan 7.3 point 3, fight or avoid; the user, E3M9: the shells
 // spent on the cyberdemon with the shotgun, then the bullets with the
@@ -1149,8 +1206,10 @@ static int ahead_area = -1;
 static boolean escape;
 static char escape_why[96];
 
-// Rockets and cells kept for the tough monsters (RESERVE_SHARE).
+// Rockets and cells kept for the tough monsters (RESERVE_SHARE), and for the
+// levels ahead (CARRY_DAMAGE).
 static boolean reserve;
+static boolean carry;
 
 // Hopeless monsters (HOPELESS_SHARE): this tic, by place in the list, and per
 // weapon whether it would kill one awake in time (K_Combat_Beats); those
@@ -1186,10 +1245,12 @@ static boolean bfg_spraying;
 static const mobj_t *bfg_logged;
 
 // Invulnerable for INVULN_BOLD more, this tic; when a hard fight was last
-// on (HARD_LINGER), and when the player was last beset (BESET_LINGER).
+// on (HARD_LINGER), and when the player was last beset or crowded
+// (BESET_LINGER, CARRY_CROWD).
 static boolean bold;
 static int hard_seen;
 static int beset_seen;
+static int crowd_seen;
 static int boss_seen;               // a boss last on the player (BOSS_LINGER),
 static int boss_type = -1;          // and its kind
 
@@ -1287,9 +1348,11 @@ static int hold_shut_until;
 // followed), what, since when, the tics since its blow was last coming,
 // and the blow the player found no cover from (logged once). Before it:
 // out of whose sight a spot was looked for, when, whether found, and how
-// long getting there takes. And the cell search's (DUCK_GRAPH_REACH): per
-// cell, how far, where it is come into, and from which cell.
+// long getting there takes, and whether a duck is due within a rocket's
+// lead. And the cell search's (DUCK_GRAPH_REACH): per cell, how far, where
+// it is come into, and from which cell.
 static boolean ducking;
+static boolean duck_soon;
 static k_vec2_t duck_points[DUCK_POINTS];
 static int duck_num_points;
 static int duck_next;
@@ -2676,14 +2739,22 @@ static boolean Beset(void)
     return leveltime - beset_seen <= BESET_LINGER;
 }
 
+// Whether the rockets and cells kept for the levels ahead are for the fight
+// at hand (CARRY_CROWD).
+static boolean UnderPressure(void)
+{
+    return Beset() || leveltime - crowd_seen <= BESET_LINGER
+        || K_Condition_Get()->health == K_NEED_CRITICAL;
+}
+
 // Each tic: whether a hard fight is on (HARD_ONE, HARD_CROWD), whether the
-// player is beset (BESET_COST) - logged as it begins with rockets and cells
-// kept - and whether it is invulnerable enough to fight far monsters
-// (INVULN_BOLD).
+// player is beset (BESET_COST) or pressed (CARRY_CROWD) - logged as it
+// begins with rockets and cells kept - and whether it is invulnerable enough
+// to fight far monsters (INVULN_BOLD).
 static void UpdateHard(const player_t *player)
 {
-    double crowd = 0.0, beset = 0.0;
-    boolean one = false, was = Beset();
+    double crowd = 0.0, beset = 0.0, pressing = 0.0;
+    boolean one = false, was = Beset(), was_pressed = UnderPressure();
     int i;
 
     bold = player->powers[pw_invulnerability] >= INVULN_BOLD;
@@ -2705,6 +2776,8 @@ static void UpdateHard(const player_t *player)
             }
             beset += monster->distance <= BESET_REACH && SpawnHealth(monster->type) > WEAK_HEALTH
                   && SpawnHealth(monster->type) < TOUGH_HEALTH ? Kind(monster->type)->cost : 0.0;
+            pressing += monster->distance <= BESET_REACH
+                     && SpawnHealth(monster->type) < TOUGH_HEALTH ? Kind(monster->type)->cost : 0.0;
         }
     }
 
@@ -2718,10 +2791,21 @@ static void UpdateHard(const player_t *player)
         beset_seen = leveltime;
     }
 
+    if (pressing >= CARRY_CROWD)
+    {
+        crowd_seen = leveltime;
+    }
+
     if (!was && Beset() && reserve)
     {
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells for this fight - %.0f health's worth "
               "of monsters between the tiers on the player", beset);
+    }
+    else if (!was_pressed && UnderPressure() && carry && !reserve)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells kept for the levels ahead for this "
+              "fight - %s", Beset() || pressing >= CARRY_CROWD
+                            ? "monsters crowding on the player" : "health CRITICAL");
     }
 }
 
@@ -2828,11 +2912,12 @@ static void UpdateHopeless(const player_t *player)
 }
 
 // Each tic: whether rockets and cells are kept for the tough monsters left
-// (RESERVE_SHARE); logged as it changes.
+// (RESERVE_SHARE), and for the levels ahead (CARRY_DAMAGE); logged as it
+// changes.
 static void UpdateReserve(const player_t *player)
 {
     double best[NUMAMMO] = { 0.0 }, need = 0.0, can = 0.0, most = 0.0;
-    boolean held;
+    boolean held, carried;
     int i, a;
 
     for (i = 0; i < num_monsters; ++i)
@@ -2861,6 +2946,8 @@ static void UpdateReserve(const player_t *player)
     }
 
     held = need > 0.0 && can > 0.0 && can <= SDL_min(need, most * RESERVE_SHARE);
+    carried = K_Condition_ArsenalGoesOn() && can > 0.0
+           && can <= SDL_min(CARRY_DAMAGE, most * RESERVE_SHARE);
 
     if (held && !reserve)
     {
@@ -2869,11 +2956,24 @@ static void UpdateReserve(const player_t *player)
     }
     else if (!held && reserve && can > 0.0)
     {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells %s - %.0f of their damage in hand, "
+              "%.0f of the tough monsters' health",
+              carried ? "kept for the levels ahead only" : "for anything again", can, need);
+    }
+
+    if (carried && !carry && (held || !reserve))
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells kept for the levels ahead - %.0f of "
+              "their damage in hand, up to %.0f", can, CARRY_DAMAGE);
+    }
+    else if (!carried && carry && can > 0.0 && !held)
+    {
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells for anything again - %.0f of their "
-              "damage in hand, %.0f of the tough monsters' health", can, need);
+              "damage in hand, more than the %.0f kept for the levels ahead", can, CARRY_DAMAGE);
     }
 
     reserve = held;
+    carry = carried;
 }
 
 // The hopeless monster to keep off (AVOID_PAST): awake, in sight - or the
@@ -3092,6 +3192,21 @@ static void ChooseTarget(const player_t *player)
 
 static void DropBarrel(void);
 
+// The shots of the weapon still in the air at what is `distance` off, firing
+// on: a projectile's flight over the tics between shots (MISS_SHOTS).
+static int InFlight(const weapon_t *weapon, double distance)
+{
+    mobjtype_t type = weapon->weapon == wp_missile ? MT_ROCKET
+                    : weapon->weapon == wp_plasma ? MT_PLASMA : MT_BFG;
+
+    if (!weapon->flies)
+    {
+        return 0;
+    }
+
+    return (int) ceil(distance / ToMap(mobjinfo[type].speed) / weapon->tics);
+}
+
 // A shot fired at the target (the ammo went down) that did not hurt it;
 // after MISS_SHOTS of them the target is left alone for a moment.
 static void CountMisses(const player_t *player)
@@ -3149,7 +3264,9 @@ static void CountMisses(const player_t *player)
         }
     }
 
-    if (status.target >= 0 && misses >= MISS_SHOTS)
+    if (status.target >= 0 && WeaponOf(player->readyweapon) != NULL
+     && misses >= MISS_SHOTS + InFlight(WeaponOf(player->readyweapon),
+                                        monsters[status.target].distance))
     {
         K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s seems out of reach of the shots - %d without "
               "a hit; left alone for %d s", monsters[status.target].name, misses,
@@ -3198,14 +3315,41 @@ static boolean LowGun(const player_t *player, boolean pistol)
     return false;
 }
 
-// Whether the rockets and cells kept for the tough monsters are kept from
-// this one (RESERVE_SHARE): not tough, and another gun can fire - the pistol
-// too against a weak one - but for a fight the player is beset in (Beset).
+// Whether a gun but the pistol that fires neither rockets nor cells - the
+// shotguns, the chaingun - has CARRY_SPARE times its ammo's low mark.
+static boolean SpareGun(const player_t *player)
+{
+    int i;
+
+    for (i = 0; i < arrlen(weapons); ++i)
+    {
+        ammotype_t ammo = weaponinfo[weapons[i].weapon].ammo;
+
+        if (weapons[i].reach <= 0.0 && !Reserved(&weapons[i]) && weapons[i].weapon != wp_pistol
+         && ammo != am_noammo && Selectable(player, &weapons[i])
+         && player->weaponowned[weapons[i].weapon]
+         && player->ammo[ammo] >= CARRY_SPARE * K_Condition_AmmoLow(ammo))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether the rockets and cells kept are kept from this one: not tough, and
+// those for the tough monsters (RESERVE_SHARE) while another gun can fire -
+// the pistol too against a weak one - but for a fight the player is beset
+// in (Beset); those for the levels ahead (CARRY_DAMAGE) while a gun but the
+// pistol has ammo to spare (SpareGun), but for a fight the player is
+// pressed in (UnderPressure).
 static boolean KeptFrom(const player_t *player, const k_monster_t *monster)
 {
     int spawn = SpawnHealth(monster->type);
 
-    return reserve && !Beset() && spawn < TOUGH_HEALTH && LowGun(player, spawn <= WEAK_HEALTH);
+    return spawn < TOUGH_HEALTH
+        && ((reserve && !Beset() && LowGun(player, spawn <= WEAK_HEALTH))
+            || (carry && !UnderPressure() && SpareGun(player)));
 }
 
 // Whether the pistol is right for the target: far off with little health
@@ -4309,7 +4453,7 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
                            && !OtherGun(player, false) && !KeptFrom(player, target)
                            && !Sawn(player, target)));
     boolean melee = !standoff && MeleeFor(player, target)
-                 && target->distance - target->radius > WeaponOf(wanted)->reach - MELEE_IN;
+                 && target->distance > WeaponOf(wanted)->reach - MELEE_IN;
     double tx = target->at.x - me.x, ty = target->at.y - me.y;
     double length = sqrt(tx * tx + ty * ty);
     double face = atan2(ty, tx);
@@ -4800,6 +4944,8 @@ static boolean OnIsland(int cell)
     return last_island;
 }
 
+static boolean RocketFlying(const player_t *player);
+
 // Whether an awake monster is within reach: no run for an item (escape)
 // turns away from it, it would only strike the player from behind.
 static boolean BlowsNear(double reach)
@@ -4852,8 +4998,11 @@ static void UpdateBattle(const player_t *player)
     // on the way. Not with an awake monster within CLOSE_REACH, in reach of
     // its blows - KEEP_AWAY once fighting, or it flips at the edge (E3M4: at
     // 39 health the bot broke off a fight with a demon 50 off for health
-    // bonuses beside it, stuck on the demon, bitten down to 21).
-    flee = escape && !BlowsNear(battle ? KEEP_AWAY : CLOSE_REACH);
+    // bonuses beside it, stuck on the demon, bitten down to 21). Nor with the
+    // player's rocket on its way (ROCKET_RADIUS): the run could take it into
+    // the burst.
+    flee = escape && !BlowsNear(battle ? KEEP_AWAY : CLOSE_REACH)
+        && !(battle && RocketFlying(player));
     fight = (WorthFighting() || avoid >= 0 || bfg_pending) && !flee && !burning && !island;
     calm = fight ? 0 : calm + 1;
 
@@ -5546,13 +5695,36 @@ static double AreaRisk(int area)
     return risk;
 }
 
+// Whether a boss - the Cyberdemon, the spider mastermind - is alive inside
+// the area, awake or not.
+static boolean BossInside(int area)
+{
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if ((monsters[i].type == MT_CYBORG || monsters[i].type == MT_SPIDER)
+         && monsters[i].health > 0
+         && K_Area_Of(K_Map_CellAt(monsters[i].at.x, monsters[i].at.y)) == area)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Where the route ahead goes into an area that is not safe, with HOLD_RISK
 // at stake, within `reach` along it from me, no lift before it that is not
 // down, through a narrow way - a door or lift, a narrow opening, not just on
 // over open floor (K_Area_OpenFloor) - passing over area `except`, and with
 // `only` not -1 over all others: the area, the point it goes in at, and that
 // point's index; -1 if none. *shut tells whether a door before it is shut,
-// or closing; one rising, or open at the top, is as good as open.
+// or closing; one rising, or open at the top, is as good as open. None at or
+// past an area with a boss inside (BossInside; the user, E2M8: "never creep
+// toward a boss" - held short of the Cyberdemon's area three times, crept
+// in, and stood in its rockets): no hold brings it to a door, and its fight
+// has spots of its own.
 static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t *at,
                        int *point, boolean *shut)
 {
@@ -5603,6 +5775,11 @@ static int UnsafeAhead(k_vec2_t me, double reach, int except, int only, k_vec2_t
         }
 
         was = r;
+
+        if (BossInside(area))
+        {
+            return -1;
+        }
 
         if (areas->areas[area].passage)
         {
@@ -5929,7 +6106,8 @@ static void UpdateHold(const player_t *player)
 
         if (area != hold_area)
         {
-            StopHold(K_Area_Safe(hold_area) || AreaRisk(hold_area) < HOLD_RISK
+            StopHold(BossInside(hold_area) ? "a boss inside, never held short of"
+                     : K_Area_Safe(hold_area) || AreaRisk(hold_area) < HOLD_RISK
                      ? "it is safe now" : escape ? escape_why : "the way changed");
         }
         else if (shut)
@@ -6479,6 +6657,8 @@ static void UpdateDuck(const player_t *player)
     boolean coming = DuckThreat(player, &from);
     int num_points, tics;
 
+    duck_soon = false;
+
     if (!coming)
     {
         duck_none_from = NULL;
@@ -6519,6 +6699,11 @@ static void UpdateDuck(const player_t *player)
             plan_tic = leveltime;
             plan_found = FindDuckSpot(player, &from, points, &num_points, &plan_tics);
         }
+
+        // No rocket pressed now leaves before the duck takes the player
+        // behind the wall it would meet (K_Combat_Fire).
+        duck_soon = plan_found
+                 && from.tics <= plan_tics + DUCK_SLACK + WeaponOf(wp_missile)->lead;
 
         // Shooting on till the time left is the time to get there; then
         // from here (the fight has moved the player since).
@@ -6621,6 +6806,7 @@ void K_Combat_Reset(void)
     ahead_area = -1;
     escape = false;
     reserve = false;
+    carry = false;
     memset(beats, 0, sizeof(beats));
     needed = -1;
     fight_needed = false;
@@ -6638,6 +6824,7 @@ void K_Combat_Reset(void)
     bold = false;
     hard_seen = -HARD_LINGER - 1;
     beset_seen = -BESET_LINGER - 1;
+    crowd_seen = -BESET_LINGER - 1;
     boss_seen = -BOSS_LINGER - 1;
     boss_type = -1;
     bfg_pending = false;
@@ -7041,6 +7228,42 @@ static boolean RocketSafe(const player_t *player, k_vec2_t from, double facing,
                        target->z + target->height * 0.5, target);
 }
 
+// Whether one blast of the player's own rocket, the most it does less what
+// the armour takes of it, would kill (ROCKET_RADIUS).
+static boolean BlastCouldKill(const player_t *player)
+{
+    double saved = player->armortype == 1 ? BLAST / 3.0 : player->armortype == 2 ? BLAST / 2.0
+                 : 0.0;
+
+    return BLAST - SDL_min(saved, (double) player->armorpoints) >= player->health;
+}
+
+// Whether a rocket the player fired is on its way still - or pressed for,
+// to leave yet (S_MISSILE1, A_GunFlash before A_FireMissile).
+static boolean RocketFlying(const player_t *player)
+{
+    const thinker_t *thinker;
+
+    if (player->readyweapon == wp_missile
+     && player->psprites[ps_weapon].state == &states[S_MISSILE1])
+    {
+        return true;
+    }
+
+    for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
+    {
+        const mobj_t *mo = (const mobj_t *) thinker;
+
+        if (thinker->function.acp1 == (actionf_p1) P_MobjThinker && mo->type == MT_ROCKET
+         && mo->target == player->mo && (mo->flags & MF_MISSILE))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Whether a shot along the facing could set off a barrel whose chain would
 // hurt the player: one the shot could graze - within the weapon's spread
 // (none when accurate), and a margin, of the facing, in reach of the shot -
@@ -7278,13 +7501,25 @@ void K_Combat_Fire(int tic, k_command_t *command)
     ShotLeaves(&pose, weapon, leaves_at, &leaves, &leaves_facing);
     accurate = weapon->taps && player->refire == 0;
 
+    // The plasma rifle mid-burst (PLASMA_HOLD).
+    if (weapon->weapon == wp_plasma && player->psprites[ps_weapon].state == &states[S_PLASMA1]
+     && fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - facing)) <= tolerance * PLASMA_HOLD
+     && !BarrelAtRisk(player, from, facing, weapon, at, accurate))
+    {
+        command->attack = 1;
+        return;
+    }
+
     // Checked where the press is read and where the shot leaves.
     if (fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - facing)) > tolerance
-     || (weapon->reach > 0.0 && distance - monster->radius > weapon->reach)
+     || (weapon->reach > 0.0 && distance > weapon->reach)
      || (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
          && (!RocketSafe(player, from, facing, monster, distance)
              || !RocketSafe(player, leaves, leaves_facing, monster,
-                            Distance(leaves, leaves_at))))
+                            Distance(leaves, leaves_at))
+             || ducking || duck_soon || retreating || dodging || escape
+             || (BlastCouldKill(player)
+                 && (!battle || distance - monster->radius < ROCKET_MIN + ROCKET_ROOM))))
      || BarrelAtRisk(player, from, facing, weapon, at, accurate)
      || BarrelAtRisk(player, leaves, leaves_facing, weapon, leaves_at, accurate)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))

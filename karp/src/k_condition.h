@@ -70,6 +70,11 @@ int K_Condition_Strong(int weapon);
 // carried on to the next level (logged at each level's start).
 void K_Condition_LogArsenal(const char *when);
 
+// Whether what the player carries goes on to a next level: not from the
+// last level of an episode (k_demo.c: GameEnds) - a new game follows, from
+// the pistol.
+int K_Condition_ArsenalGoesOn(void);
+
 #ifdef __cplusplus
 }
 #endif

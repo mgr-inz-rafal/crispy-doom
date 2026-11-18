@@ -3971,6 +3971,48 @@ Who controls the player in a fight (the user's model):
   1024, scored 3 - the looks all went to shells that then had no way there. Done: ranked as if
   none paid more than 3000 (`RANK_REACH`); which of those that fit is gone for is unchanged.
   Salts 443 and 13: the green armour gone for at 4.9 and 5.3 s, 544 out of the way.
+- **Paused, Karp's picture of the level stood still too** (the user, 2026-11-17: paused to write
+  a note, the cell pack on E2M2 "picked up" 3600 units off): K_Ticker ran every tic while
+  leveltime did not, and the item list took every item for a new one each tic. Done (commit
+  "Karp doesn't update internal state when game is paused"): the updates run only as leveltime
+  moves. A 10 s pause: 44 items listed against 14004 before; a run with no pause the same line
+  for line.
+- **Episode 2, a second run** (the user, 2026-11-17: E2 cleared, "a very good player driving the
+  Doomguy"; the TODO from it, the user's order: "a reserve of the strong ammo even if no boss
+  on the map, the shotgun and the chaingun for easier enemies unless under pressure", then
+  the Cyberdemon, and on the way the chainsaw and the plasma rifle). Done (2026-11-18):
+  - Rockets and cells kept for the levels ahead (`k_combat.c`: `CARRY_DAMAGE`, `KeptFrom`,
+    `UnderPressure`; `K_Condition_ArsenalGoesOn`, moved from `k_brain.c`): up to 2000 of their
+    damage while the arsenal goes on, kept from all but the tough while the shotgun or the
+    chaingun has twice its low mark, unless beset, crowded (40 of cost on the player) or health
+    CRITICAL. E2M2 on from a pistol start, salts 11 and 22: cells at E2M3's end 111 and 94
+    (head 8 and 0).
+  - The Cyberdemon: no hold short of an area with a boss inside, nor creeping toward it
+    (`BossInside`, in `UnsafeAhead`) - so no "fought for, not run for" there either, the run
+    for health goes on; the miss counter allows for shots still in the air (`InFlight`: plasma
+    at 450 off gave up after the fifth ball, before the first landed); no rocket pressed while
+    ducking, with a duck due within its 8-tic lead, retreating, dodging or running for an
+    item, none on the way or near when one blast could kill, and no fight broken off for a run
+    while the player's rocket flies (`RocketFlying`). From the user's E2M8 save, 12 salts:
+    finished 8 and 8 (head and new), holds 7 and 0, creeps 4 and 0, own blasts 5 and 2, "the
+    cyberdemon seems out of reach" 25 and 1.
+    Tried and left out: cover from its rockets with the whole player hidden and the wall a
+    rocket would meet 192 off (deep spots meant long runs in the open, hit for 93 and 101;
+    hits while ducking were 3 in 142 ducks anyway, the damage taken in close fights); and an
+    item dropped when its way went into a boss's area (the bot went back for the boss at low
+    health).
+  - Melee reach to the monster's middle (the engine meets a thing at its corner-to-corner line,
+    through the middle): the chainsaw swung only within 64 of it, the player pushed in until
+    then (a cacodemon was sawn at from 95, hit only within about 64; the push stopped at 79).
+  - The plasma rifle held mid-burst (`PLASMA_HOLD`): let go as a shot ends, it waits 20 tics.
+    E2M9 from a pistol start, 7 runs: bursts broken with a target only 1 to 4 times a run,
+    mostly at a change of target; the hold changed one ball.
+  Episode 2 from E2M1, salts 443, 71, 7 and 13, 25 minutes, head against new: deaths 4 and 1
+  (head: E2M9 three times, E2M7 once by its own rocket; new: E2M9 once); E2M9 begun with 0, 0,
+  0 and 20 cells and 1 to 8 rockets (new 55 to 98 cells, 4 to 8 rockets); head reached E2M7 in
+  all four, new E2M7 once, E2M8 twice, and finished the episode once (E2M8 in 61.7 s).
+  Left: E2M8's start - the Cyberdemon met in the corridor out of the start room, the way to a
+  spot 512 from it going past it (3 of 12 runs dead there by 18 s, head 1).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
