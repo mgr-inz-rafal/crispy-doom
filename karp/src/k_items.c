@@ -12,7 +12,8 @@
 //	ammo there is room for is worth a short detour, however much the player
 //	has. Nothing it would not pick up counts. With no monster left alive,
 //	weapons, ammo and the power-ups for fighting are worth nothing - but
-//	while the brain sweeps before the exit.
+//	while the brain sweeps before the exit. An explorer picks up every
+//	power-up and weapon it would, however little it gives (EXPLORE_WORTH).
 //
 //	The worth, weighted by need, becomes how far out of its way the player
 //	may go for the item (plan, 7.5), and the more an item is worth, the
@@ -172,6 +173,17 @@
 // armour bonuses.
 #define ARMOUR_REACH 1024.0
 
+// An explorer (K_Items_Explore; the user: grab all power-ups and weapons,
+// even if not strictly needed) picks up every power-up, the soulsphere, the
+// megasphere and berserk however healthy, a backpack, every weapon the
+// player would pick up (Collected): each worth EXPLORE_WORTH at least, and
+// EXPLORE_REACH of detour at least, less the more it is guarded, none from
+// ROOM_DANGER; swept for before the exit as what goes on to the next level
+// is (SWEEP_UNITS). Not the invulnerability sphere but in the sweep: kept
+// for a hard fight till then.
+#define EXPLORE_WORTH 10.0
+#define EXPLORE_REACH 1536.0
+
 // Health is worth breaking a fight off for when CRITICAL only if it gives
 // URGENT_HEALTH at least, with what lies beside it: running from a fight for
 // a health bonus gains nothing.
@@ -234,6 +246,7 @@ static int capacity;
 static int buckets[BUCKETS];
 static double danger_here;
 static boolean sweep;               // the brain sweeps before the exit
+static boolean explore;             // -karpattitude explorer (EXPLORE_WORTH)
 
 // P_GiveAmmo's clip sizes, and what a round of each is worth: clip,
 // shell, cell, rocket.
@@ -613,6 +626,46 @@ static boolean Swept(const player_t *player, const entry_t *entry, double carrie
     return entry->sprite == SPR_BPAK;
 }
 
+// What an explorer picks up, however little it gives (EXPLORE_WORTH), and
+// the player would (P_TouchSpecialThing): a power-up - the computer map
+// only once, invulnerability only in the sweep - the soulsphere, the
+// megasphere, berserk, a backpack; a weapon not held, or one whose ammo is
+// not full.
+static boolean Collected(const player_t *player, const entry_t *entry)
+{
+    weapontype_t weapon;
+    ammotype_t ammo;
+
+    if (WeaponItem(entry->sprite, &weapon))
+    {
+        ammo = weaponinfo[weapon].ammo;
+        return !player->weaponowned[weapon]
+            || (ammo != am_noammo && player->ammo[ammo] < player->maxammo[ammo]);
+    }
+
+    switch (entry->sprite)
+    {
+        case SPR_PINV:
+            return sweep;
+
+        case SPR_PMAP:
+            return !player->powers[pw_allmap];
+
+        case SPR_PINS: case SPR_SUIT: case SPR_PVIS: case SPR_SOUL: case SPR_MEGA:
+        case SPR_PSTR: case SPR_BPAK:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+// The worth, at least EXPLORE_WORTH for what an explorer picks up.
+static double ExploreWorth(const player_t *player, const entry_t *entry, double worth)
+{
+    return explore && Collected(player, entry) ? SDL_max(worth, EXPLORE_WORTH) : worth;
+}
+
 // P_GiveArmor: only armour better than what is worn is taken, and it takes
 // a third (green) or a half (blue) of the damage.
 static double ArmourWorth(const player_t *player, int armour_class)
@@ -857,9 +910,11 @@ void K_Items_Tick(void)
         weapontype_t weapon;
 
         item->present = entry->seen == stamp;
-        item->worth = item->present ? Worth(player, entry, fights || sweep) : 0.0;
-        carried = item->present ? Worth(player, entry, true) : 0.0;
-        item->swept = Swept(player, entry, carried);
+        item->worth = item->present
+                    ? ExploreWorth(player, entry, Worth(player, entry, fights || sweep)) : 0.0;
+        carried = item->present ? ExploreWorth(player, entry, Worth(player, entry, true)) : 0.0;
+        item->swept = Swept(player, entry, carried)
+                   || (explore && carried > 0.0 && Collected(player, entry));
         entry->running_out = item->worth > 0.0
                           && RunningOut(player, entry, condition->ammo == K_NEED_LOW);
         item->beats = item->worth > 0.0 && BeatsWith(player, entry);
@@ -998,6 +1053,11 @@ void K_Items_Tick(void)
             item->reach = SDL_max(item->reach, FIRST_REACH * (1.0 - item->danger / ROOM_DANGER));
         }
 
+        if (explore && item->danger < ROOM_DANGER && Collected(player, entry))
+        {
+            item->reach = SDL_max(item->reach, EXPLORE_REACH * (1.0 - item->danger / ROOM_DANGER));
+        }
+
         // Its guards cannot hurt the player once it is picked up.
         if (item->invuln)
         {
@@ -1020,6 +1080,11 @@ void K_Items_Tick(void)
 void K_Items_Sweep(int on)
 {
     sweep = on;
+}
+
+void K_Items_Explore(int on)
+{
+    explore = on;
 }
 
 int K_Items_Sweepable(void)

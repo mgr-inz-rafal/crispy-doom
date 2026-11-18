@@ -22,6 +22,11 @@
 //	EXIT never fails, and with no way it waits and plans again. A click on
 //	the console's map pushes a GOTO on top; when it ends, the rest resumes.
 //
+//	-karpexit has GO TO EXIT go for one kind of exit, secret or normal,
+//	until it stays out of reach (EXIT_IDLE_MOST). An explorer
+//	(-karpattitude) also goes to the places off its way, as to items: the
+//	areas not visited yet, the secrets not found yet (PLACE_AREA_REACH).
+//
 
 #include <math.h>
 #include <stdlib.h>
@@ -111,6 +116,23 @@
 #define TRIED_TICS (30 * TICRATE)
 #define LINE_USES_TICS (30 * TICRATE)
 #define IDLE_TICS (5 * TICRATE)
+
+// The exit wanted (-karpexit, k_brain.h): GO TO EXIT goes for exits of that
+// kind only - a floor that ends the level is a normal one - and no route
+// crosses a walk-over exit of the other kind (K_Path_SetKeepOff). Drawn for
+// each level (random) from the salt, or else from the map; a map with no
+// exit of the kind is left by any (E2M8: the Cyberdemon's death). It gives
+// way to any exit for the rest of the level (the user: a designer's trick
+// may shut a secret exit for good, after 30 s or a line crossed) after
+// EXIT_IDLE_MOST in all with no way to it and nothing to fix, or EXIT_STALL
+// with no progress toward it - no fix on the way done, the way left never
+// EXIT_GAIN shorter than its best so far - counted out of a fight, with no
+// detour on and no sweep before the exit.
+#define EXIT_IDLE_MOST (30 * TICRATE)
+#define EXIT_STALL (3 * 60 * TICRATE)
+#define EXIT_GAIN 64.0
+#define EXIT_ANY -1
+#define EXIT_UNDECIDED -2
 
 // A door that leaves less headroom than the player's height is shut; a
 // floor more than STEP_UP higher is a step it does not climb (P_TryMove).
@@ -334,7 +356,9 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // those costing more than the health left - in an area that is not safe,
 // the player falls back to the nearest safe area (k_area.h; of the
 // FALL_CANDIDATES nearest, within FALL_REACH of route, those visited before
-// counted VISITED_SHARE as far), whose way there goes through no other area
+// counted VISITED_SHARE as far), no floor that hurts in it or on the way
+// (E1M3: fallen back into a nukage pit, a step of 120 out, the bot burned),
+// whose way there goes through no other area
 // with monsters inside - open now, or through one switch or walk-over line
 // that opens it, its work counted FIX_WORK (FallBackWay): a GO TO on top, the
 // fix pushed on it, the fight broken off, shooting on the way (UpdateEscape);
@@ -426,6 +450,54 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 #define WANDER_MOST 1024.0
 #define WANDER_TRIES 32
 
+// Exploring (-karpattitude explorer; the user: a natural exploration while
+// the bot runs through the level, the sweep before the exit for the rest):
+// places off the way are gone to as items are (ConsiderItems), a detour on
+// top of the goal followed - an area not visited yet (k_area.h; no door or
+// lift, PLACE_AREA_MIN of floor at least, not mostly one that hurts) within
+// PLACE_AREA_REACH of detour, a secret not found yet (K_Specials_SecretSector)
+// within PLACE_SECRET_REACH, PLACE_SWEEP_REACH in the sweep before the exit.
+// The monsters inside the areas on the way and the place's own count against
+// it, as for an item (DAMAGE_WAY). Only out of a fight, health OK and ammo
+// not LOW, no boss on the player, no other place on; on top of an item gone
+// for, but one that goes first (GoesFirst), within STACK_SHARE of its reach
+// (E1M2: items gone for one after another, a place looked at 8 times in 90
+// s); never into the area of a live Cyberdemon or spider mastermind. The
+// PLACE_ROUTES most promising (PLACE_SWEEP_ROUTES in the sweep: E1M2, the
+// two nearest had no way there, and the exit was reached before the next)
+// are looked at by route every PLACE_CHECK_TICS, one too far for now not
+// again for ITEM_SKIP_TICS. One with no way there, or that did not work out
+// (the user: decoys, secrets a map's bugs put out of reach), is set aside
+// for PLACE_SKIP, and dropped for the level after PLACE_TRIES such. No more
+// places after EXPLORE_MOST spent on them in a level. An explorer's sweep
+// before the exit is for every level, and for the places not seen yet too,
+// any way off (PLACE_SWEEP_REACH; E1M2: those left lay 8000 to 13000 off,
+// the other half of the map), the nearest first, the waits at doors and lifts on
+// the way up to PLACE_WAIT_MOST (an item's ITEM_WAIT_MOST: E1M2, the rooms
+// left were 9 s of doors and lifts away and more): begun once GO TO EXIT is all
+// there is left to do and has a way, however far (E1M2: begun 339 off the
+// exit, a drop of 88 on the way there left every place behind out of
+// reach); over when none is left, after EXPLORE_MOST, or with nothing new
+// reached for EXPLORE_STALL. Places and items are looked for every tic
+// within SWEEP_HOLD of the exit, not every second, and places while passing
+// a lift too (PASS_TICS): the level is not left for want of a look (E1M2:
+// the lift ridden for an area kept the sweep off for 7 s, and the exit was
+// pressed with 38 places not seen).
+#define PLACE_AREA_REACH 2048.0
+#define PLACE_SECRET_REACH 4096.0
+#define PLACE_SWEEP_REACH ANY_REACH
+#define PLACE_AREA_MIN 4096.0
+#define PLACE_ROUTES 2
+#define PLACE_SWEEP_ROUTES 16
+#define PLACE_WAIT_MOST (30 * TICRATE)
+#define PLACE_CHECK_TICS TICRATE
+#define SWEEP_HOLD 256.0
+#define PLACE_SKIP (60 * TICRATE)
+#define PLACE_TRIES 3
+#define EXPLORE_MOST (15 * 60 * TICRATE)
+#define EXPLORE_STALL (2 * 60 * TICRATE)
+#define MAX_BOSSES 8
+
 typedef enum
 {
     GOAL_GOTO,              // a point (a click)
@@ -437,6 +509,8 @@ typedef enum
     GOAL_KILL,              // every monster of a kind dead: a map's bosses
     GOAL_TELEFRAG,          // through a teleporter, onto a monster on its
                             // landing spot (TELEFRAG_REACH)
+    GOAL_PLACE,             // a place off the way, for an explorer: an area
+                            // to visit, a secret to find (PLACE_AREA_REACH)
 } goal_type_t;
 
 // A place a goal can be met, and what to do there.
@@ -541,6 +615,30 @@ static failed_t failed[MAX_FAILED];
 static int num_failed;
 static boolean idling;      // GO TO EXIT waits with no way, nothing to do
 static boolean exit_wanted; // GO TO EXIT goes on an empty list
+static k_exitchoice_t exit_choice;  // -karpexit
+static boolean explorer;            // -karpattitude explorer
+static int exit_kind;       // this level: the kind wanted, 1 secret, 0 normal;
+                            // EXIT_ANY; EXIT_UNDECIDED until GO TO EXIT
+static int exit_idle;       // tics with no way to it (EXIT_IDLE_MOST)
+static int exit_stall;      // tics with no progress toward it (EXIT_STALL)
+static double exit_best;    // the shortest way left to it so far
+
+// An explorer's places (PLACE_AREA_REACH), listed on level load.
+typedef struct
+{
+    int area;               // an area to visit, or -1
+    int sector;             // a secret to find, or -1
+    int in_area;            // the area its spot lies in, -1 if none
+    k_vec2_t spot;          // where to go
+    int skip;               // not looked at before this
+    int tries;              // times set aside (PLACE_TRIES)
+} place_t;
+
+static place_t *places;
+static int num_places;
+static int place_check_tic;     // when to look for places next
+static int explore_tics;        // spent on places this level (EXPLORE_MOST)
+static int secrets_found;       // the player's secrets, as last logged
 
 // Refreshed when planning: the keys lying in the level (up to
 // MAX_CANDIDATES of each colour known by place), and where the player was.
@@ -604,6 +702,8 @@ static int pass_excused = -1;           // when one missed so: the way shut
                                         // is not counted (MAX_SHUT)
 static int sweep_since;                 // when the sweep before the exit
                                         // began; 0 before, -1 once over
+static int sweep_found;                 // when it last reached something
+                                        // (EXPLORE_STALL)
 
 //
 // Names
@@ -642,6 +742,17 @@ static void GoalName(const goal_t *goal, char *buf, int len)
         case GOAL_TELEFRAG:
             M_snprintf(buf, len, "TELEFRAG THE %s", K_Combat_KindName(goal->victim));
             M_ForceUppercase(buf);
+            break;
+
+        case GOAL_PLACE:
+            if (places[goal->param].sector >= 0)
+            {
+                M_snprintf(buf, len, "FIND SECRET in sector %d", places[goal->param].sector);
+            }
+            else
+            {
+                M_snprintf(buf, len, "EXPLORE AREA %d", places[goal->param].area);
+            }
             break;
 
         // The line's tag: a stair builder's steps after the first are not
@@ -809,10 +920,25 @@ static void Pop(void)
 
 static void DoneGoal(const char *how)
 {
+    const goal_t *goal = &goals[depth - 1];
     char name[64];
 
-    GoalName(&goals[depth - 1], name, sizeof(name));
+    GoalName(goal, name, sizeof(name));
     K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s done - %s", name, how);
+
+    // Something reached in the sweep before the exit (EXPLORE_STALL).
+    if (goal->type == GOAL_ITEM || goal->type == GOAL_PLACE)
+    {
+        sweep_found = leveltime;
+    }
+
+    // A fix on the way to the exit: progress toward it (EXIT_STALL).
+    if (goals[0].type == GOAL_EXIT
+     && (goal->type == GOAL_KEY || goal->type == GOAL_TRIGGER || goal->type == GOAL_BARREL
+         || (goal->type == GOAL_KILL && !goal->chase)))
+    {
+        exit_stall = 0;
+    }
 
     if (depth == 1)
     {
@@ -822,14 +948,33 @@ static void DoneGoal(const char *how)
     Pop();
 }
 
+// A place set aside for PLACE_SKIP; dropped for the level after PLACE_TRIES.
+static void SetPlaceAside(int p)
+{
+    ++places[p].tries;
+    places[p].skip = leveltime + PLACE_SKIP;
+}
+
 // Not pushed again for a while: FAIL_TICS, doubled each time it fails
-// again, up to MAX_FAIL_TICS. Never GO TO EXIT (PlanGoal waits instead).
+// again, up to MAX_FAIL_TICS. Never GO TO EXIT (PlanGoal waits instead). A
+// place is set aside instead (PLACE_SKIP).
 static void FailGoal(const char *why)
 {
     goal_t *goal = &goals[depth - 1];
     failed_t *entry = FailedEntry(goal->type, goal->param);
     char name[64];
     int tics, i;
+
+    if (goal->type == GOAL_PLACE)
+    {
+        SetPlaceAside(goal->param);
+        GoalName(goal, name, sizeof(name));
+        K_Log(K_LOG_BRAIN, K_LOG_WARN, "%s failed - %s; %s", name, why,
+              places[goal->param].tries < PLACE_TRIES ? "set aside for a while"
+                                                      : "given up for the level");
+        Pop();
+        return;
+    }
 
     // A new entry; when the list is full, in place of the one due first.
     if (entry == NULL && num_failed < MAX_FAILED)
@@ -1262,13 +1407,14 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
 
     switch (goal->type)
     {
+        // Of the kind wanted, if one is (EXIT_IDLE_MOST).
         case GOAL_EXIT:
             for (i = 0; i < map->num_lines && count < max; ++i)
             {
                 int secret;
                 k_trigger_t trigger = K_Specials_ExitTrigger(map->lines[i].special, &secret);
 
-                if (trigger != K_TRIGGER_NONE
+                if (trigger != K_TRIGGER_NONE && (exit_kind < 0 || (secret != 0) == exit_kind)
                  && LineCandidate(i, trigger, trigger == K_TRIGGER_USE
                                   ? (secret ? "secret exit switch" : "exit switch")
                                   : (secret ? "secret exit line" : "exit line"),
@@ -1281,7 +1427,7 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
             // A floor that ends the level (E1M8): any of its cells, the
             // route picks one it reaches (E1M8's is a box teleported into,
             // the floor round it void).
-            for (i = 0; i < map->num_cells && count < max; ++i)
+            for (i = 0; exit_kind != 1 && i < map->num_cells && count < max; ++i)
             {
                 const k_cell_t *cell = &map->cells[i];
                 int sector = map->subsectors[cell->subsector].sector;
@@ -1407,6 +1553,18 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                     ++count;
                 }
             }
+            break;
+
+        case GOAL_PLACE:
+            out[0].at = places[goal->param].spot;
+            out[0].kind = K_GOAL_POINT;
+            out[0].line = -1;
+            M_snprintf(out[0].what, sizeof(out[0].what), "%s %d at (%.0f,%.0f)",
+                       places[goal->param].sector >= 0 ? "secret sector" : "area",
+                       places[goal->param].sector >= 0 ? places[goal->param].sector
+                                                       : places[goal->param].area,
+                       out[0].at.x, out[0].at.y);
+            count = 1;
             break;
 
         default:
@@ -2255,8 +2413,9 @@ static boolean DropNeedless(void)
 
     for (i = depth - 1; i >= 0; --i)
     {
-        if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG || goals[i].fallback
-         || goals[i].way_back || goals[i].wander || goals[i].chase)
+        if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG
+         || goals[i].type == GOAL_PLACE || goals[i].fallback || goals[i].way_back
+         || goals[i].wander || goals[i].chase)
         {
             base = i;
             break;
@@ -2398,6 +2557,120 @@ static boolean BreakLoop(goal_t *goal)
     goal->retry_tic = leveltime + IDLE_TICS;
     K_Nav_Clear();
     return true;
+}
+
+//
+// The exit wanted
+//
+
+static const char *ExitKindName(int kind)
+{
+    return kind ? "secret" : "normal";
+}
+
+// The kind of exit this level is left by (EXIT_IDLE_MOST), once GO TO EXIT
+// goes on the list.
+static void ChooseExit(void)
+{
+    const k_map_t *map = K_Map_Get();
+    int have[2] = { 0, 0 };
+    int i, secret;
+
+    exit_kind = exit_choice == K_EXIT_SECRET ? 1
+              : exit_choice == K_EXIT_NORMAL ? 0
+              : exit_choice == K_EXIT_RANDOM
+              ? (int) (Hash(K_Salt_Mix(0x5ec7e700u + gameepisode * 100u + gamemap)) & 1)
+              : EXIT_ANY;
+
+    if (exit_kind == EXIT_ANY)
+    {
+        return;
+    }
+
+    for (i = 0; i < map->num_lines; ++i)
+    {
+        if (K_Specials_ExitTrigger(map->lines[i].special, &secret) != K_TRIGGER_NONE)
+        {
+            ++have[secret != 0];
+        }
+    }
+
+    for (i = 0; i < map->num_sectors; ++i)
+    {
+        have[0] += K_Specials_ExitSector(i);
+    }
+
+    if (have[exit_kind] == 0)
+    {
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: no %s exit on this map - any exit",
+              ExitKindName(exit_kind));
+        exit_kind = EXIT_ANY;
+        return;
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: the %s exit wanted (%s)", ExitKindName(exit_kind),
+          exit_choice == K_EXIT_RANDOM ? "drawn for this level" : "-karpexit");
+}
+
+// The exit wanted gives way to any for the rest of the level.
+static void AnyExit(const char *why)
+{
+    K_Log(K_LOG_BRAIN, K_LOG_WARN, "GO TO EXIT: %s - any exit now, not only the %s one", why,
+          ExitKindName(exit_kind));
+    exit_kind = EXIT_ANY;
+
+    if (depth == 1)
+    {
+        goals[0].planned = false;
+        goals[0].retry_tic = 0;
+        K_Nav_Clear();
+    }
+}
+
+// Each tic: progress toward the exit wanted (EXIT_STALL). Not in a fight,
+// nor on a detour, nor in the sweep before the exit.
+static void UpdateExit(void)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    int i;
+
+    if (exit_kind < 0 || depth == 0 || goals[0].type != GOAL_EXIT || sweep_since > 0
+     || K_Combat_GetStatus()->battle)
+    {
+        return;
+    }
+
+    for (i = 1; i < depth; ++i)
+    {
+        if (goals[i].type == GOAL_ITEM || goals[i].type == GOAL_TELEFRAG
+         || goals[i].type == GOAL_PLACE || goals[i].fallback || goals[i].way_back
+         || goals[i].chase)
+        {
+            return;
+        }
+    }
+
+    if (depth == 1 && goals[0].planned && nav->state == K_NAV_DRIVING
+     && nav->remaining < exit_best - EXIT_GAIN)
+    {
+        exit_best = nav->remaining;
+        exit_stall = 0;
+    }
+    else if (++exit_stall >= EXIT_STALL)
+    {
+        AnyExit("no nearer to it for 3 minutes");
+    }
+}
+
+// Walk-over exits no route crosses (K_Path_SetKeepOff): of the kind not
+// wanted; for an explorer, any but the one gone over (the level is not
+// ended on the way to something else).
+static int KeepOff(int line)
+{
+    int secret;
+
+    return K_Specials_ExitTrigger(K_Specials_LineSpecial(line), &secret) == K_TRIGGER_CROSS
+        && (explorer || (exit_kind >= 0 && (secret != 0) != exit_kind));
 }
 
 static void PlanGoal(goal_t *goal)
@@ -2590,7 +2863,7 @@ static void PlanGoal(goal_t *goal)
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: no open way to any of %d spots to fight it from - "
               "going for the %s itself", name, count, K_Combat_KindName(goal->param));
     }
-    else if ((goal->type == GOAL_ITEM
+    else if (((goal->type == GOAL_ITEM || goal->type == GOAL_PLACE)
               && (!(goal->fixable || goal->shut > 0) || best_blocked < 0 || fix_type == GOAL_KEY))
           || goal->type == GOAL_TELEFRAG)
     {
@@ -2599,7 +2872,8 @@ static void PlanGoal(goal_t *goal)
         // the way (E2M8: a door shut behind the player going for the rocket
         // launcher, the cyberdemon too much without it; the launcher was
         // given up for 30 s, and the bot walked up to the cyberdemon and
-        // died), and never a key. A telefrag never through a fix.
+        // died), and never a key; so is a place. A telefrag never through a
+        // fix.
         FailGoal(reason);
     }
     else if (best_blocked >= 0)
@@ -2659,10 +2933,24 @@ static void PlanGoal(goal_t *goal)
         goal->waited += RETRY_TICS;
         K_Nav_Clear();
     }
+    else if (goal->type == GOAL_EXIT && exit_kind >= 0 && exit_idle >= EXIT_IDLE_MOST)
+    {
+        // No way to the exit wanted for long (EXIT_IDLE_MOST): any, now.
+        char why[K_LOG_LINE_LEN];
+
+        LogReasons(name);
+        M_snprintf(why, sizeof(why), "no way to it for %d s (%s)", exit_idle / TICRATE, reason);
+        AnyExit(why);
+    }
     else if (goal->type == GOAL_EXIT)
     {
         // Never given up: the goals that failed on the way come back after
         // a while, and something may open a way meanwhile.
+        if (exit_kind >= 0)
+        {
+            exit_idle += IDLE_TICS;
+        }
+
         if (!goal->idle)
         {
             LogReasons(name);
@@ -3317,11 +3605,12 @@ static void LeaveOpen(const k_path_t *path)
 // through and the route does not would cost (WayRisk; not on the way to a
 // fix); through, if not NULL, what those on the way there would cost, the
 // route's too (WayThrough; 0 through a fix: never in a fight). Returns
-// false if there is no way there, or none on.
+// false if there is no way there, or none on, or the waits there come to
+// more than wait_most.
 static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
                           double remaining, double remaining_damage, boolean fixes,
-                          double *detour, double *way, double *damage, boolean *fixed,
-                          double *risk, double *through)
+                          double wait_most, double *detour, double *way, double *damage,
+                          boolean *fixed, double *risk, double *through)
 {
     goal_type_t type = GOAL_GOTO;
     int param = -1, want, portal, from, key_door, count, i;
@@ -3337,7 +3626,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
 
     if (probe.result == K_PATH_FOUND)
     {
-        if (probe.wait > ITEM_WAIT_MOST)
+        if (probe.wait > wait_most)
         {
             return false;
         }
@@ -3385,7 +3674,7 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
             K_Path_Find(&fix_probe, fix_candidates[i].at, -1, spot);
 
             if (OpenOrFixed(&fix_probe, true, type, param)
-             && to_fix_wait + fix_probe.wait <= ITEM_WAIT_MOST
+             && to_fix_wait + fix_probe.wait <= wait_most
              && (there < 0.0
                  || to_fix + fix_probe.length + fix_probe.wait * WAIT_WAY + FIX_WORK < there))
             {
@@ -3452,8 +3741,8 @@ static boolean ItemSpotDetour(const k_item_t *item, k_vec2_t start, int cell, k_
         boolean f;
 
         if (ItemDetour(start, cell, k < 0 ? item->spot : item->off[k], end, remaining,
-                       remaining_damage, fixes, &d, &w, &dm, &f, risk != NULL ? &r : NULL,
-                       through != NULL ? &t : NULL)
+                       remaining_damage, fixes, ITEM_WAIT_MOST, &d, &w, &dm, &f,
+                       risk != NULL ? &r : NULL, through != NULL ? &t : NULL)
          && (!found || d < *detour))
         {
             found = true;
@@ -4035,6 +4324,393 @@ static boolean ConsiderItems(goal_t *goal)
     return true;
 }
 
+// A spot the player fits at, in the cell, or false.
+static boolean RoomAt(int cell, k_vec2_t *spot)
+{
+    *spot = K_Map_Get()->cells[cell].centroid;
+    return K_Graph_Clearance(*spot, PLAYER_RADIUS + 1.0) > PLAYER_RADIUS
+        && K_Map_CellAt(spot->x, spot->y) == cell;
+}
+
+// An explorer's places, on level load: the areas worth a visit and the
+// secrets (PLACE_AREA_REACH), each with a spot to go to - an area's largest
+// cell's middle, else any of its cells' the player fits at; a secret's
+// largest cell the player fits in.
+static void BuildPlaces(void)
+{
+    const k_map_t *map = K_Map_Get();
+    const k_areamap_t *areamap = K_Area_Get();
+    int a, i;
+
+    free(places);
+    places = calloc(areamap->num_areas + SDL_max(map->num_sectors, 1), sizeof(*places));
+    num_places = 0;
+
+    if (!explorer)
+    {
+        return;
+    }
+
+    for (a = 0; a < areamap->num_areas; ++a)
+    {
+        const k_area_t *area = &areamap->areas[a];
+        place_t *place = &places[num_places];
+        int cell = K_Map_CellAt(area->spot.x, area->spot.y);
+        boolean fits = cell >= 0 && K_Area_Of(cell) == a && RoomAt(cell, &place->spot);
+
+        if (area->passage || area->floor_area < PLACE_AREA_MIN || area->hurts >= 0.5)
+        {
+            continue;
+        }
+
+        for (i = 0; i < area->num_cells && !fits; ++i)
+        {
+            fits = RoomAt(areamap->cells[area->first_cell + i], &place->spot);
+        }
+
+        if (fits)
+        {
+            place->area = a;
+            place->sector = -1;
+            place->in_area = a;
+            ++num_places;
+        }
+    }
+
+    for (i = 0; i < map->num_sectors; ++i)
+    {
+        place_t *place = &places[num_places];
+        double largest = 0.0;
+        k_vec2_t spot;
+        int c;
+
+        if (!K_Specials_SecretSector(i))
+        {
+            continue;
+        }
+
+        for (c = 0; c < map->num_cells; ++c)
+        {
+            if (map->subsectors[map->cells[c].subsector].sector == i
+             && map->cells[c].area > largest && RoomAt(c, &spot))
+            {
+                largest = map->cells[c].area;
+                place->spot = spot;
+            }
+        }
+
+        if (largest > 0.0)
+        {
+            place->area = -1;
+            place->sector = i;
+            place->in_area = K_Area_Of(K_Map_CellAt(place->spot.x, place->spot.y));
+            ++num_places;
+        }
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "explorer: %d places - areas to visit and secrets to find",
+          num_places);
+}
+
+// Whether a place has been visited, or its secret found.
+static boolean PlaceDone(int p)
+{
+    return places[p].sector >= 0 ? !K_Specials_SecretSector(places[p].sector)
+                                 : K_Area_Get()->areas[places[p].area].visited;
+}
+
+// At the level's end: how much of it an explorer saw.
+static void LogExplored(void)
+{
+    int areas = 0, visited = 0, dropped = 0, p;
+
+    for (p = 0; explorer && p < num_places; ++p)
+    {
+        areas += places[p].area >= 0;
+        visited += places[p].area >= 0 && PlaceDone(p);
+        dropped += places[p].tries >= PLACE_TRIES && !PlaceDone(p);
+    }
+
+    if (explorer)
+    {
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "explorer: %d of %d areas visited, %d places given up "
+              "on, %.1f s spent on places off the way", visited, areas, dropped,
+              (double) explore_tics / TICRATE);
+    }
+}
+
+// How many places an explorer may still go to in the sweep before the exit
+// (PLACE_SWEEP_REACH), there and back as the crow flies.
+static int PlacesSweepable(void)
+{
+    k_pose_t player;
+    int count = 0, p;
+
+    for (p = 0; explorer && p < num_places && K_Map_GetPlayer(&player); ++p)
+    {
+        count += !PlaceDone(p) && places[p].tries < PLACE_TRIES && leveltime >= places[p].skip
+              && 2.0 * hypot(places[p].spot.x - player.x, places[p].spot.y - player.y)
+                 <= PLACE_SWEEP_REACH;
+    }
+
+    return count;
+}
+
+// How far out of its way the player may go for a place: on top of an item
+// gone for, STACK_SHARE of it; any way in the sweep.
+static double PlaceReach(const place_t *place, boolean stacking)
+{
+    double reach = place->sector < 0 ? PLACE_AREA_REACH : PLACE_SECRET_REACH;
+
+    return sweep_since > 0 ? PLACE_SWEEP_REACH : stacking ? reach * STACK_SHARE : reach;
+}
+
+// An explorer's places off the way (PLACE_AREA_REACH), looked for as items
+// are (ConsiderItems). Returns true if one was added.
+static boolean ConsiderPlaces(goal_t *goal)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    const k_conditionstatus_t *condition = K_Condition_Get();
+    int routes = sweep_since > 0 ? PLACE_SWEEP_ROUTES : PLACE_ROUTES;
+    int order[PLACE_SWEEP_ROUTES];
+    double order_score[PLACE_SWEEP_ROUTES];
+    int boss_areas[2 * MAX_BOSSES];
+    k_vec2_t at[MAX_BOSSES];
+    int found = 0, best = -1, num_boss = 0, count, i, k;
+    double best_slack = 0.0, best_detour = 0.0, best_risk = 0.0;
+    double remaining_way, remaining_damage = 0.0;
+    boolean best_fixed = false;
+    boolean stacking;           // on top of an item gone for (STACK_SHARE)
+    k_pose_t player;
+    k_vec2_t start, end;
+    goal_t *place_goal;
+    char name[64], risky[64] = "", below[96] = "";
+
+    if (!explorer || num_places == 0 || leveltime < place_check_tic
+     || explore_tics >= EXPLORE_MOST)
+    {
+        return false;
+    }
+
+    place_check_tic = leveltime + PLACE_CHECK_TICS;
+
+    // As for an item, and only out of a fight, in good shape, one detour at
+    // a time; not on the way to a boss, nor anywhere near one.
+    if (!goal->planned || goal->staying || FallingBack() >= 0 || OpeningWayBack() >= 0
+     || (pass_portal >= 0 && sweep_since <= 0) || ChaseOn() >= 0 || depth >= MAX_GOALS
+     || goal->type == GOAL_GOTO || goal->type == GOAL_TELEFRAG || goal->type == GOAL_BARREL
+     || goal->type == GOAL_KILL || (goal->type == GOAL_TRIGGER && (goal->used || goal->moving))
+     || K_Combat_GetStatus()->battle || K_Combat_Boss() >= 0
+     || condition->health != K_NEED_OK || condition->ammo == K_NEED_LOW
+     || nav->state != K_NAV_DRIVING || path == NULL || path->num_points < 1
+     || nav->action != K_ACTION_NONE || !K_Nav_CanPause() || !K_Map_GetPlayer(&player))
+    {
+        return false;
+    }
+
+    for (i = 0; i < depth; ++i)
+    {
+        if (goals[i].type == GOAL_PLACE
+         || (goals[i].type == GOAL_ITEM
+             && (i < depth - 1 || GoesFirst(K_Items_Get(goals[i].param), false))))
+        {
+            return false;
+        }
+    }
+
+    stacking = goal->type == GOAL_ITEM;
+    count = SDL_min(K_Specials_FindMonsters(MT_CYBORG, at, MAX_BOSSES), MAX_BOSSES);
+
+    for (i = 0; i < count; ++i)
+    {
+        boss_areas[num_boss++] = K_Area_Of(K_Map_CellAt(at[i].x, at[i].y));
+    }
+
+    count = SDL_min(K_Specials_FindMonsters(MT_SPIDER, at, MAX_BOSSES), MAX_BOSSES);
+
+    for (i = 0; i < count; ++i)
+    {
+        boss_areas[num_boss++] = K_Area_Of(K_Map_CellAt(at[i].x, at[i].y));
+    }
+
+    start.x = player.x;
+    start.y = player.y;
+    end = path->points[path->num_points - 1];
+
+    // The most promising few, as items are ranked.
+    for (i = 0; i < num_places; ++i)
+    {
+        const place_t *place = &places[i];
+        double reach = PlaceReach(place, stacking);
+        double distance = hypot(place->spot.x - start.x, place->spot.y - start.y);
+        double score;
+        boolean boss = false;
+
+        for (k = 0; k < num_boss; ++k)
+        {
+            boss |= boss_areas[k] >= 0 && boss_areas[k] == place->in_area;
+        }
+
+        if (place->tries >= PLACE_TRIES || leveltime < place->skip || boss || PlaceDone(i))
+        {
+            continue;
+        }
+
+        if (distance > reach)
+        {
+            distance = SDL_min(distance,
+                               2.0 * RouteDistance(path, nav->target, start, place->spot));
+        }
+
+        if (distance > reach)
+        {
+            continue;
+        }
+
+        score = reach / (distance + 64.0);
+
+        if (found == routes && score <= order_score[routes - 1])
+        {
+            continue;
+        }
+
+        for (k = found < routes ? found++ : routes - 1;
+             k > 0 && order_score[k - 1] < score; --k)
+        {
+            order[k] = order[k - 1];
+            order_score[k] = order_score[k - 1];
+        }
+
+        order[k] = i;
+        order_score[k] = score;
+    }
+
+    if (found == 0)
+    {
+        return false;
+    }
+
+    // The way left as the pathfinder sees it now.
+    K_Path_Find(&probe, start, player.cell, end);
+
+    if (probe.result == K_PATH_FOUND)
+    {
+        remaining_way = probe.length + probe.wait * WAIT_WAY;
+        remaining_damage = probe.damage;
+        MarkRouteAreas(&probe, 0);
+    }
+    else
+    {
+        remaining_way = nav->remaining;
+        MarkRouteAreas(path, nav->route_cell);
+    }
+
+    for (k = 0; k < found; ++k)
+    {
+        place_t *place = &places[order[k]];
+        double reach = PlaceReach(place, stacking);
+        double detour, way, damage, risk;
+        boolean fixed;
+
+        if (!ItemDetour(start, player.cell, place->spot, end, remaining_way, remaining_damage,
+                        !stacking, sweep_since > 0 ? PLACE_WAIT_MOST : ITEM_WAIT_MOST, &detour,
+                        &way, &damage, &fixed, &risk, NULL))
+        {
+            SetPlaceAside(order[k]);
+            continue;
+        }
+
+        // The monsters inside the place's own area, unless the route goes
+        // through it anyway.
+        if (place->in_area >= 0 && place->in_area < marks_size
+         && route_marks[place->in_area] != route_stamp)
+        {
+            risk += K_Area_Get()->areas[place->in_area].inside;
+        }
+
+        detour += (damage + risk) * DAMAGE_WAY;
+
+        if (detour > reach)
+        {
+            place->skip = leveltime + ITEM_SKIP_TICS;
+            continue;
+        }
+
+        if (best < 0 || reach - detour > best_slack)
+        {
+            best = order[k];
+            best_slack = reach - detour;
+            best_detour = detour;
+            best_risk = risk;
+            best_fixed = fixed;
+        }
+    }
+
+    if (best < 0)
+    {
+        return false;
+    }
+
+    // A switch not worked yet: going for it again after is not another use
+    // of its line (MAX_TRIGGERS), as after an item.
+    if (goal->type == GOAL_TRIGGER && line_uses != NULL && goal->chosen.line >= 0
+     && line_uses[goal->chosen.line] > 0)
+    {
+        --line_uses[goal->chosen.line];
+    }
+
+    if (stacking)
+    {
+        GoalName(goal, name, sizeof(name));
+        M_snprintf(below, sizeof(below), ", on the way to %s", name);
+    }
+
+    place_goal = Push(GOAL_PLACE, best);
+    place_goal->fixable = best_fixed;
+    GoalName(place_goal, name, sizeof(name));
+
+    if (best_risk >= 0.5)
+    {
+        M_snprintf(risky, sizeof(risky), ", %.0f health at risk on the way", best_risk);
+    }
+
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "added %s at (%.0f,%.0f) - %.0f units out of the way%s%s%s",
+          name, places[best].spot.x, places[best].spot.y, best_detour,
+          best_fixed ? " through what blocks it" : "", below, risky);
+    return true;
+}
+
+// Each tic: the secrets found, logged; the time spent on places
+// (EXPLORE_MOST).
+static void UpdateExplore(void)
+{
+    const player_t *player = &players[consoleplayer];
+    int i;
+
+    if (player->secretcount != secrets_found)
+    {
+        secrets_found = player->secretcount;
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "a secret found - %d of %d", secrets_found, totalsecret);
+    }
+
+    for (i = 0; explorer && i < depth; ++i)
+    {
+        if (goals[i].type != GOAL_PLACE)
+        {
+            continue;
+        }
+
+        if (++explore_tics == EXPLORE_MOST)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "%d minutes spent on places off the way - no more "
+                  "this level", EXPLORE_MOST / (60 * TICRATE));
+        }
+
+        break;
+    }
+}
+
 // Whether the run for an item waits: its way goes into an area with
 // monsters inside, not the player's own (K_Combat_MonstersAhead) - fought
 // for there and held short of as on any way, not run into (E2M5: at
@@ -4187,26 +4863,36 @@ static void UpdateEscape(void)
 }
 
 // Each tic: the sweep before the exit (SWEEP_NEAR) - judged, begun, over.
+// An explorer's on every level, for the places not seen yet too
+// (EXPLORE_STALL).
 static void UpdateSweep(void)
 {
     const k_navstatus_t *nav = K_Nav_GetStatus();
-    int count;
+    int count, unseen;
 
     if (sweep_since == 0 && depth == 1 && goals[0].type == GOAL_EXIT && goals[0].planned
-     && nav->state == K_NAV_DRIVING && nav->remaining <= SWEEP_NEAR)
+     && nav->state == K_NAV_DRIVING && (nav->remaining <= SWEEP_NEAR || explorer))
     {
         count = K_Items_Sweepable();
+        unseen = PlacesSweepable();
 
-        if (nomonsters || !K_Condition_ArsenalGoesOn())
+        if (!explorer && (nomonsters || !K_Condition_ArsenalGoesOn()))
         {
             sweep_since = -1;
         }
-        else if (count == 0)
+        else if (count + unseen == 0)
         {
             K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: about to leave - nothing lying about "
                   "worth a sweep");
             K_Condition_LogArsenal("on leaving");
             sweep_since = -1;
+        }
+        else if (explorer)
+        {
+            K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: about to leave - %d items lying about "
+                  "worth taking, %d places not seen yet, swept for", count, unseen);
+            K_Condition_LogArsenal("before the sweep");
+            sweep_since = SDL_max(leveltime, 1);
         }
         else
         {
@@ -4215,13 +4901,19 @@ static void UpdateSweep(void)
             K_Condition_LogArsenal("before the sweep");
             sweep_since = SDL_max(leveltime, 1);
         }
+
+        sweep_found = leveltime;
     }
     else if (sweep_since > 0
-          && ((count = K_Items_Sweepable()) == 0 || leveltime - sweep_since >= SWEEP_MOST))
+          && ((count = K_Items_Sweepable() + PlacesSweepable()) == 0
+              || leveltime - sweep_since >= (explorer ? EXPLORE_MOST : SWEEP_MOST)
+              || (explorer && leveltime - sweep_found >= EXPLORE_STALL)))
     {
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "GO TO EXIT: the sweep is over after %.1f s - %s",
               (double) (leveltime - sweep_since) / TICRATE,
-              count == 0 ? "nothing left worth it" : "time up");
+              count == 0 ? "nothing left worth it"
+              : explorer && leveltime - sweep_found >= EXPLORE_STALL
+              ? "nothing new reached for 2 minutes" : "time up");
         K_Condition_LogArsenal("after the sweep");
         sweep_since = -1;
     }
@@ -4597,7 +5289,8 @@ static boolean FallBackWay(k_vec2_t start, int cell, k_vec2_t spot, int here, do
 
     if (probe.result == K_PATH_FOUND)
     {
-        return probe.length <= FALL_REACH && !ThroughMonsters(&probe, here) && OpenNow(&probe);
+        return probe.length <= FALL_REACH && !ThroughMonsters(&probe, here) && OpenNow(&probe)
+            && probe.damage < 1.0;
     }
 
     // Not one on its way already (Doom II MAP04: a gap narrowing the way to
@@ -4702,7 +5395,8 @@ static boolean ConsiderFallBack(void)
         double distance = sqrt((area->spot.x - start.x) * (area->spot.x - start.x)
                              + (area->spot.y - start.y) * (area->spot.y - start.y));
 
-        if (a == here || area->passage || !K_Area_Safe(a) || distance > FALL_REACH
+        if (a == here || area->passage || !K_Area_Safe(a) || area->hurts > 0.0
+         || distance > FALL_REACH
          || (found == FALL_CANDIDATES && distance >= order_distance[found - 1]))
         {
             continue;
@@ -4985,6 +5679,16 @@ static void UpdateShooting(void)
 // Interface
 //
 
+void K_Brain_SetExitChoice(k_exitchoice_t choice)
+{
+    exit_choice = choice;
+}
+
+void K_Brain_SetExplorer(int on)
+{
+    explorer = on;
+}
+
 void K_Brain_Reset(void)
 {
     int i;
@@ -5016,6 +5720,14 @@ void K_Brain_Reset(void)
     chase_check_tic = 0;
     sweep_since = 0;
     K_Items_Sweep(0);
+    exit_kind = EXIT_UNDECIDED;
+    exit_idle = 0;
+    exit_stall = 0;
+    exit_best = 1.0e9;
+    place_check_tic = 0;
+    explore_tics = 0;
+    secrets_found = players[consoleplayer].secretcount;
+    BuildPlaces();
 
     if (item_skip != NULL)
     {
@@ -5035,6 +5747,7 @@ void K_Brain_Reset(void)
     K_Path_SetBlockCost(BlockCost);
     K_Path_SetPinchCost(PinchCost);
     K_Path_SetEnterCost(EnterCost);
+    K_Path_SetKeepOff(KeepOff);
 
     for (i = 0; i < FALL_TICS; ++i)
     {
@@ -5097,6 +5810,8 @@ void K_Brain_Tick(void)
     UpdatePassing();
     UpdateEscape();
     UpdateSweep();
+    UpdateExit();
+    UpdateExplore();
 
     if (K_Combat_Boss() >= 0)
     {
@@ -5110,6 +5825,11 @@ void K_Brain_Tick(void)
 
     if (depth == 0 && exit_wanted)
     {
+        if (exit_kind == EXIT_UNDECIDED)
+        {
+            ChooseExit();
+        }
+
         Push(GOAL_EXIT, 0);
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "added GO TO EXIT");
     }
@@ -5201,8 +5921,23 @@ void K_Brain_Tick(void)
         return;
     }
 
+    if (goal->type == GOAL_PLACE && PlaceDone(goal->param))
+    {
+        DoneGoal(places[goal->param].sector >= 0 ? "found it" : "been there");
+        return;
+    }
+
+    // An explorer's sweep near the exit looks every tic (SWEEP_HOLD).
+    if (explorer && sweep_since > 0 && goal->type == GOAL_EXIT && goal->planned
+     && K_Nav_GetStatus()->state == K_NAV_DRIVING && K_Nav_GetStatus()->remaining <= SWEEP_HOLD)
+    {
+        item_check_tic = 0;
+        place_check_tic = 0;
+    }
+
     if (DoneIfOpen(goal) || ConsiderHeldUp(goal) || ConsiderChase() || ConsiderFallBack()
-     || ConsiderWayBack(goal) || ConsiderTelefrag(goal) || ConsiderItems(goal))
+     || ConsiderWayBack(goal) || ConsiderTelefrag(goal) || ConsiderItems(goal)
+     || ConsiderPlaces(goal))
     {
         return;
     }
@@ -5308,6 +6043,10 @@ void K_Brain_Tick(void)
             {
                 DoneGoal("landed on the spot");
             }
+            else if (goal->type == GOAL_PLACE)
+            {
+                CandidateFailed(goal, "got there, but it did not count");
+            }
             else
             {
                 CandidateFailed(goal, "crossed it, but the level did not end");
@@ -5366,6 +6105,10 @@ void K_Brain_LevelCompleted(int secret)
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s", how);
     }
 
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "kills %d of %d, items %d of %d, secrets %d of %d",
+          players[consoleplayer].killcount, totalkills, players[consoleplayer].itemcount,
+          totalitems, players[consoleplayer].secretcount, totalsecret);
+    LogExplored();
     depth = 0;
     exit_wanted = false;
 }

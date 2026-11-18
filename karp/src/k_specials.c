@@ -669,6 +669,11 @@ int K_Specials_ExitSector(int sector)
     return sectors[sector].special == 11;
 }
 
+int K_Specials_SecretSector(int sector)
+{
+    return sectors[sector].special == 9;
+}
+
 static int AddBoss(k_boss_t *bosses, int count, int max, int type, int tag, int moves)
 {
     if (count < max)

@@ -105,6 +105,10 @@ void K_Items_Tick(void);
 // arsenal going on to the next: what is short (swept) is worth a long way.
 void K_Items_Sweep(int on);
 
+// -karpattitude explorer: every power-up and weapon the player would pick
+// up is worth a detour, and a sweep (k_items.c: EXPLORE_WORTH).
+void K_Items_Explore(int on);
+
 // How many items lying about are worth a sweep (swept) from where the
 // player is - a guess: a spot touches them, they are not too well guarded,
 // and the detour a sweep allows for each covers there and back as the crow

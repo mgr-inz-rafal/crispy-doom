@@ -1,8 +1,8 @@
 //
 // DESCRIPTION:
 //	Karp glue: the -autoplay / -karpconsole / -quitonexit / -karpsalt /
-//	-karpdemo switches, lifecycle and the SDL event filter that gives the
-//	console its own events.
+//	-karpexit / -karpattitude / -karpdemo switches, lifecycle and the SDL
+//	event filter that gives the console its own events.
 //
 
 #include <stdlib.h>
@@ -110,6 +110,46 @@ void K_EnableSalt(void)
     }
 
     K_Salt_Enable(seed);
+}
+
+// The argument after a switch, as one of names; the first if it is none of
+// them (logged).
+static int Choice(const char *parm, const char **names, int count)
+{
+    int p = M_CheckParmWithArgs(parm, 1);
+    int i;
+
+    for (i = 0; p > 0 && i < count; ++i)
+    {
+        if (!strcasecmp(myargv[p + 1], names[i]))
+        {
+            K_Log(K_LOG_SYS, K_LOG_INFO, "%s %s", parm, names[i]);
+            return i;
+        }
+    }
+
+    K_Log(K_LOG_SYS, K_LOG_WARN, "%s: \"%s\" is none of its choices - %s", parm,
+          p > 0 ? myargv[p + 1] : "", names[0]);
+    return 0;
+}
+
+void K_EnableExitChoice(void)
+{
+    static const char *names[] = { "default", "random", "secret", "normal" };
+
+    InitKarp();
+    K_Brain_SetExitChoice((k_exitchoice_t) Choice("-karpexit", names, arrlen(names)));
+}
+
+void K_EnableAttitude(void)
+{
+    static const char *names[] = { "default", "explorer" };
+    int explorer;
+
+    InitKarp();
+    explorer = Choice("-karpattitude", names, arrlen(names)) == 1;
+    K_Brain_SetExplorer(explorer);
+    K_Items_Explore(explorer);
 }
 
 void K_EnableDemo(void)

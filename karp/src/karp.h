@@ -24,6 +24,14 @@ void K_EnableQuitOnExit(void);
 // -karpsalt [seed]: runs differ, from the seed given or the clock.
 void K_EnableSalt(void);
 
+// -karpexit default|random|secret|normal: which exit the bot takes
+// (k_brain.h).
+void K_EnableExitChoice(void);
+
+// -karpattitude default|explorer: how the bot goes through a level
+// (k_brain.h).
+void K_EnableAttitude(void);
+
 // -karpdemo: the bot plays on by itself, episode after episode (k_demo.h); implies
 // -autoplay and salt, starts a game at once, overrides -quitonexit.
 void K_EnableDemo(void);

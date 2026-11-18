@@ -2728,7 +2728,8 @@ Who controls the player in a fight (the user's model):
 
 - **EXPLORER** (the user's idea, jotted): when nothing is left to do but leave, the bot may choose
   to explore: secret areas, far bonuses, to finish the map with full health and armour. A goal in
-  front of GO TO EXIT, taken when the condition and the time allow.
+  front of GO TO EXIT, taken when the condition and the time allow. Done (2026-11-18, below:
+  "Which exit, and an explorer"), as -karpattitude explorer.
 - **Infighting** (the user, jotted): an advanced technique, so never provoked on purpose, but when
   it happens by accident it is not broken, it is used. A powerful monster (a Cyberdemon, Spider
   Mastermind, baron, perhaps a cacodemon) whose target is another monster, not the player
@@ -4013,6 +4014,51 @@ Who controls the player in a fight (the user's model):
   all four, new E2M7 once, E2M8 twice, and finished the episode once (E2M8 in 61.7 s).
   Left: E2M8's start - the Cyberdemon met in the corridor out of the start room, the way to a
   spot 512 from it going past it (3 of 12 runs dead there by 18 s, head 1).
+- **Which exit, and an explorer** (the user, 2026-11-18: "a flag to indicate which exit the bot
+  should take ... if one exit is not reachable for a long time, bot should fall back to
+  different one"; "an attitude ... explorer - bot tries to visit as many places as possible,
+  getting all secret areas, grab all powerups and weapons (even if not strictly needed) ... not
+  strict, because sometimes there are decoy powerups or secret sectors which are not reachable";
+  "natural exploration while the bot runs through the level ... before exit we already have a
+  sweep"). Done (`k_brain.c`, `k_items.c`, `k_path.c`, `karp.c`):
+  - `-karpexit default|random|secret|normal`: GO TO EXIT goes for exits of the kind wanted only
+    (an exit floor is a normal one), drawn for each level for random; a map without one is left
+    by any. No route crosses a walk-over exit of the other kind (`K_Path_SetKeepOff`: a line is
+    crossed only by a route whose goal lies within 48 of it). Any exit, for the rest of the
+    level, after 30 s in all with no way to the one wanted and nothing to fix, or 3 minutes with
+    no progress (no fix on the way done, the way left never 64 shorter than its best), counted
+    out of fights, detours and the sweep. E1M3 and E2M5, secret: the secret exit (E1M3 in 107 s,
+    not 157); normal and default: the normal one. E4M2 dies in the nukage pit at 10 s either way
+    (navigation, left for later), so the fallback was not seen in a run.
+  - `-karpattitude explorer`: places off the way gone to as items are - an area not visited yet
+    (no door or lift, 4096 of floor, not mostly one that hurts) within 2048 of detour, a secret
+    not found yet (special 9) within 4096; out of fights, health OK, ammo not LOW, no boss on the
+    player, never into a live Cyberdemon's or spider mastermind's area; on top of an item gone
+    for (not one that goes first) at half that (E1M2: items one after another, places looked at
+    8 times in 90 s). One with no way there is set aside a minute, given up after three. Every
+    power-up and weapon the player would pick up is worth 10 and a 1536 detour (the
+    invulnerability sphere only in the sweep). No walk-over exit crossed but the one gone for.
+    The sweep is on every level, begun once GO TO EXIT is all that is left with a way, for the
+    places not seen too, any way off, the nearest first, 30 s of doors and lifts allowed; looked
+    for every tic within 256 of the exit; over when nothing is left, after 15 minutes, or with
+    nothing new reached for 2 minutes. E1M2 from a pistol start: 254 s (default 74), kills 40 of
+    41 (20), items 29 of 42 (2), secrets 5 of 6 (1), 42 of 71 areas; the 30 given up lie behind
+    doors a switch opens elsewhere, or a key.
+  - Logged for every run: a secret found ("2 of 6"), and at the level's end kills, items and
+    secrets as the intermission counts them.
+  - On the way: falling back never to an area whose floor hurts, nor over one (E1M3, explorer:
+    fallen back into a nukage pit, a step of 120 out, the bot burned).
+  - And teleported where the route did not lead a second time on the way to one goal, nav fails
+    (`k_nav.c`: `STRAY_TELEPORTS`), and the goal gives way (the user, the E1 regression: "the
+    bots on E1M5 run in circles"). For a health bonus at (-896,1504) by the star-shaped pad of
+    lines 787 to 796 (WR teleports, front sector 55), the route ran past the star's tip at
+    (-848,1464), where it meets the room's edge, the player crossed a line of it and landed near
+    the start; planned again from there, up lift 48 and past the tip again - 42 teleports in 9
+    minutes with salt 71, 16 in 5 with 443 (head the same). Left: the route along a teleport
+    line's front at a hair's breadth (the MAP06 to-and-fro may be the same).
+  Episode 1 from E1M1, default, head against new, salts 443, 71, 7 and 13, 25 minutes: the same
+  but for drift in a close fight (443: E1M5 parted at a spectre's step, then a death on E1M6,
+  finished on the retry); 71 stuck on E1M5 in both (above).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

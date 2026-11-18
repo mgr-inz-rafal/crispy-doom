@@ -198,6 +198,15 @@
 // teleported.
 #define TELEPORT_JUMP 64.0
 
+// Teleported where the route did not lead - off it, or back onto a stretch
+// walked already - STRAY_TELEPORTS times on the way to one goal: the way
+// does not work, and nav fails, for the goal to give way (k_brain.c) rather
+// than the route going round again (E1M5: past the tip of the star-shaped
+// pad by the secret room, one of its lines crossed, back near the start;
+// planned again from there, up the lift and past the pad again, 42 times in
+// 9 minutes, for a health bonus).
+#define STRAY_TELEPORTS 2
+
 // The highest step the player climbs (P_TryMove).
 #define MAX_CLIMB 24.0
 
@@ -340,6 +349,7 @@ static int history_next;
 static double stuck_remaining;     // the way left where it last got stuck
 static int unstick_tics;    // stepping aside, UNSTICK_TICS
 static k_vec2_t unstick_dir;
+static int stray_teleports; // on the way to this goal (STRAY_TELEPORTS)
 static k_vec2_t last_at;    // after the previous tic
 static double last_floor;   // the floor stood on then
 
@@ -2321,7 +2331,9 @@ static boolean Replan(k_vec2_t at, const char *why)
 // Moves the target along as the player goes, by the cell it stands on.
 // Returns false if the route was replaced or failed. Off the route but
 // next to it, the player carries on; teleported, it goes on from that
-// route cell (the route cell it was in is far away), else it replans.
+// route cell (the route cell it was in is far away), else it replans - but
+// teleported where the route did not lead a second time, it fails
+// (STRAY_TELEPORTS).
 // Running a jump, it crosses cells off the route, or earlier on it (the
 // rest of the run-up's floor, the gap), until it lands: only getting on,
 // on the ground, counts (Doom II MAP24: a run-up across an earlier route
@@ -2356,6 +2368,16 @@ static boolean Progress(k_vec2_t at, const k_pose_t *pose, boolean teleported)
     if (r < 0 && teleported && cell >= 0)
     {
         r = RouteNeighbor(cell);
+    }
+
+    if (teleported && cell >= 0 && (r < 0 || r <= status.route_cell)
+     && ++stray_teleports >= STRAY_TELEPORTS)
+    {
+        M_snprintf(why, sizeof(why), "teleported off the way %d times, to (%.0f,%.0f) now",
+                   stray_teleports, at.x, at.y);
+        K_Log(K_LOG_NAV, K_LOG_WARN, "%s", why);
+        Fail(why);
+        return false;
     }
 
     if (r > status.route_cell)
@@ -2884,6 +2906,7 @@ void K_Nav_Reset(void)
     dry_point = -1;
     crusher_run = -1;
     unstick_tics = 0;
+    stray_teleports = 0;
     paused = false;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
@@ -2947,6 +2970,7 @@ static int StartGoal(double x, double y, k_goalkind_t kind, int line)
     last_at = start;
     last_floor = player.floor;
     cross_first = false;
+    stray_teleports = 0;
 
     K_Path_Find(&path, start, player.cell, goal);
 
@@ -3130,6 +3154,7 @@ void K_Nav_Clear(void)
     dry_point = -1;
     crusher_run = -1;
     unstick_tics = 0;
+    stray_teleports = 0;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;
     status.goal_line = -1;

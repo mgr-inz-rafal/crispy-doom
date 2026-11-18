@@ -121,6 +121,12 @@ typedef double (*k_entercost_t)(int cell, int from_cell);
 
 void K_Path_SetEnterCost(k_entercost_t cost);
 
+// Lines no route crosses (the brain: an exit not wanted), but one whose goal
+// lies right by it - the route going over it on purpose. Without one, none.
+typedef int (*k_keepoff_t)(int line);
+
+void K_Path_SetKeepOff(k_keepoff_t lines);
+
 // The radiation suit the searches assume: one worn from the start for that
 // many tics (k_brain.c: the way on from a suit once picked up), or with -1
 // (the default) the player's own, for as long as it has left. While worn,

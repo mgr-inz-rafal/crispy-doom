@@ -31,6 +31,8 @@
 //
 //	A walk-over line that would shut a door or bars the route goes through
 //	further on costs SHUT_PENALTY to cross, and the route is planned again.
+//	One the brain keeps routes off (K_Path_SetKeepOff: an exit not wanted)
+//	is not crossed at all.
 //
 
 #include <math.h>
@@ -60,6 +62,11 @@
 // fix (k_brain.c: FIXABLE_COST): past the line, opening it again is one.
 #define SHUT_PENALTY 1.0e5
 #define MAX_SHUT_SEARCHES 4
+
+// A line the brain keeps routes off (K_Path_SetKeepOff) is crossed only by a
+// route whose goal lies within KEEP_OFF_GOAL of it: the one going over it on
+// purpose (k_nav.c: a walk-over line's goal point is up to 40 past it).
+#define KEEP_OFF_GOAL 48.0
 
 // A door or lift costs the distance the player could run (16.7 units a
 // tic) while waiting for it.
@@ -135,6 +142,7 @@ static unsigned int shut_mark;
 static k_blockcost_t block_cost;
 static k_pinchcost_t pinch_cost;
 static k_entercost_t enter_cost;
+static k_keepoff_t keep_off;
 static double health_cost;      // HEALTH_COST or HEALTH_COST_DEADLY
 
 // The radiation suit searches assume (K_Path_AssumeSuit): tics, or -1 for
@@ -402,6 +410,16 @@ static double PinchCost(int cell, k_vec2_t at)
     return pinch_cost != NULL ? pinch_cost(cell, at) : BLOCKED_PENALTY;
 }
 
+// Whether no route of this search crosses the portal: its line is kept off,
+// and the goal does not lie by it (KEEP_OFF_GOAL).
+static boolean KeptOff(int portal)
+{
+    int line = graph->portals[portal].line;
+
+    return keep_off != NULL && line >= 0 && keep_off(line)
+        && SegmentDistance(map->lines[line].v1, map->lines[line].v2, goal_point) > KEEP_OFF_GOAL;
+}
+
 // The health walking `distance` across a cell and waiting `wait` tics in it
 // takes, `at` tics into the way: under a radiation suit, only the part after
 // it runs out (suit_left) at the full rate.
@@ -543,7 +561,7 @@ static boolean Search(k_path_t *path)
             int next;
 
             // Never straight back out the way it came in.
-            if (node != start_node && link->portal == node / 2)
+            if ((node != start_node && link->portal == node / 2) || KeptOff(link->portal))
             {
                 continue;
             }
@@ -1105,6 +1123,11 @@ void K_Path_SetEnterCost(k_entercost_t cost)
 void K_Path_SetPinchCost(k_pinchcost_t cost)
 {
     pinch_cost = cost;
+}
+
+void K_Path_SetKeepOff(k_keepoff_t lines)
+{
+    keep_off = lines;
 }
 
 void K_Path_AssumeSuit(double tics)

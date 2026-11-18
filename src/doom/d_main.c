@@ -2384,6 +2384,34 @@ void D_DoomMain (void)
     }
 
     //!
+    // @arg <choice>
+    // @category game
+    //
+    // [Karp] Which exit the bot takes: default (the nearest it can get to,
+    // secret or not), random (secret or normal, drawn for each level),
+    // secret or normal. One that stays out of reach gives way to any.
+    //
+
+    if (M_CheckParm("-karpexit"))
+    {
+        K_EnableExitChoice(); // [Karp]
+    }
+
+    //!
+    // @arg <attitude>
+    // @category game
+    //
+    // [Karp] How the bot goes through a level: default, or explorer (it
+    // also visits the places off its way, finds the secrets, and picks up
+    // every power-up and weapon it comes by).
+    //
+
+    if (M_CheckParm("-karpattitude"))
+    {
+        K_EnableAttitude(); // [Karp]
+    }
+
+    //!
     // @category game
     //
     // [Karp] Demo mode: the bot plays on by itself, for ever - a game

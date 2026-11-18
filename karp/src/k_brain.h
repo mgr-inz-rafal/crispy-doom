@@ -12,6 +12,24 @@
 extern "C" {
 #endif
 
+// Which exit the bot takes (-karpexit): the nearest it can get to, secret or
+// not; one kind or the other, drawn for each level; the secret one; the
+// normal one. One wanted that stays out of reach gives way to any.
+typedef enum
+{
+    K_EXIT_DEFAULT,
+    K_EXIT_RANDOM,
+    K_EXIT_SECRET,
+    K_EXIT_NORMAL,
+} k_exitchoice_t;
+
+void K_Brain_SetExitChoice(k_exitchoice_t choice);
+
+// -karpattitude explorer: places off the way gone to as items are - the
+// areas not visited yet, the secrets not found yet - and no level ended on
+// the way to something else.
+void K_Brain_SetExplorer(int on);
+
 // Back to IDLE, with GO TO EXIT on the list under -autoplay; called on
 // every level load.
 void K_Brain_Reset(void);

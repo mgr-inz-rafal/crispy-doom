@@ -142,6 +142,10 @@ int K_Specials_FindKeys(k_key_t key, k_keything_t *keys, int max);
 // off). The player then often dies, and the level ends all the same.
 int K_Specials_ExitSector(int sector);
 
+// Whether the sector is a secret not found yet (special 9: the engine counts
+// it and clears the special once the player stands on its floor).
+int K_Specials_SecretSector(int sector);
+
 // The map's bosses, as A_BossDeath has them (Ultimate Doom's rules: each
 // episode's own boss on its map 8, and E4M6; Doom II MAP07), up to max.
 // Returns how many.
