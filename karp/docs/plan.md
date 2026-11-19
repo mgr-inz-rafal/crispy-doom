@@ -4198,6 +4198,11 @@ Who controls the player in a fight (the user's model):
     strafe going the way it went, and the way taken the tic before scores up to `MOVE_KEEP`
     (0.4) more. E3M2, 6 salts: turns round not by the strafe's timer 0.60 a second of fighting,
     now 0.29; from target swaps 43, now 6; three within 16 tics 39, now 21.
+  Head against new, pistol starts, salts 443, 71 and 7: E1M1 to E1M6 and E1M8 finished 20 and
+  21 of 21; Doom II MAP01 to 06, 10 and 15 finished 15 and 14 of 24 (MAP04 with 6 salts more: 7
+  and 6 of 9, the deaths both builds' spectre by the barrel at the door of line 32; MAP10's 3
+  and 2 unfinished alive in the sweep at the 420 s limit). Without monsters, Doom II's 29 maps
+  all finished, the times as before.
   Left: Doom II MAP16's gun switch 200 "does nothing" from either spot (before too).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
