@@ -4084,6 +4084,34 @@ Who controls the player in a fight (the user's model):
   Episode 1 from E1M1, default, head against new, salts 443, 71, 7 and 13, 25 minutes: the same
   but for drift in a close fight (443: E1M5 parted at a spectre's step, then a death on E1M6,
   finished on the retry); 71 stuck on E1M5 in both (above).
+- **Ammo kept for the boss** (the user, 2026-11-19, E3M8: "if a given level is to be finished by
+  killing a boss, we should not waste ammo on other monsters if the ammo is scarce ... picking up
+  plasma and rockets, but then it spends it on cacos and barons, leaving not enough firepower for
+  the spider. Cacos and Barons are easy to avoid"). Done (`k_combat.c`: `BOSS_MARGIN`):
+  - While monsters of the kind the level needs dead live (KILL EVERY <kind>), what the guns held
+    could do to them is theirs up to 1.5 times their health; only the share beyond counts against
+    the others (the map's other bosses aside: MAP07's arachnotrons). One not weak with too little
+    to spare is hopeless: not fought, and passed from the first - kept off only within 96, in
+    reach of its blows (kept off as any, the cacodemons and the baron were hidden from round
+    corners up to 800 off, the spider shooting the bot all the way). Rockets and cells kept for
+    the tough monsters are kept from a baron too while the boss lives (the shotgun and the
+    chaingun for it). A rocket counts 90, not 120, against a Cyberdemon or a spider mastermind:
+    the blast never hurts them.
+  - E3M8 from a pistol start (UV: the spider, a baron, two cacodemons; the rocket launcher, the
+    plasma rifle, 20 rockets, 60 cells): head fought the three with rockets and cells (salt 443
+    killed all three, then went for the spider at 24 health); new spent nothing on them, and
+    twice they ended up fighting the spider. Finished 1 of 4 (head) and 1 of 6 (new): every
+    death is the spider's bullets in the open ("no cover from the spider mastermind in reach"),
+    the cover work left for later (C4). From E3M7 in demo mode the bot came with the BFG and 130
+    to 280 cells - more than the share kept, the rule idle - and killed the spider in 22 to 26 s.
+  - And projectiles fired only with their way clear by their box (`BallClear`, the BFG's check,
+    now for rockets and the plasma rifle too, and mid-burst; a square box is up to 1.41 times its
+    radius across a diagonal) - the user: "most shots hit the wall, since bot tried to hit the
+    spider through a narrow door opening at an angle (hitscan would land, but projectile not)".
+    E3M8, 6 salts: plasma balls bursting on a wall within 200 of the player 23 before, 7 after;
+    on any wall 89 of 468, 56 of 447 (the rest mostly misses past the spider, 400 off).
+  Head against new, pistol starts: E2M8, 9 salts, finished 7 and 5 (salt 11 the other way);
+  E4M8 1 and 2 of 3; Doom II MAP10 2 and 2 of 3, MAP15 1 and 1 of 3.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

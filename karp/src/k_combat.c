@@ -35,7 +35,8 @@
 //	Fight or avoid (plan, 7.3): a monster the guns and rounds held cannot
 //	kill - too few, or too slow - is no target; one in sight near is kept
 //	off, out of its sight, with nothing shot at it, and what would kill it
-//	is gone for (K_Combat_Beats).
+//	is gone for (K_Combat_Beats). With a boss the level needs dead, only the
+//	ammo beyond what it takes counts against the others (BOSS_MARGIN).
 //
 //	Infighting (plan, 7.8): a monster fighting another is no target - a shot
 //	would turn it on the player - but kept off as any. Telefrags: what stands
@@ -351,8 +352,9 @@ extern void A_CyberAttack();
 // cacodemon and then tries to shoot again, but the weapon has a cooldown;
 // with the plasma it's better to keep the trigger on"). Mid-burst the
 // trigger stays down while the facing is within PLASMA_HOLD times the
-// aim's tolerance of the target and no barrel is at risk, whatever else
-// would let go of it: a ball astray costs a cell, a burst broken 0.6 s.
+// aim's tolerance of the target, no barrel is at risk and the balls' way is
+// clear (BallClear), whatever else would let go of it: a ball astray costs
+// a cell, a burst broken 0.6 s - but a doorway's side takes every ball.
 #define PLASMA_HOLD 3.0
 
 // A weapon is brought up only if it rates SWITCH_GAIN times the one in
@@ -521,14 +523,13 @@ extern void A_CyberAttack();
 // state, as rockets: held, A_ReFire fires again at the end of the shot, the
 // ball leaving with no aim held for it. Held from the press on: the ball
 // leaves 30 tics later, from where the player is then. And fired only with
-// the ball's path clear by its radius, BFG_RADIUS, either side (MAP10:
-// through a window at the Cyberdemon, the ball burst on its frame 39 to 55
-// units off, the spray finding nothing).
+// the ball's path clear (BallClear; MAP10: through a window at the
+// Cyberdemon, the ball burst on its frame 39 to 55 units off, the spray
+// finding nothing).
 #define BFG_CONE (40.0 * K_PI / 180.0)
 #define BFG_REACH 960.0
 #define BFG_HOLD 3.0
 #define BFG_NEAR 32.0
-#define BFG_RADIUS 13.0
 
 // Invulnerable for INVULN_BOLD more at least (the user: plan to have it for
 // the fight), the target is fought as far as TARGET_REACH, far and
@@ -678,6 +679,23 @@ extern void A_CyberAttack();
 #define AVOID_MOST (10 * TICRATE)
 #define AVOID_SKIP (10 * TICRATE)
 #define MAX_HOPELESS 16
+
+// Ammo kept for the level's boss (the user, E3M8: the rockets and cells
+// picked up spent on the cacodemons and the baron, too few left for the
+// spider mastermind - "if a level is finished by killing a boss, do not
+// waste ammo on other monsters while it is scarce; the cacodemons and the
+// barons are easy to avoid"): while monsters of the kind the level needs
+// dead live (K_Combat_Needed), what the guns held could do to them (InHand)
+// is theirs up to BOSS_MARGIN times their health, and only the share beyond
+// it counts against any other monster - but the map's other bosses
+// (K_Specials_Bosses: MAP07's arachnotrons, the mancubi gone for first). One
+// not weak is then hopeless with too little to spare: not fought, kept off.
+// The rockets and cells kept for the tough monsters (RESERVE_SHARE) are kept
+// from the tough ones but the boss too (KeptFrom: a baron gets the shotgun
+// and the chaingun). A rocket's blast never hurts a Cyberdemon or a spider
+// mastermind (P_RadiusAttack): ROCKET_DIRECT a round against them.
+#define BOSS_MARGIN 1.5
+#define ROCKET_DIRECT 90.0
 
 // Monsters that cannot come at the player (the user: monsters shut in for
 // good behind bars, fought for ammo the bot needed later): judged by the
@@ -1220,6 +1238,8 @@ static int hopeless_capacity;
 static boolean beats[NUMWEAPONS];
 static int needed = -1;             // the kind the level needs dead (K_Combat_Needed)
 static boolean fight_needed;        // and fought anyway this tic, hopeless or not
+static double boss_spare = 1.0;     // the share of the ammo not kept for it (BOSS_MARGIN)
+static boolean boss_short;          // none to spare, as last logged
 static const mobj_t *hopeless_logged[MAX_HOPELESS];
 static int avoid = -1;
 static const mobj_t *avoid_mo;
@@ -2565,14 +2585,42 @@ static boolean Reserved(const weapon_t *weapon)
 
 // The damage a round of the gun does to the monster, from as far as a fight
 // keeps it off: a projectile's FLIES_HIT of all of it, a bullet's or a
-// pellet's as the spread and range allow (HOPELESS_SHARE).
+// pellet's as the spread and range allow (HOPELESS_SHARE); a rocket's but
+// the blast against a Cyberdemon or a spider mastermind (ROCKET_DIRECT).
 static double RoundDamage(const weapon_t *weapon, const k_monster_t *monster)
 {
     double distance = SDL_max(Kind(monster->type)->keep, KEEP_AWAY);
+    double damage = weapon->weapon == wp_missile
+                 && (monster->type == MT_CYBORG || monster->type == MT_SPIDER)
+                    ? ROCKET_DIRECT : weapon->damage;
 
-    return weapon->damage * (weapon->flies ? FLIES_HIT
-                                           : HitShare(weapon, distance, monster->radius))
+    return damage * (weapon->flies ? FLIES_HIT : HitShare(weapon, distance, monster->radius))
          / weapon->shot;
+}
+
+// Whether the kind is one of the map's bosses (K_Specials_Bosses): what ammo
+// is kept for (BOSS_MARGIN), never kept from.
+static boolean MapBoss(int type)
+{
+    k_boss_t bosses[4];
+    int count = K_Specials_Bosses(bosses, arrlen(bosses));
+    int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (bosses[i].type == type)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Whether ammo is kept from the monster for the level's boss (BOSS_MARGIN).
+static boolean ForBoss(const k_monster_t *monster)
+{
+    return boss_spare < 1.0 && monster->type != needed && !MapBoss(monster->type);
 }
 
 // Whether the gun, firing on, would kill the monster within HOPELESS_TICS,
@@ -2585,7 +2633,8 @@ static boolean InTime(const weapon_t *weapon, const k_monster_t *monster)
 }
 
 // What the guns held that would kill the monster in time could do to it
-// with the rounds there are: of each ammo type, by the best of them.
+// with the rounds there are: of each ammo type, by the best of them; but
+// the share kept for the level's boss (ForBoss).
 static double InHand(const player_t *player, const k_monster_t *monster)
 {
     double best[NUMAMMO] = { 0.0 }, can = 0.0;
@@ -2608,7 +2657,7 @@ static double InHand(const player_t *player, const k_monster_t *monster)
         can += player->ammo[a] * best[a];
     }
 
-    return can;
+    return ForBoss(monster) ? can * boss_spare : can;
 }
 
 // Whether the guns held fall short of a monster of its kind: what is in
@@ -2809,12 +2858,51 @@ static void UpdateHard(const player_t *player)
     }
 }
 
+// Each tic: the share of the ammo not kept for the level's boss
+// (BOSS_MARGIN); logged as none comes to be left to spare, and some again.
+static void UpdateBossShare(const player_t *player)
+{
+    double need = 0.0, can;
+    int boss = -1, i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (monsters[i].type == needed)
+        {
+            need += monsters[i].health * BOSS_MARGIN;
+            boss = i;
+        }
+    }
+
+    if (boss < 0)
+    {
+        boss_spare = 1.0;
+        boss_short = false;
+        return;
+    }
+
+    can = InHand(player, &monsters[boss]);
+    boss_spare = can > need ? 1.0 - need / can : 0.0;
+
+    if ((boss_spare <= 0.0) != boss_short)
+    {
+        boss_short = boss_spare <= 0.0;
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, boss_short
+              ? "ammo kept for the %s - %.0f of its damage in hand, %.0f of its health; no "
+                "other monster but the weak fought"
+              : "ammo to spare beyond the %s's - %.0f of its damage in hand, %.0f of its health",
+              monsters[boss].name, can, need / BOSS_MARGIN);
+    }
+}
+
 // Each tic: which monsters are hopeless; logged as each becomes so, awake in
 // sight, and again once it can be fought. Those logged, met awake, are what
 // the player is outgunned by while they stay awake (beats).
 static void UpdateHopeless(const player_t *player)
 {
     int i, k, w;
+
+    UpdateBossShare(player);
 
     if (hopeless_capacity < num_monsters)
     {
@@ -2892,9 +2980,10 @@ static void UpdateHopeless(const player_t *player)
         {
             hopeless_logged[k] = monster_mobjs[i];
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s, %.0f units off, is beyond what the player "
-                  "holds - %.0f of its %d health in hand; not fought, kept off",
-                  monsters[i].name, monsters[i].distance, InHand(player, &monsters[i]),
-                  monsters[i].health);
+                  "holds%s - %.0f of its %d health in hand; not fought, kept off",
+                  monsters[i].name, monsters[i].distance,
+                  ForBoss(&monsters[i]) ? " but for the boss" : "",
+                  InHand(player, &monsters[i]), monsters[i].health);
         }
     }
 
@@ -2978,8 +3067,12 @@ static void UpdateReserve(const player_t *player)
 
 // The hopeless monster to keep off (AVOID_PAST): awake, in sight - or the
 // one kept off, seen within AVOID_LINGER - nearer than its kind's distance;
-// the nearest; not the one passed, unless within CLOSE_REACH, nor one about
-// to be telefragged (Spared). One that
+// the nearest; not the one passed, unless within CLOSE_REACH, nor one ammo
+// is kept from for the level's boss (ForBoss: passed from the first, the
+// user - "easy to avoid"; E3M8, kept off as any, the cacodemons and the
+// baron were hidden from round corners up to 800 units off, the spider
+// mastermind shooting the bot all the way), nor one about to be
+// telefragged (Spared). One that
 // cannot come at the player too: from where it stands it shoots (E3M8: the
 // spider mastermind, 212 off, shot the bot dead as it picked up a rocket;
 // E3M9: a switch worked in the cyberdemon's sight). -1 if none.
@@ -2995,7 +3088,8 @@ static int Avoided(void)
 
         if (LeftAlone(i) && !Spared(i) && monster->awake && monster->distance < keep
          && (monster->visible || (kept && leveltime - avoid_seen < AVOID_LINGER))
-         && !(monster_mobjs[i] == passed_mo && leveltime < passed_until
+         && !(((monster_mobjs[i] == passed_mo && leveltime < passed_until)
+               || ForBoss(monster))
               && monster->distance >= CLOSE_REACH)
          && (best < 0 || monster->distance < monsters[best].distance))
         {
@@ -3337,17 +3431,17 @@ static boolean SpareGun(const player_t *player)
     return false;
 }
 
-// Whether the rockets and cells kept are kept from this one: not tough, and
-// those for the tough monsters (RESERVE_SHARE) while another gun can fire -
-// the pistol too against a weak one - but for a fight the player is beset
-// in (Beset); those for the levels ahead (CARRY_DAMAGE) while a gun but the
-// pistol has ammo to spare (SpareGun), but for a fight the player is
-// pressed in (UnderPressure).
+// Whether the rockets and cells kept are kept from this one: not tough, or
+// not the level's boss (ForBoss), and those for the tough monsters
+// (RESERVE_SHARE) while another gun can fire - the pistol too against a weak
+// one - but for a fight the player is beset in (Beset); those for the levels
+// ahead (CARRY_DAMAGE) while a gun but the pistol has ammo to spare
+// (SpareGun), but for a fight the player is pressed in (UnderPressure).
 static boolean KeptFrom(const player_t *player, const k_monster_t *monster)
 {
     int spawn = SpawnHealth(monster->type);
 
-    return spawn < TOUGH_HEALTH
+    return (spawn < TOUGH_HEALTH || ForBoss(monster))
         && ((reserve && !Beset() && LowGun(player, spawn <= WEAK_HEALTH))
             || (carry && !UnderPressure() && SpareGun(player)));
 }
@@ -6810,6 +6904,8 @@ void K_Combat_Reset(void)
     memset(beats, 0, sizeof(beats));
     needed = -1;
     fight_needed = false;
+    boss_spare = 1.0;
+    boss_short = false;
 
     for (i = 0; i < MAX_HOPELESS; ++i)
     {
@@ -7124,22 +7220,31 @@ static boolean LineOfFire(const player_t *player, k_vec2_t from, double facing,
                        from.y + sin(facing) * reach, monster->z, monster->z + monster->height);
 }
 
-// Whether a BFG ball fired along the facing would get to the target's front:
-// no wall within its radius either side of its path, at the height it flies
-// climbing to the target's middle (as RocketClear; BFG_RADIUS).
+// Whether a projectile the gun fires along the facing would get to the
+// target's front: no wall within its box either side of its path - a square
+// (P_TryMove), its radius across the path square on, up to 1.41 times that
+// across a diagonal - at the height it flies climbing to the target's middle
+// (as RocketClear). The BFG's ball (BFG_CONE), the plasma rifle's (the
+// user, E3M8: fired at the spider mastermind through a narrow doorway at an
+// angle, most of them hit its side, where a bullet would have got through)
+// and rockets.
 static boolean BallClear(const player_t *player, k_vec2_t from, double facing,
-                         const k_monster_t *monster)
+                         const k_monster_t *monster, const weapon_t *weapon)
 {
+    mobjtype_t type = weapon->weapon == wp_missile ? MT_ROCKET
+                    : weapon->weapon == wp_plasma ? MT_PLASMA : MT_BFG;
     double ux = cos(facing), uy = sin(facing);
+    double radius = ToMap(mobjinfo[type].radius);
+    double across = radius * (fabs(ux) + fabs(uy));
     double distance = Distance(from, monster->at);
-    double reach = SDL_max(distance - monster->radius - BFG_RADIUS, distance * 0.5);
+    double reach = SDL_max(distance - monster->radius - radius, distance * 0.5);
     double gun = GunHeight(player->mo);
     double z = gun + (monster->z + monster->height * 0.5 - gun) * reach / SDL_max(distance, 1.0);
     int side;
 
     for (side = -1; side <= 1; side += 2)
     {
-        double ox = -uy * BFG_RADIUS * side, oy = ux * BFG_RADIUS * side;
+        double ox = -uy * across * side, oy = ux * across * side;
 
         if (!K_Sight_Aim(from.x + ox, from.y + oy, gun, from.x + ox + ux * reach,
                          from.y + oy + uy * reach, z - 4.0, z + 4.0))
@@ -7504,7 +7609,8 @@ void K_Combat_Fire(int tic, k_command_t *command)
     // The plasma rifle mid-burst (PLASMA_HOLD).
     if (weapon->weapon == wp_plasma && player->psprites[ps_weapon].state == &states[S_PLASMA1]
      && fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - facing)) <= tolerance * PLASMA_HOLD
-     && !BarrelAtRisk(player, from, facing, weapon, at, accurate))
+     && !BarrelAtRisk(player, from, facing, weapon, at, accurate)
+     && BallClear(player, from, facing, monster, weapon))
     {
         command->attack = 1;
         return;
@@ -7524,7 +7630,7 @@ void K_Combat_Fire(int tic, k_command_t *command)
      || BarrelAtRisk(player, leaves, leaves_facing, weapon, leaves_at, accurate)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))
      || !LineOfFire(player, from, facing, monster)
-     || (weapon->weapon == wp_bfg && !BallClear(player, from, facing, monster)))
+     || (weapon->flies && !BallClear(player, from, facing, monster, weapon)))
     {
         return;
     }
