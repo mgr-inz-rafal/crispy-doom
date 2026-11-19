@@ -262,10 +262,15 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // monsters close by, the fight comes first (the user, Doom II MAP02: dashing
 // for a super shotgun, the bot walked into a room of zombiemen and shotgun
 // guys 40 to 90 off, fighting none of them, and died). Stopped so, the dash
-// waits until none is within DASH_FREE, or the fight begun is over (E3M3: a
-// dash for the shotgun broke a fight off and began it again 7 times in 15 s,
-// imps and demons coming in and out of DASH_CLEAR as the fight backed off
-// them and the run turned back toward them).
+// waits until none is within DASH_FREE (E3M3: a dash for the shotgun broke a
+// fight off and began it again 7 times in 15 s, imps and demons coming in
+// and out of DASH_CLEAR as the fight backed off them and the run turned back
+// toward them) - or, once a fight began, until it is over: the fight backs
+// off to fire rockets, and loses sight of its target round corners, beyond
+// DASH_FREE (the user, E3M2: a dash for a box of rockets past a cacodemon
+// broke the fight off and began it again 7 times in 17 s, the rocket
+// launcher brought up at 383 off and put away for the pistol as the run
+// turned back toward it).
 #define FIGHT_REACH 400.0
 #define DASH_CLEAR 128.0
 #define DASH_FREE 384.0
@@ -510,8 +515,13 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // within SWEEP_HOLD of the exit, not every second, and places while passing
 // a lift too (PASS_TICS): the level is not left for want of a look (E1M2:
 // the lift ridden for an area kept the sweep off for 7 s, and the exit was
-// pressed with 38 places not seen).
+// pressed with 38 places not seen). An area looked into counts as visited:
+// its spot in sight within PLACE_SEEN_REACH, not only once the player stood
+// in it (the user, E3M1: the yard by the start, in pieces, each gone a step
+// into one after another, a different way each time - the bot looked to
+// move erratically); a secret is found only by going in.
 #define PLACE_AREA_REACH 2048.0
+#define PLACE_SEEN_REACH 1024.0
 #define PLACE_SECRET_REACH 4096.0
 #define PLACE_SWEEP_REACH ANY_REACH
 #define PLACE_AREA_MIN 4096.0
@@ -665,10 +675,12 @@ typedef struct
     int tries;              // times set aside (PLACE_TRIES)
     int later;              // no way back from it, other places first: not
                             // looked at before this (PLACE_SWEEP_REACH)
+    boolean seen;           // an area: its spot was in sight (PLACE_SEEN_REACH)
 } place_t;
 
 static place_t *places;
 static int num_places;
+static int place_seen_next;     // the place to look for in sight next
 static int place_check_tic;     // when to look for places next
 static int explore_tics;        // spent on places this level (EXPLORE_MOST)
 static int secrets_found;       // the player's secrets, as last logged
@@ -1634,19 +1646,35 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
             }
             break;
 
+        // A gun switch from further off too (K_Nav_ShotSpot): the route
+        // picks.
         case GOAL_TRIGGER:
             for (i = 0; i < K_Specials_TriggerCount(goal->param) && count < max; ++i)
             {
                 int line = K_Specials_TriggerLine(goal->param, i);
                 k_trigger_t trigger = K_Specials_MoverTrigger(K_Specials_LineSpecial(line));
+                const char *what = K_Specials_ManualDoor(K_Specials_LineSpecial(line)) ? "door"
+                                 : trigger == K_TRIGGER_USE ? "switch"
+                                 : trigger == K_TRIGGER_SHOOT ? "gun switch"
+                                 : "walk-over line";
 
-                if (LineHelps(line, goal->want)
-                 && LineCandidate(line, trigger,
-                                  K_Specials_ManualDoor(K_Specials_LineSpecial(line)) ? "door"
-                                  : trigger == K_TRIGGER_USE ? "switch"
-                                  : trigger == K_TRIGGER_SHOOT ? "gun switch"
-                                  : "walk-over line", &out[count]))
+                if (!LineHelps(line, goal->want))
                 {
+                    continue;
+                }
+
+                if (LineCandidate(line, trigger, what, &out[count]))
+                {
+                    ++count;
+                }
+
+                if (trigger == K_TRIGGER_SHOOT && count < max
+                 && K_Nav_ShotSpot(line, &out[count].at.x, &out[count].at.y))
+                {
+                    out[count].kind = K_GOAL_SHOOT_LINE;
+                    out[count].line = line;
+                    M_snprintf(out[count].what, sizeof(out[count].what), "%s at line %d",
+                               what, line);
                     ++count;
                 }
             }
@@ -2411,7 +2439,7 @@ static void Go(goal_t *goal, const candidate_t *candidate, double length,
 
     ok = candidate->kind == K_GOAL_POINT
        ? K_Nav_SetGoal(candidate->at.x, candidate->at.y)
-       : K_Nav_SetLineGoal(candidate->line, candidate->kind);
+       : K_Nav_SetLineGoal(candidate->line, candidate->kind, candidate->at.x, candidate->at.y);
 
     if (!ok)
     {
@@ -4539,11 +4567,30 @@ static void BuildPlaces(void)
           num_places);
 }
 
-// Whether a place has been visited, or its secret found.
+// Whether a place has been visited or looked into, or its secret found.
 static boolean PlaceDone(int p)
 {
     return places[p].sector >= 0 ? !K_Specials_SecretSector(places[p].sector)
-                                 : K_Area_Get()->areas[places[p].area].visited;
+                                 : K_Area_Get()->areas[places[p].area].visited || places[p].seen;
+}
+
+// Whether an area's spot is in sight of the player, within
+// PLACE_SEEN_REACH (PlaceDone).
+static void LookAtPlace(int p, const k_pose_t *player)
+{
+    place_t *place = &places[p];
+    int cell = K_Map_CellAt(place->spot.x, place->spot.y);
+    double floor;
+
+    if (place->seen || place->sector >= 0 || cell < 0
+     || hypot(place->spot.x - player->x, place->spot.y - player->y) > PLACE_SEEN_REACH)
+    {
+        return;
+    }
+
+    floor = K_Map_CellFloor(cell);
+    place->seen = K_Sight_Check(player->x, player->y, player->floor + EYE_HEIGHT,
+                                place->spot.x, place->spot.y, floor, floor + PLAYER_HEIGHT);
 }
 
 // At the level's end: how much of it an explorer saw.
@@ -4560,8 +4607,8 @@ static void LogExplored(void)
 
     if (explorer)
     {
-        K_Log(K_LOG_BRAIN, K_LOG_INFO, "explorer: %d of %d areas visited, %d places given up "
-              "on, %.1f s spent on places off the way", visited, areas, dropped,
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "explorer: %d of %d areas visited or looked into, %d "
+              "places given up on, %.1f s spent on places off the way", visited, areas, dropped,
               (double) explore_tics / TICRATE);
     }
 }
@@ -4860,11 +4907,13 @@ static boolean ConsiderPlaces(goal_t *goal)
     return true;
 }
 
-// Each tic: the secrets found, logged; the time spent on places
+// Each tic: the secrets found, logged; the places in sight - one in turn,
+// and the one gone to (PLACE_SEEN_REACH); the time spent on places
 // (EXPLORE_MOST).
 static void UpdateExplore(void)
 {
     const player_t *player = &players[consoleplayer];
+    k_pose_t pose;
     int i;
 
     if (player->secretcount != secrets_found)
@@ -4873,11 +4922,22 @@ static void UpdateExplore(void)
         K_Log(K_LOG_BRAIN, K_LOG_INFO, "a secret found - %d of %d", secrets_found, totalsecret);
     }
 
+    if (explorer && num_places > 0 && K_Map_GetPlayer(&pose))
+    {
+        place_seen_next = (place_seen_next + 1) % num_places;
+        LookAtPlace(place_seen_next, &pose);
+    }
+
     for (i = 0; explorer && i < depth; ++i)
     {
         if (goals[i].type != GOAL_PLACE)
         {
             continue;
+        }
+
+        if (K_Map_GetPlayer(&pose))
+        {
+            LookAtPlace(goals[i].param, &pose);
         }
 
         if (++explore_tics == EXPLORE_MOST)
@@ -5011,8 +5071,8 @@ static void UpdateEscape(void)
         dash_fought = false;
     }
 
-    // Stopped for a monster close by, until none is within DASH_FREE or the
-    // fight begun meanwhile is over.
+    // Stopped for a monster close by, until none is within DASH_FREE - or,
+    // once a fight began meanwhile, until it is over.
     if (dashing == goal->param)
     {
         if (K_Combat_MonstersWithin(DASH_CLEAR) > 0)
@@ -5023,8 +5083,8 @@ static void UpdateEscape(void)
         else if (dash_held)
         {
             dash_fought |= K_Combat_GetStatus()->battle;
-            dash_held = K_Combat_MonstersWithin(DASH_FREE) > 0
-                     && !(dash_fought && !K_Combat_GetStatus()->battle);
+            dash_held = dash_fought ? K_Combat_GetStatus()->battle
+                                    : K_Combat_MonstersWithin(DASH_FREE) > 0;
         }
 
         dash_fought &= dash_held;
@@ -5079,6 +5139,16 @@ static void UpdateSweep(void)
                   "worth taking on to the next level, swept for", count);
             K_Condition_LogArsenal("before the sweep");
             sweep_since = SDL_max(leveltime, 1);
+        }
+
+        // Looked for at once, not at the next second's look: the way out may
+        // reach a lift or door first, and none is added at one (the user,
+        // E3M1; E3M2: "14 places not seen yet, swept for", the lift to the
+        // exit called 0.4 s later, ridden, and the exit line crossed).
+        if (sweep_since > 0)
+        {
+            item_check_tic = 0;
+            place_check_tic = 0;
         }
 
         sweep_found = leveltime;
@@ -5961,6 +6031,7 @@ void K_Brain_Reset(void)
     exit_stall = 0;
     exit_best = 1.0e9;
     place_check_tic = 0;
+    place_seen_next = 0;
     explore_tics = 0;
     secrets_found = players[consoleplayer].secretcount;
     BuildPlaces();

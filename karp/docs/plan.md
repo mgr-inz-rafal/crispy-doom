@@ -943,7 +943,14 @@ a switch's spot the player presses use as for a door (below), facing the line; a
 which nothing happens within 15 tics is repeated, 3 times at most. What the switch does is up to
 the caller (an exit ends the level). A walk-over line works only if the player crosses it, but
 the route to the spot past it can go round the line's end instead (Doom II MAP05); then the
-player first goes to the spot just as far before the line, and from there across.
+player first goes to the spot just as far before the line, and from there across. The spot past
+a walk-over line lies in the sector on its far side: one further on, past another line, may be
+reached only round it. With one side shut (a door, or a pillar a switch raises: its ceiling down
+on its floor), that side is the far one wherever the player stands - the player cannot be in it.
+E3M2: lines 336 to 338 are the sides of a triangle 48 across, shut as a pillar till a gun switch
+opens it; a spot 40 past line 337 lay outside it again, the route went round, and the bot pushed
+at the pillar to cross it for minutes. The route to a spot in a shut sector finds none, and the
+brain goes for what opens it.
 
 **Gun switches** (specials 24, 46, 47; `P_ShootSpecialLine`) are worked from the same spot, but
 shot: fire instead of use. Only a hitscan attack sets one off (`P_LineAttack` calls it for each
@@ -958,7 +965,13 @@ only when the trace would reach the line (2048 units for bullets). It is held fo
 weapon reads the button only as a frame of its idle animation starts, every tic for most, but
 every 4 for the chainsaw (Doom II MAP28: a chainsaw picked up on the way, three 1-tic shots at a
 gun switch all fell between, and the switch was given up as doing nothing). As with use, a shot
-after which nothing happens within 15 tics is repeated, 3 times at most.
+after which nothing happens within 15 tics is repeated, 3 times at most. A gun switch is also
+shot from further off (`K_Nav_ShotSpot`): straight out in front of its middle, the nearest spot
+64 to 384 units off, out of the sector in front of it, where the player stands clear and a level
+shot from its gun (36 over its feet; with nothing to aim at, bullets fly level) finds the line.
+The brain offers both spots and the route picks; from the far one, never the fist or chainsaw.
+E3M2: gun switches at the back of alcoves 32 up, the spot in front of each in the alcove, so
+there was no way to any of them; shot from the floor below, 32 to 64 out.
 
 **Doors and lifts on the route** (`UpdateAction` in Think, `SteerAction` in Act). The target never
 moves past the way out of a cell whose crossing is not open yet, and the speed profile treats
@@ -4145,6 +4158,47 @@ Who controls the player in a fight (the user's model):
   Left: the ammo runs out from shots at 900 and more, then single rockets 1500 off are run for
   across the open; a hopeless boss still has the KILL goal walking toward it; head's wins came
   from firing on without a break, a cacodemon fighting the spider too.
+- **Episode 3, explorer, the user's run** (2026-11-19, `-karpexit secret -karpattitude explorer`):
+  "E3M1 - before bot opened the first door with a switch it was moving erratically for a couple
+  of seconds"; E3M2, a cacodemon fought with the pistol, "a couple of times it moved back and
+  switched to rocket launcher, but then immediately he moved towards the caco and switched back
+  to pistol"; "running back and forth" by the shotgun guys' ledges, "like it wanted to lower the
+  ledges by stepping on a tiny line"; "oftentimes the bot just shakes left and right close to
+  the wall or even in open space". Done:
+  - E3M1: the yard by the start is several areas, each one a place; the explorer went a step
+    into one (been there: stood in it), turned back to the switch, and a second later went into
+    the next, another way each time. Now an area counts as visited once its spot is in sight
+    within 1024 (`PLACE_SEEN_REACH`), as a room looked into; a secret still only by going in.
+    E3M1, 4 salts: detours to areas 3 to 10, now 1 to 4; areas seen 18 to 25 of 31, now 30;
+    time on places 42 to 68 s, now 17 to 47; finished in 91 to 97 s, now 79 to 91.
+  - The sweep before the exit looks for places and items as it begins, not at the next second's
+    look: the way out reached a lift first and no detour is added at one (E3M2: "14 places not
+    seen yet, swept for", the lift to the exit called 0.4 s later, ridden, the exit crossed; the
+    user's E3M1 the same).
+  - E3M2's ledges: lines 336 to 338 (W1, lower the alcoves) are the sides of a triangle shut as
+    a pillar, opened by the gun switches (46) at the back of the alcoves, 32 up. The spot past
+    line 337 lay outside the pillar again and the bot pushed at it for minutes; the gun
+    switches' spots lay in the alcoves, no way there. Now the spot past a walk-over line is in
+    its far sector, the shut side is the far one, and a gun switch is shot from further off too
+    (3.4: line goals, gun switches). Forced from the level's start without monsters: line 337
+    blocked by the pillar, gun switch 303 shot from (944,1876), the pillar open, line 337
+    crossed, the alcove down - 2 salts, 7.5 s.
+  - The dash for the box of rockets behind the cacodemon (k_brain.c: `DASH_FREE`): held for it,
+    the fight began, then the dash went on whenever no monster was in sight within 384 - the
+    fight backs off to about 380 to fire rockets, and the cacodemon went out of sight round
+    corners - and ran back at it: broken off and begun again 7 times in 17 s, the rocket
+    launcher put away for the pistol each time. Now, once a fight began, the dash waits for it
+    to end.
+  - The shaking: a temporary log of every fight move that turned round from the tic before,
+    with each way's score in parts. Two causes: the target taking turns (a shotgun guy winding
+    up behind the player and a lost soul ahead, every 3 tics: the score for the turn to make
+    was by the facing, still on the old target after a switch, which outweighed `TARGET_STICK`),
+    and by corners the way ahead losing the target from sight, the step back regaining it.
+    Now the turn is counted from the target's way, a new target to strafe round keeps the
+    strafe going the way it went, and the way taken the tic before scores up to `MOVE_KEEP`
+    (0.4) more. E3M2, 6 salts: turns round not by the strafe's timer 0.60 a second of fighting,
+    now 0.29; from target swaps 43, now 6; three within 16 tics 39, now 21.
+  Left: Doom II MAP16's gun switch 200 "does nothing" from either spot (before too).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

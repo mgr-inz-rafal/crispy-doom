@@ -104,13 +104,24 @@ int K_Nav_SetGoal(double x, double y);
 
 // Where to stand to work a line: in front of a switch or gun switch (its
 // front side, where use works), or just past a line to walk across, on the
-// side away from the player. Returns 0 if there is no floor there.
+// side away from the player - or the side shut, a door or pillar - in the
+// sector there. Returns 0 if there is no floor there.
 int K_Nav_LineGoalPoint(int line, k_goalkind_t kind, double *x, double *y);
 
-// Like K_Nav_SetGoal, to the point K_Nav_LineGoalPoint gives; on arrival
-// a switch is pressed. Walking across needs nothing more: the route takes
-// the player over the line.
-int K_Nav_SetLineGoal(int line, k_goalkind_t kind);
+// A gun switch is also shot from further off: straight out in front of its
+// middle, the nearest spot from 64 to 384 off, out of the sector in front
+// of it (where K_Nav_LineGoalPoint stands), where the player stands clear
+// and a level shot from its gun finds the line - over a step into an
+// alcove the player cannot climb (E3M2: gun switches at the back of
+// alcoves 32 up, the spot in front of each in the alcove). Returns 0 if
+// none, or with no gun to shoot it with but the fist.
+int K_Nav_ShotSpot(int line, double *x, double *y);
+
+// Like K_Nav_SetGoal, to a spot to work the line from (K_Nav_LineGoalPoint,
+// K_Nav_ShotSpot); on arrival a switch is pressed, or a gun switch shot.
+// Walking across needs nothing more: the route takes the player over the
+// line.
+int K_Nav_SetLineGoal(int line, k_goalkind_t kind, double x, double y);
 
 // Drops the goal: the player stands still (e.g. while a door it opened
 // with a switch rises).

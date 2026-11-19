@@ -61,6 +61,7 @@
 #include "k_log.h"
 #include "k_nav.h"
 #include "k_salt.h"
+#include "k_sight.h"
 #include "k_specials.h"
 
 #define K_PI 3.14159265358979323846
@@ -160,6 +161,12 @@
 // the chainsaw, MISSILERANGE for bullets; a little less, to be sure.
 #define MELEE_REACH 60.0
 #define SHOT_REACH 2000.0
+
+// A bullet leaves the gun 36 over the player's feet: P_LineAttack fires
+// from 8 over its middle (the player is PLAYER_HEIGHT tall), and with
+// nothing to aim at, level.
+#define PLAYER_HEIGHT 56.0
+#define SHOT_HEIGHT 36.0
 #define ATTACK_HOLD 5
 #define ACTION_TURN 45.0
 #define SPOT_RADIUS 6.0
@@ -1135,6 +1142,21 @@ static boolean LineReaches(const body_t *body, const k_command_t *command, doubl
     return t > 0.0 && t <= reach && u > 0.02 && u < 0.98;
 }
 
+// How far a point is from the nearest point of a line.
+static double LineDistance(k_vec2_t at, const k_line_t *line)
+{
+    double dx = line->v2.x - line->v1.x, dy = line->v2.y - line->v1.y;
+    double length2 = dx * dx + dy * dy;
+    double t = length2 > 0.0 ? ((at.x - line->v1.x) * dx + (at.y - line->v1.y) * dy) / length2
+                             : 0.0;
+    k_vec2_t nearest;
+
+    t = SDL_max(0.0, SDL_min(1.0, t));
+    nearest.x = line->v1.x + dx * t;
+    nearest.y = line->v1.y + dy * t;
+    return Distance(at, nearest);
+}
+
 // Only a hitscan attack sets off a gun switch: P_LineAttack calls
 // P_ShootSpecialLine for each line its trace crosses. That is the fist, the
 // chainsaw and the bullet and shell weapons; the rockets, plasma and BFG
@@ -1160,14 +1182,15 @@ static boolean CanFire(const player_t *player, weapontype_t weapon)
 // The weapon to shoot a gun switch with: the one in hand if it will do,
 // else a bullet or shell weapon with ammo, else the fist (its slot brings
 // up the chainsaw when the player has it). Melee reaches 64 units, enough
-// from the spot in front of the line. Each is picked by the slot of its
-// own number.
-static weapontype_t ShootingWeapon(const player_t *player)
+// from the spot in front of the line, but not from one further off (far:
+// K_Nav_ShotSpot). Each is picked by the slot of its own number.
+static weapontype_t ShootingWeapon(const player_t *player, boolean far)
 {
     static const weapontype_t choices[] = { wp_pistol, wp_chaingun, wp_shotgun };
     int i;
 
-    if (Hitscan(player->readyweapon) && CanFire(player, player->readyweapon))
+    if (Hitscan(player->readyweapon) && CanFire(player, player->readyweapon)
+     && !(far && (player->readyweapon == wp_fist || player->readyweapon == wp_chainsaw)))
     {
         return player->readyweapon;
     }
@@ -1279,7 +1302,8 @@ static void SteerAction(int tic, const body_t *body, k_command_t *command)
     if (action.phase == PHASE_AIM && action.kind == K_ACTION_SHOOT)
     {
         const player_t *player = &players[consoleplayer];
-        weapontype_t weapon = ShootingWeapon(player);
+        const k_line_t *line = &K_Map_Get()->lines[action.line];
+        weapontype_t weapon = ShootingWeapon(player, LineDistance(at, line) > MELEE_REACH);
 
         if (player->readyweapon != weapon)
         {
@@ -1923,21 +1947,6 @@ static boolean UpdateCrusher(k_vec2_t at, double speed, int r)
     }
 
     return true;
-}
-
-// How far a point is from the nearest point of a line.
-static double LineDistance(k_vec2_t at, const k_line_t *line)
-{
-    double dx = line->v2.x - line->v1.x, dy = line->v2.y - line->v1.y;
-    double length2 = dx * dx + dy * dy;
-    double t = length2 > 0.0 ? ((at.x - line->v1.x) * dx + (at.y - line->v1.y) * dy) / length2
-                             : 0.0;
-    k_vec2_t nearest;
-
-    t = SDL_max(0.0, SDL_min(1.0, t));
-    nearest.x = line->v1.x + dx * t;
-    nearest.y = line->v1.y + dy * t;
-    return Distance(at, nearest);
 }
 
 // At the goal, or held off it within reach (spot): press, or shoot, the
@@ -3034,6 +3043,30 @@ static boolean ClearOfBlocks(double x, double y)
     return K_Map_BlocksNear(min, max, &found, 1) == 0;
 }
 
+// The sector of the floor at a point, -1 off the floor.
+static int SectorAt(double x, double y)
+{
+    const k_map_t *map = K_Map_Get();
+    int cell = K_Map_CellAt(x, y);
+
+    return cell >= 0 ? map->subsectors[map->cells[cell].subsector].sector : -1;
+}
+
+// Whether a sector is shut: too low for the player under its ceiling (a
+// door, a pillar a switch raises).
+static boolean SectorShut(int sector)
+{
+    double floor, ceiling;
+
+    if (sector < 0)
+    {
+        return false;
+    }
+
+    K_Map_SectorHeights(sector, &floor, &ceiling);
+    return ceiling - floor < PLAYER_HEIGHT;
+}
+
 int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
 {
     // Tried in turn until one is on floor, clear of solid things: a switch
@@ -3046,7 +3079,17 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
     // first a spot the player can stand on is looked for, nearer the line
     // too (Doom II MAP04: a box in a corner, 8 units from both walls, whose
     // sides are crossed only in a square 8 across on top of it; 24 past them
-    // is a wall).
+    // is a wall). Past one, only floor of the sector on its far side: a spot
+    // further, past another line, may lie where the way goes round (E3M2:
+    // line 337, a side of a triangle 48 across shut as a pillar till a gun
+    // switch opens it - a spot 40 past it lay outside the pillar again, the
+    // route went round to it, and the bot pushed at the pillar to cross for
+    // minutes). The far side is the one the player is not on - or, with one
+    // side shut, that one: the player cannot be in it, on whichever side of
+    // the line run on past its ends it stands (E3M2 again: from beyond the
+    // end of line 337, the spot went outside the pillar, round its far
+    // side). The route to a spot in a shut sector finds none, and what opens
+    // it is gone for.
     static const double distances[] = { 24.0, 32.0, 16.0, 40.0 };
     static const double cross_distances[] = { 24.0, 32.0, 16.0, 40.0, 8.0, 4.0 };
     static const double alongs[] = { 0.5, 0.3, 0.7, 0.15, 0.85, 0.05, 0.95 };
@@ -3054,6 +3097,7 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
     k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
     double length = Distance(line->v1, line->v2);
     int num_alongs = kind == K_GOAL_CROSS_LINE ? arrlen(alongs) : 1;
+    int far = line->front_sector;
     boolean on_floor = false;
     double floor_x = 0.0, floor_y = 0.0;
     double nx, ny;
@@ -3069,12 +3113,17 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
     nx = (line->v2.y - line->v1.y) / length;
     ny = -(line->v2.x - line->v1.x) / length;
 
-    // Walking across: aim for the side the player is not on.
-    if (kind == K_GOAL_CROSS_LINE && K_Map_GetPlayer(&player)
-     && (player.x - middle.x) * nx + (player.y - middle.y) * ny > 0.0)
+    // Walking across: aim for the side the player is not on, or the shut
+    // one.
+    if (kind == K_GOAL_CROSS_LINE
+     && (SectorShut(line->front_sector) != SectorShut(line->back_sector)
+         ? SectorShut(line->back_sector)
+         : K_Map_GetPlayer(&player)
+           && (player.x - middle.x) * nx + (player.y - middle.y) * ny > 0.0))
     {
         nx = -nx;
         ny = -ny;
+        far = line->back_sector;
     }
 
     for (a = 0; a < num_alongs && kind == K_GOAL_CROSS_LINE; ++a)
@@ -3086,7 +3135,7 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
         {
             k_vec2_t spot = { at.x + nx * cross_distances[i], at.y + ny * cross_distances[i] };
 
-            if (K_Map_CellAt(spot.x, spot.y) >= 0
+            if (far >= 0 && SectorAt(spot.x, spot.y) == far
              && K_Graph_Clearance(spot, STAND_CLEARANCE) >= STAND_CLEARANCE)
             {
                 *x = spot.x;
@@ -3106,7 +3155,8 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
             *x = at.x + nx * distances[i];
             *y = at.y + ny * distances[i];
 
-            if (K_Map_CellAt(*x, *y) < 0)
+            if (K_Map_CellAt(*x, *y) < 0
+             || (kind == K_GOAL_CROSS_LINE && (far < 0 || SectorAt(*x, *y) != far)))
             {
                 continue;
             }
@@ -3130,20 +3180,51 @@ int K_Nav_LineGoalPoint(int line_index, k_goalkind_t kind, double *x, double *y)
     return on_floor;
 }
 
-int K_Nav_SetLineGoal(int line, k_goalkind_t kind)
+int K_Nav_ShotSpot(int line_index, double *x, double *y)
 {
-    double x, y;
+    static const double distances[] = { 64.0, 96.0, 128.0, 192.0, 256.0, 384.0 };
+    const k_line_t *line = &K_Map_Get()->lines[line_index];
+    k_vec2_t middle = { (line->v1.x + line->v2.x) * 0.5, (line->v1.y + line->v2.y) * 0.5 };
+    double length = Distance(line->v1, line->v2);
+    double nx, ny;
+    int i;
 
-    if (!K_Nav_LineGoalPoint(line, kind, &x, &y))
+    if (length < 1e-6 || ShootingWeapon(&players[consoleplayer], true) == wp_fist)
     {
-        have_goal = false;
-        memset(&status, 0, sizeof(status));
-        M_snprintf(status.problem, sizeof(status.problem),
-                   "no floor to stand on at line %d", line);
-        status.state = K_NAV_FAILED;
         return 0;
     }
 
+    nx = (line->v2.y - line->v1.y) / length;
+    ny = -(line->v2.x - line->v1.x) / length;
+
+    for (i = 0; i < arrlen(distances); ++i)
+    {
+        k_vec2_t spot = { middle.x + nx * distances[i], middle.y + ny * distances[i] };
+        int cell = K_Map_CellAt(spot.x, spot.y);
+        double gun;
+
+        if (cell < 0 || SectorAt(spot.x, spot.y) == line->front_sector
+         || K_Graph_Clearance(spot, STAND_CLEARANCE) < STAND_CLEARANCE
+         || !ClearOfBlocks(spot.x, spot.y))
+        {
+            continue;
+        }
+
+        gun = K_Map_CellFloor(cell) + SHOT_HEIGHT;
+
+        if (K_Sight_Check(spot.x, spot.y, gun, middle.x + nx, middle.y + ny, gun - 1.0, gun + 1.0))
+        {
+            *x = spot.x;
+            *y = spot.y;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int K_Nav_SetLineGoal(int line, k_goalkind_t kind, double x, double y)
+{
     return StartGoal(x, y, kind, line);
 }
 

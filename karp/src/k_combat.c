@@ -168,7 +168,11 @@ extern void A_CyberAttack();
 // wounded one up to WOUNDED more again, nearly dead: enough to finish it,
 // not so much that a monster coming close is left alone (the user: a
 // zombieman walked up a corridor unshot while the bot kept to a wounded
-// target further off).
+// target further off). One the aim must turn far round to scores less, by
+// the angle from the target's way, not the facing: turning to a new
+// target, the facing still on the old one scored it the more again (E3M2:
+// a shotgun guy winding up behind the player and a lost soul ahead took
+// turns as the target every 3 tics, the strafe turning round with each).
 #define TARGET_REACH 1024.0
 #define ASLEEP_REACH 512.0
 #define TARGET_STICK 1.3
@@ -267,7 +271,13 @@ extern void A_CyberAttack();
 // walk-over line that would change something for good (Trips; as creeping,
 // CreepStops) - a lighting line, a WR lift or door that goes back by
 // itself, a teleporter crossed from behind may be: backing off goes further
-// than strafing.
+// than strafing. The way taken the tic before scores up to MOVE_KEEP more,
+// as the way goes along it: two ways nearly alike in score do not take
+// turns (the user, E3M2: "the bot just shakes left and right close to the
+// wall or even in open space" - by a corner, the way ahead lost the target
+// from sight, the bot stepped back the other way, and the way ahead had it
+// in sight again, a turn round every tic or two).
+#define MOVE_KEEP 0.4
 #define STRAFE_SPEED 10.0
 #define STRAFE_MIN 20
 #define STRAFE_SPREAD 30
@@ -1220,7 +1230,9 @@ static k_vec2_t anchor;             // where it began
 static int calm;                    // tics without a target worth fighting
 static int strafe_dir = 1;          // 1 or -1: to the target's left or right
 static int strafe_tics;             // until it turns the other way
+static const mobj_t *strafe_mo;     // the one strafed round
 static k_vec2_t move;               // the velocity wanted
+static int moved_tic = -1;          // when ChooseMove last chose it (MOVE_KEEP)
 static boolean pressed;             // a monster presses the player (KEEP_PUSH)
 static const mobj_t *pressed_mo;    // the one last logged as pressing
 static int presser = -1;            // this tic's, by place in the list, and
@@ -3214,6 +3226,16 @@ static void ChooseTarget(const player_t *player)
                  && !monsters[i].infighting;
     }
 
+    // The way the aim goes: to the target, not the facing still turning to
+    // it (TARGET_STICK).
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (monster_mobjs[i] == target_mo)
+        {
+            facing = atan2(monsters[i].at.y - me.y, monsters[i].at.x - me.x);
+        }
+    }
+
     // Not one fighting another, nor one about to be telefragged.
     for (i = 0; i < num_monsters; ++i)
     {
@@ -4619,7 +4641,17 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
     int num_pushers = 0;
     boolean found = false;
     int k, i, s;
+    k_vec2_t was = { 0.0, 0.0 };
+    double was_speed = sqrt(move.x * move.x + move.y * move.y);
 
+    // The way taken the tic before (MOVE_KEEP).
+    if (moved_tic == leveltime - 1 && was_speed > 1e-6)
+    {
+        was.x = move.x / was_speed;
+        was.y = move.y / was_speed;
+    }
+
+    moved_tic = leveltime;
     move.x = move.y = 0.0;
     press = 0.0;
     presser = -1;
@@ -4703,6 +4735,15 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
         strafe_tics = STRAFE_MIN + Hash(K_Salt_Mix(leveltime)) % STRAFE_SPREAD;
     }
 
+    // A new one to strafe round, the strafe goes on the way it went
+    // (MOVE_KEEP).
+    if (monster_mobjs[round] != strafe_mo && (-ty * was.x + tx * was.y) * strafe_dir < 0.0)
+    {
+        strafe_dir = -strafe_dir;
+    }
+
+    strafe_mo = monster_mobjs[round];
+
     // To the target's left, or its right.
     sx = -ty * strafe_dir;
     sy = tx * strafe_dir;
@@ -4734,7 +4775,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
         }
 
         score = ux * sx + uy * sy + 0.3 * (1.0 - fabs(ux * tx + uy * ty))
-              + 0.3 * K_Graph_Clearance(far, OPEN_REACH) / OPEN_REACH;
+              + 0.3 * K_Graph_Clearance(far, OPEN_REACH) / OPEN_REACH
+              + MOVE_KEEP * SDL_max(0.0, ux * was.x + uy * was.y);
 
         if (!standoff && !K_Sight_Aim(far.x, far.y, gun, target->at.x, target->at.y, target->z,
                                       target->z + target->height))
@@ -7110,6 +7152,8 @@ void K_Combat_Reset(void)
     calm = 0;
     strafe_dir = 1;
     strafe_tics = 0;
+    strafe_mo = NULL;
+    moved_tic = -1;
     move.x = move.y = 0.0;
     pressed = false;
     pressed_mo = NULL;
