@@ -39,7 +39,10 @@
 //	ammo beyond what it takes counts against the others (BOSS_MARGIN).
 //
 //	Infighting (plan, 7.8): a monster fighting another is no target - a shot
-//	would turn it on the player - but kept off as any. Telefrags: what stands
+//	would turn it on the player - but kept off as any; not the boss the level
+//	needs dead (the user, E3M8: the spider mastermind fought the baron, the
+//	bot stood in the open doing nothing, its stray bullets hitting it - busy,
+//	it keeps its target 100 tics after each hit it takes). Telefrags: what stands
 //	where the brain goes to land by a teleporter is left alone, its death on
 //	its way (K_Combat_Telefrag). Invulnerable, the player fights far
 //	monsters too and begins no hold (INVULN_BOLD); a hard fight is what a
@@ -646,7 +649,10 @@ extern void A_CyberAttack();
 // target of a fight on, HOPELESS_KEEP: it flips at the edge; a wounded
 // cacodemon with a little less than its health in hand, kept off and
 // passed, bit the bot from 81 to 21 - most of the way is worth fighting, the
-// damage rolls and the pain go the player's way often enough), or none of
+// damage rolls and the pain go the player's way often enough; and the boss
+// the level needs dead once it could be fought - E3M8: the spider
+// mastermind, half its health in hand, flipped every few seconds, the KILL
+// goal walking up to it each time it was hopeless), or none of
 // them would kill it within HOPELESS_TICS of firing on. A round counts from
 // as far as a fight keeps the monster off (kind_t: keep): a projectile's
 // FLIES_HIT of its damage (a big, slow target, kept where rockets fire), a
@@ -992,6 +998,30 @@ extern void A_CyberAttack();
 #define DUCK_GRAPH_REACH 768.0
 #define DUCK_POINTS 32
 #define DUCK_WAYPOINT 24.0
+
+// Fighting from cover (the user, E3M8: "cover from the spider" - fought in
+// its open arena, the bot was shot down with "no cover from the spider
+// mastermind in reach": the stream winds up in 20 tics, so cover had to lie
+// within some 110 units): in a fight with a monster whose blows are ducked
+// from (DuckThreat: an arch-vile, an arachnotron, the spider mastermind, a
+// Cyberdemon fought), the player fights from a spot that sees it a step
+// short of cover - along each of MOVE_WAYS rays out to COVER_REACH, every
+// COVER_STEP on floor it can step on, the first spot out of the monster's
+// sight, and the spot at most COVER_GAP before it that the gun sees it from;
+// the nearest, spots other monsters see counting further off (DUCK_SEEN).
+// The fight is leashed to it (COVER_LEASH), and monsters press the player
+// only within KEEP_AWAY - but a Cyberdemon, whose rockets want room (E3M8:
+// the baron passed for the boss's sake, 382 off, pushed the bot off its
+// way to cover). Kept while it still sees the target and the cover is still
+// out of its sight, looked at every COVER_REPLAN. A blow coming, the duck
+// takes the player behind; after it, the leash brings it back to fire. No
+// further than COVER_REACH: cover 480 off was run for across the open, hit
+// 9 times on the way.
+#define COVER_REACH 320.0
+#define COVER_STEP 16.0
+#define COVER_GAP 32.0
+#define COVER_LEASH 32.0
+#define COVER_REPLAN (TICRATE / 2)
 
 // Exposure (C4): in battle, each way the player could step scores less by
 // what the awake monsters but the target that would see it there cost
@@ -1392,6 +1422,16 @@ static int *cover_hops;
 static int *cover_open;
 static int cover_capacity;
 
+// Fighting from cover (COVER_REACH): whether a spot is held to, it, the
+// cover beside it, out of whose sight, when looked at last, and the one no
+// cover was found from (logged once).
+static boolean peeking;
+static k_vec2_t peek_spot;
+static k_vec2_t peek_hide;
+static const mobj_t *peek_mo;
+static int peek_tic;
+static const mobj_t *peek_none_mo;
+
 // What exposes the player (EXPOSE_WEIGHT): this tic's costliest awake
 // monsters in sight, but the target.
 static int exposers[MAX_EXPOSERS];
@@ -1555,7 +1595,8 @@ static void AddMonster(const mobj_t *mo, const mobj_t *player_mo, k_vec2_t me)
     monster->health = mo->health;
     monster->awake = mo->target != NULL;
     monster->infighting = mo->target != NULL && mo->target->player == NULL
-                       && mo->target->health > 0 && (mo->target->flags & MF_SHOOTABLE);
+                       && mo->target->health > 0 && (mo->target->flags & MF_SHOOTABLE)
+                       && mo->type != needed;
     monster->attacking = mo->state != NULL && attack_states[mo->state - states];
     monster->hitscan = kind->hitscan;
     monster->z = ToMap(mo->z);
@@ -2677,13 +2718,31 @@ static boolean Sawn(const player_t *player, const k_monster_t *monster)
         && player->weaponowned[wp_chainsaw] && Outgunned(player, monster);
 }
 
+// Whether the monster was logged as hopeless, and has been since.
+static boolean WasHopeless(const mobj_t *mo)
+{
+    int k;
+
+    for (k = 0; k < MAX_HOPELESS; ++k)
+    {
+        if (hopeless_logged[k] == mo)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Whether the monster (by its place in this tic's list) is hopeless: not
 // weak, and what is in hand would not take HOPELESS_SHARE of its health -
 // unless it is sawn. Never while invulnerable for CHASE_LEFT more.
 static boolean Hopeless(const player_t *player, int index)
 {
     const k_monster_t *monster = &monsters[index];
-    double share = battle && monster_mobjs[index] == target_mo ? HOPELESS_KEEP : HOPELESS_SHARE;
+    double share = (battle && monster_mobjs[index] == target_mo)
+                || (monster->type == needed && !WasHopeless(monster_mobjs[index]))
+                   ? HOPELESS_KEEP : HOPELESS_SHARE;
 
     return SpawnHealth(monster->type) > WEAK_HEALTH && Kind(monster->type)->cost > 0.0
         && player->powers[pw_invulnerability] < CHASE_LEFT
@@ -2989,11 +3048,14 @@ static void UpdateHopeless(const player_t *player)
 
     memset(beats, 0, sizeof(beats));
 
+    // Not one passed for the boss's sake (ForBoss): nothing is fetched to
+    // fight it.
     for (k = 0; k < MAX_HOPELESS; ++k)
     {
         i = IndexOf(hopeless_logged[k]);
 
-        for (w = 0; i >= 0 && monsters[i].awake && w < arrlen(weapons); ++w)
+        for (w = 0; i >= 0 && monsters[i].awake && !ForBoss(&monsters[i]) && w < arrlen(weapons);
+             ++w)
         {
             beats[weapons[w].weapon] |= InTime(&weapons[w], &monsters[i]);
         }
@@ -4586,7 +4648,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
             continue;
         }
 
-        if (keep <= KEEP_AWAY || monster->distance >= keep || !Reaches(i))
+        if (keep <= KEEP_AWAY || monster->distance >= keep || !Reaches(i)
+         || (peeking && monster->type != MT_CYBORG))
         {
             keep = KEEP_AWAY;
         }
@@ -4700,11 +4763,13 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
         }
         else if (!chase)
         {
-            from_anchor = Distance(far, holding ? hold_spot : anchor);
+            double leash = holding ? HOLD_LEASH : peeking ? COVER_LEASH : LEASH;
 
-            if (from_anchor > (holding ? HOLD_LEASH : LEASH))
+            from_anchor = Distance(far, holding ? hold_spot : peeking ? peek_spot : anchor);
+
+            if (from_anchor > leash)
             {
-                score -= (from_anchor - (holding ? HOLD_LEASH : LEASH)) / 32.0;
+                score -= (from_anchor - leash) / 32.0;
             }
         }
 
@@ -6858,6 +6923,165 @@ static void UpdateDuck(const player_t *player)
     }
 }
 
+// Whether the gun at a spot on the floor at `floor` sees the monster.
+static boolean PeekSees(const k_monster_t *monster, k_vec2_t at, double floor)
+{
+    return K_Sight_Aim(at.x, at.y, floor + PLAYER_HEIGHT * 0.5 + 8.0, monster->at.x,
+                       monster->at.y, monster->z, monster->z + monster->height);
+}
+
+// The spot to fight the monster (by its place in this tic's list) from
+// (COVER_REACH): along each ray the first spot out of its sight, and the
+// last before it, within COVER_GAP, that the gun sees it from - the
+// player's own spot too; the nearest, spots other monsters see counting
+// further off. The cover beside it gets `hide`.
+static boolean FindPeek(const player_t *player, int index, k_vec2_t *spot, k_vec2_t *hide)
+{
+    const k_monster_t *target = &monsters[index];
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    double floor = ToMap(player->mo->floorz);
+    boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
+    boolean sees = PeekSees(target, me, floor);
+    double best = 1e30;
+    duckfrom_t from;
+    int k, step;
+
+    memset(&from, 0, sizeof(from));
+    from.mo = monster_mobjs[index];
+    from.at = target->at;
+    from.eye = target->z + target->height * 0.75;
+
+    for (k = 0; k < MOVE_WAYS; ++k)
+    {
+        double angle = k * 2.0 * K_PI / MOVE_WAYS;
+        double ux = cos(angle), uy = sin(angle);
+        double step_floor = floor, seen_floor = floor;
+        int steps = (int) (COVER_REACH / COVER_STEP), seen = sees ? 0 : -1;
+
+        for (step = 1; step <= steps; ++step)
+        {
+            k_vec2_t at = { me.x + ux * COVER_STEP * step, me.y + uy * COVER_STEP * step };
+            int cell = K_Map_CellAt(at.x, at.y);
+
+            if (cell < 0 || !Steppable(at, step_floor, hurts, EDGE_MARGIN))
+            {
+                break;
+            }
+
+            step_floor = K_Map_CellFloor(cell);
+
+            if (DuckHidden(&from, at, step_floor, 0))
+            {
+                if (seen >= 0 && (step - seen) * COVER_STEP <= COVER_GAP)
+                {
+                    k_vec2_t peek = { me.x + ux * COVER_STEP * seen,
+                                      me.y + uy * COVER_STEP * seen };
+                    double score = COVER_STEP * seen + DUCK_SEEN * Exposure(peek, seen_floor);
+
+                    if (score < best)
+                    {
+                        best = score;
+                        *spot = peek;
+                        *hide = at;
+                    }
+                }
+
+                break;
+            }
+
+            if (PeekSees(target, at, step_floor))
+            {
+                seen = step;
+                seen_floor = step_floor;
+            }
+        }
+    }
+
+    return best < 1e30;
+}
+
+// Each tic: the spot fought from, beside cover from the target
+// (COVER_REACH) - a target whose blows are ducked from, not while holding,
+// retreating or chasing it; kept while it still sees the target and the
+// cover is still out of its sight, looked at every COVER_REPLAN; logged as
+// one is found for a target, or none.
+static void UpdatePeek(const player_t *player)
+{
+    const k_monster_t *target;
+    const mobj_t *mo;
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    k_vec2_t spot, hide;
+    boolean found;
+
+    if (!battle || status.target < 0 || holding || retreating)
+    {
+        peeking = false;
+        peek_mo = NULL;
+        return;
+    }
+
+    target = &monsters[status.target];
+    mo = monster_mobjs[status.target];
+
+    if ((target->type != MT_VILE && target->type != MT_BABY && target->type != MT_SPIDER
+         && target->type != MT_CYBORG)
+     || Chased(player, target->type))
+    {
+        peeking = false;
+        peek_mo = NULL;
+        return;
+    }
+
+    if (mo == peek_mo && leveltime - peek_tic < COVER_REPLAN)
+    {
+        return;
+    }
+
+    if (peeking && mo == peek_mo)
+    {
+        duckfrom_t from;
+        int cell = K_Map_CellAt(peek_spot.x, peek_spot.y);
+        int hide_cell = K_Map_CellAt(peek_hide.x, peek_hide.y);
+
+        memset(&from, 0, sizeof(from));
+        from.mo = mo;
+        from.at = target->at;
+        from.eye = target->z + target->height * 0.75;
+
+        if (cell >= 0 && hide_cell >= 0 && PeekSees(target, peek_spot, K_Map_CellFloor(cell))
+         && DuckHidden(&from, peek_hide, K_Map_CellFloor(hide_cell), 0))
+        {
+            peek_tic = leveltime;
+            return;
+        }
+    }
+
+    found = FindPeek(player, status.target, &spot, &hide);
+
+    if (found && (!peeking || mo != peek_mo))
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "fighting the %s from beside cover - at (%.0f,%.0f), %.0f "
+              "units off; out of its sight at (%.0f,%.0f)", target->name, spot.x, spot.y,
+              Distance(me, spot), hide.x, hide.y);
+    }
+    else if (!found && mo != peek_none_mo)
+    {
+        peek_none_mo = mo;
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "no cover from the %s within %.0f - fought from where "
+              "the player is", target->name, COVER_REACH);
+    }
+
+    peeking = found;
+    peek_mo = mo;
+    peek_tic = leveltime;
+
+    if (found)
+    {
+        peek_spot = spot;
+        peek_hide = hide;
+    }
+}
+
 void K_Combat_Reset(void)
 {
     int i;
@@ -6906,6 +7130,10 @@ void K_Combat_Reset(void)
     fight_needed = false;
     boss_spare = 1.0;
     boss_short = false;
+    peeking = false;
+    peek_mo = NULL;
+    peek_none_mo = NULL;
+    peek_tic = 0;
 
     for (i = 0; i < MAX_HOPELESS; ++i)
     {
@@ -7012,6 +7240,7 @@ void K_Combat_Tick(int driving)
         ducking = false;
         status.ducking = false;
         retreating = false;
+        peeking = false;
 
         // Not when the death ended the level (E1M8's exit floor).
         if (!status.died && gameaction != ga_completed)
@@ -7046,6 +7275,7 @@ void K_Combat_Tick(int driving)
         ChooseBarrel(player);
         UpdateExposers();
         UpdateAvoid();
+        UpdatePeek(player);
         UpdateBattle(player);
         UpdateRetreat(player);
         UpdateDodge(player);
@@ -7639,11 +7869,13 @@ void K_Combat_Fire(int tic, k_command_t *command)
     Pressed(player, weapon, target_mo, at, tic);
 }
 
-double K_Combat_Danger(double x, double y, double floor)
+double K_Combat_Danger(double x, double y, double floor, double *boss)
 {
     k_vec2_t at = { x, y };
     double danger = 0.0;
     int i;
+
+    *boss = 0.0;
 
     for (i = 0; i < num_monsters; ++i)
     {
@@ -7669,6 +7901,11 @@ double K_Combat_Danger(double x, double y, double floor)
         }
 
         danger += cost * share;
+
+        if (monster->type == MT_CYBORG || monster->type == MT_SPIDER)
+        {
+            *boss += cost * share;
+        }
     }
 
     return danger;

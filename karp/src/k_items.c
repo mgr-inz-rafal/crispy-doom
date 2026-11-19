@@ -210,11 +210,16 @@ static const int ammo_comfort[NUMAMMO] = { 80, 25, 100, 10 };   // clip, shell, 
 // The danger where the player stands, looked at every HERE_TICS: the
 // monsters that can see it there are fought anyway, so an item's guards
 // count only for the danger beyond that (the user, Doom II MAP04: the
-// shotgun lying in the opening fight was given up as guarded by the
-// shotgun guys being fought). A weapon not held, while nothing better than
-// the pistol is, counts its guards a PISTOL_START_GUARDS share: with the
-// pistol alone, it is what makes those fights cheaper (the user: run for
-// it).
+// shotgun guys being fought). But a Cyberdemon's or a spider mastermind's
+// in full: no fight with one is soon over, and every second of a run in
+// its sight costs (the user, E3M8: "cover from the spider"; of what the
+// spider took in 12 runs from a pistol start, about 875 of 1250 went on
+// single rockets run for across its arena, 100 on fighting it) - unless the
+// item beats what the player is outgunned by (the boss itself, met as
+// hopeless: k_combat.h), or it is health at CRITICAL. A weapon not held,
+// while nothing better than the pistol is, counts its guards a
+// PISTOL_START_GUARDS share: with the pistol alone, it is what makes those
+// fights cheaper (the user: run for it).
 #define HERE_TICS 8
 #define PISTOL_START_GUARDS 0.25
 
@@ -231,6 +236,7 @@ typedef struct
     spritenum_t sprite;
     double z;               // the floor it lies on
     double guards;          // what its guards would cost, all of them
+    double boss;            // of that, the Cyberdemons and spider masterminds
     int seen;               // the tic it was last found, plus one
     int looked_tic;         // when its guards and spot were last looked at
     int next;               // in its bucket, -1 at the end
@@ -245,7 +251,8 @@ static int num_entries;
 static int capacity;
 static int buckets[BUCKETS];
 static double danger_here;
-static boolean sweep;               // the brain sweeps before the exit
+static double boss_here;            // of that, the Cyberdemons and spider masterminds
+static boolean sweep;              // the brain sweeps before the exit
 static boolean explore;             // -karpattitude explorer (EXPLORE_WORTH)
 
 // P_GiveAmmo's clip sizes, and what a round of each is worth: clip,
@@ -281,6 +288,7 @@ void K_Items_Reset(void)
 
     num_entries = 0;
     danger_here = 0.0;
+    boss_here = 0.0;
     sweep = false;
 
     for (i = 0; i < BUCKETS; ++i)
@@ -895,7 +903,7 @@ void K_Items_Tick(void)
     if (leveltime % HERE_TICS == 0)
     {
         danger_here = K_Combat_Danger(ToMap(player->mo->x), ToMap(player->mo->y),
-                                      ToMap(player->mo->floorz));
+                                      ToMap(player->mo->floorz), &boss_here);
     }
 
     health_reach = condition->health == K_NEED_CRITICAL ? REACH_ANY : REACH_MOST;
@@ -933,15 +941,23 @@ void K_Items_Tick(void)
         if ((item->worth > 0.0 || item->swept)
          && ((leveltime + i) % LOOK_TICS == 0 || leveltime - entry->looked_tic > LOOK_TICS))
         {
-            entry->guards = K_Combat_Danger(item->at.x, item->at.y, entry->z);
+            entry->guards = K_Combat_Danger(item->at.x, item->at.y, entry->z, &entry->boss);
             item->reachable = K_Graph_PickupSpot(item->at, &item->spot);
             item->num_off = item->reachable
                           ? K_Graph_PickupSpotsOff(item->at, item->off, K_ITEM_OFF) : 0;
             entry->looked_tic = leveltime;
         }
 
-        // What going there adds.
-        item->danger = SDL_max(0.0, entry->guards - danger_here);
+        // What going there adds; a boss's fire in full.
+        if (item->beats || (item->kind == K_ITEM_HEALTH && condition->health == K_NEED_CRITICAL))
+        {
+            item->danger = SDL_max(0.0, entry->guards - danger_here);
+        }
+        else
+        {
+            item->danger = SDL_max(0.0, entry->guards - entry->boss - (danger_here - boss_here))
+                         + entry->boss;
+        }
 
         if (WeaponItem(entry->sprite, &weapon) && !player->weaponowned[weapon]
          && PistolOnly(player))

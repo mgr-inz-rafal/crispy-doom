@@ -117,8 +117,9 @@ void K_Combat_LogSummary(void);
 // (in full within 512, less beyond), each by what a fight with its kind
 // takes; asleep and facing away, half. Only the monsters at the spot, not
 // those on the way to it (the user: those are met and fought anyway, and
-// move about).
-double K_Combat_Danger(double x, double y, double floor);
+// move about). boss gets the share of it from Cyberdemons and spider
+// masterminds, whom no fight soon ends.
+double K_Combat_Danger(double x, double y, double floor, double *boss);
 
 // How many monsters the player can see within reach of it.
 int K_Combat_MonstersWithin(double reach);

@@ -182,10 +182,20 @@ static const double barrel_rings[] = { 192.0, 256.0, 320.0 };
 // passed, what beats it fetched (E4M8: from spot after spot in its sight,
 // no fight there, the spider mastermind shot the bot dead in 4 salts of 4;
 // head killed it in all four). With no open way to any spot, the boss
-// itself is gone for, as before, until it moves.
+// itself is gone for, as before, until it moves. Spots with cover beside
+// them go first (the user, E3M8: "cover from the spider" - spots in the
+// open arena, the bot shot down there; combat fights from beside cover,
+// k_combat.c: COVER_REACH): a spot out of the boss's sight within FIRE_COVER,
+// in one of FIRE_COVER_WAYS directions every FIRE_COVER_STEP, on a floor
+// within a step, nothing in the way at the waist; a spot without counts
+// FIRE_BARE further off, and is dropped while any with cover is kept.
 #define FIRE_WAYS 24
 #define FIRE_MOST 16
 #define FIRE_IDLE (3 * TICRATE)
+#define FIRE_COVER 96.0
+#define FIRE_COVER_STEP 32.0
+#define FIRE_COVER_WAYS 8
+#define FIRE_BARE 1024.0
 
 static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 
@@ -1259,17 +1269,60 @@ static boolean SpotChosen(const goal_t *goal)
     return IsSpot(&goal->chosen);
 }
 
+// Whether a firing spot on the floor at `floor` has cover beside it from an
+// eye at `eye` over `boss` (FIRE_COVER).
+static boolean SpotCovered(k_vec2_t spot, double floor, k_vec2_t boss, double eye)
+{
+    int k, s;
+
+    for (k = 0; k < FIRE_COVER_WAYS; ++k)
+    {
+        double angle = k * 2.0 * 3.14159265358979323846 / FIRE_COVER_WAYS;
+
+        for (s = 1; s * FIRE_COVER_STEP <= FIRE_COVER; ++s)
+        {
+            k_vec2_t at = { spot.x + cos(angle) * FIRE_COVER_STEP * s,
+                            spot.y + sin(angle) * FIRE_COVER_STEP * s };
+            int cell = K_Map_CellAt(at.x, at.y);
+            double at_floor;
+
+            if (cell < 0)
+            {
+                break;
+            }
+
+            at_floor = K_Map_CellFloor(cell);
+
+            if (fabs(at_floor - floor) > STEP_UP
+             || !K_Sight_Check(spot.x, spot.y, floor + PLAYER_HEIGHT * 0.5, at.x, at.y,
+                               at_floor + PLAYER_HEIGHT * 0.25, at_floor + PLAYER_HEIGHT * 0.75))
+            {
+                break;
+            }
+
+            if (!K_Sight_Check(boss.x, boss.y, eye, at.x, at.y, at_floor, at_floor + PLAYER_HEIGHT))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // Spots to fight the bosses of the kind from (FIRE_RINGS), the nearest to
-// the player first. Returns how many.
+// the player first - those with cover beside them (FIRE_COVER) only, if
+// any. Returns how many.
 static int FireSpots(int kind, candidate_t *out, int max)
 {
     const k_map_t *map = K_Map_Get();
     k_vec2_t at[MAX_CANDIDATES];
     double height = (double) mobjinfo[kind].height / FRACUNIT;
     double away[MAX_CANDIDATES];
+    boolean covered[MAX_CANDIDATES];
     k_pose_t player;
     int bosses = SDL_min(K_Specials_FindMonsters(kind, at, MAX_CANDIDATES), MAX_CANDIDATES);
-    int count = 0;
+    int count = 0, kept = 0;
     int m, r, k, i;
 
     max = SDL_min(max, MAX_CANDIDATES);
@@ -1293,6 +1346,7 @@ static int FireSpots(int kind, candidate_t *out, int max)
                                   at[m].y + sin(angle) * fire_rings[r] };
                 int cell = K_Map_CellAt(spot.x, spot.y);
                 double floor, distance;
+                boolean cover;
                 int worst;
 
                 if (cell < 0 || K_Graph_Clearance(spot, 17.0) < 17.0
@@ -1311,14 +1365,12 @@ static int FireSpots(int kind, candidate_t *out, int max)
                     continue;
                 }
 
-                // Kept the FIRE_MOST nearest the player.
+                // Kept the FIRE_MOST nearest the player, those without cover
+                // FIRE_BARE further off.
                 distance = hypot(spot.x - player.x, spot.y - player.y);
+                worst = -1;
 
-                if (count < FIRE_MOST && count < max)
-                {
-                    worst = count++;
-                }
-                else
+                if (count >= FIRE_MOST || count >= max)
                 {
                     for (worst = 0, i = 1; i < count; ++i)
                     {
@@ -1334,7 +1386,20 @@ static int FireSpots(int kind, candidate_t *out, int max)
                     }
                 }
 
+                cover = SpotCovered(spot, floor, at[m], bottom + height * 0.75);
+                distance += cover ? 0.0 : FIRE_BARE;
+
+                if (worst < 0)
+                {
+                    worst = count++;
+                }
+                else if (distance >= away[worst])
+                {
+                    continue;
+                }
+
                 away[worst] = distance;
+                covered[worst] = cover;
                 out[worst].at = spot;
                 out[worst].kind = K_GOAL_POINT;
                 out[worst].line = -1;
@@ -1346,7 +1411,16 @@ static int FireSpots(int kind, candidate_t *out, int max)
         }
     }
 
-    return count;
+    // With cover beside any, those without are dropped.
+    for (i = 0; i < count; ++i)
+    {
+        if (covered[i])
+        {
+            out[kept++] = out[i];
+        }
+    }
+
+    return kept > 0 ? kept : count;
 }
 
 // Where to go to pick up a key lying at `at` (K_Graph_PickupSpot); with no

@@ -4112,6 +4112,39 @@ Who controls the player in a fight (the user's model):
     on any wall 89 of 468, 56 of 447 (the rest mostly misses past the spider, 400 off).
   Head against new, pistol starts: E2M8, 9 salts, finished 7 and 5 (salt 11 the other way);
   E4M8 1 and 2 of 3; Doom II MAP10 2 and 2 of 3, MAP15 1 and 1 of 3.
+- **Cover, the follow-up to C4** (the user, 2026-11-19: "cover from the spider"; E3M8 from a
+  pistol start, every death the spider's bullets in the open). Of what the spider took in 12
+  runs, about 875 of 1250 went on runs for single rockets across its arena, 100 on the fight
+  itself. Done:
+  - Item runs count a Cyberdemon's or a spider mastermind's fire in full (`k_items.c`; the
+    danger where the player stands takes off only the other monsters': no fight with one is
+    soon over) - but for what beats a monster the player is outgunned by (the boss met as
+    hopeless) and health at CRITICAL. The damage went from the runs (489 to 137 in 6 runs) to
+    the fight (54 to 338).
+  - Fighting from beside cover (`k_combat.c`: `COVER_REACH`): against an arch-vile, an
+    arachnotron, the spider mastermind or a Cyberdemon fought, the nearest spot within 320
+    that the gun sees it from, cover out of its sight at most 32 on; the fight leashed to it
+    (32), monsters pressing only within 192 but a Cyberdemon (a baron passed for the boss's
+    sake pushed the bot off its way to cover from 382). Logged: "fighting the ... from beside
+    cover", "no cover from the ... within 320". Cover 480 off was run for across the open, hit
+    9 times on the way: 512 was too far.
+  - Firing spots with cover beside them first (`k_brain.c`: `FIRE_COVER`): out of the boss's
+    sight within 96, 8 ways every 32, a floor within a step, nothing in the way at the waist;
+    the others dropped while any has cover.
+  - The boss the level needs dead is never left alone as infighting (the user: "the bot just
+    stayed exposed in a line of sight of the spider, aiming at the baron occasionally, but
+    doing nothing"): the spider fought the baron, no target, the KILL goal stood at its spot
+    waiting for a fight, its spray hitting the bot nine times in 3 s. Busy, it keeps its target
+    100 tics after each hit it takes.
+  - Once it could be fought, the boss the level needs dead is hopeless again only below
+    `HOPELESS_KEEP` (it flipped at half its health in hand every few seconds, the KILL goal
+    walking up to it each time).
+  E3M8 from a pistol start, 12 salts, head against new: finished 4 and 3; the spider's damage
+  1.3 and 0.9 a second; ducks 39 and 74; idle at the spot 9 and 3. Doom II MAP11, 13 and 14, 2
+  salts each: finished 1 and 2 (MAP14: new finished, head dead; MAP13 alive 263 s, head 74).
+  Left: the ammo runs out from shots at 900 and more, then single rockets 1500 off are run for
+  across the open; a hopeless boss still has the KILL goal walking toward it; head's wins came
+  from firing on without a break, a cacodemon fighting the spider too.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
