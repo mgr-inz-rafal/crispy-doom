@@ -896,16 +896,23 @@ static boolean LegClips(k_vec2_t a, k_vec2_t b)
 
 // Where to step through the portal crossed at `from` into route cell i,
 // on the way to `to`, when the leg straight there clips a wall's corner
-// (STEP_THROUGH); 0 if it does not, or stepping through does not help.
+// (STEP_THROUGH); 0 if it does not, or stepping through does not help. Not
+// into a sector a line moves: its walls are judged as it is now, not as it
+// will be when the player gets there (Doom II MAP14: a step onto lift 341
+// planned with it up, 10 from slats level with it; down, they stood 88 over
+// it, the step out of reach, and the ride waited for it until stuck).
 static int StepThrough(const k_path_t *path, int i, k_vec2_t from, k_vec2_t to,
                        k_vec2_t *step)
 {
     const k_portal_t *portal = &graph->portals[path->portals[i - 1]];
-    k_vec2_t centroid = map->cells[path->cells[i]].centroid;
+    const k_cell_t *cell = &map->cells[path->cells[i]];
+    k_vec2_t centroid = cell->centroid;
     double length = Distance(portal->a, portal->b);
     double nx, ny;
 
-    if (portal->line < 0 || length < 1e-6 || !LegClips(from, to))
+    if (portal->line < 0 || length < 1e-6
+     || K_Specials_TriggerCount(map->subsectors[cell->subsector].sector) > 0
+     || !LegClips(from, to))
     {
         return 0;
     }

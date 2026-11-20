@@ -1058,12 +1058,11 @@ extern void A_CyberAttack();
 #define BLOW_SAFE 160.0
 #define BLOW_HOLD 35
 
-// With no walkable way to step away, the monster's blows are left to the
-// route for BLOW_NOWHERE: on a ledge 64 wide over an imp the shots could not
-// find, stepping away and the route took turns every few tics, the route
-// back to the edge each time, until the imp clawed the bot from 155 to
-// death (E3M3, sector 114). The route's way down meets it level, where they
-// do.
+// With no walkable way to step away, blows are left to the route for
+// BLOW_NOWHERE: on a ledge 64 wide over an imp the shots could not find,
+// stepping away and the route took turns every few tics, the route back to
+// the edge each time, until the imp clawed the bot from 155 to death (E3M3,
+// sector 114). The route's way down meets it level, where they do.
 #define BLOW_NOWHERE (2 * TICRATE)
 
 // A spot to step to keeps EDGE_MARGIN from any edge the player could slip
@@ -1375,8 +1374,7 @@ static k_vec2_t blocking_at;
 static boolean dodging;
 static boolean dodging_blow;
 static const mobj_t *blow_mo;
-static const mobj_t *nowhere_mo;    // its blows left to the route (BLOW_NOWHERE)
-static int nowhere_until;
+static int nowhere_until;           // blows left to the route (BLOW_NOWHERE)
 static boolean dodging_primed;
 static const mobj_t *primed_mo;     // the primed barrel stepped away from last
 static int primed_tics;             // and for how long in all
@@ -5625,14 +5623,18 @@ static int PrimedNear(const player_t *player)
 // another, whose blows would reach the player (WayClear) - and once
 // stepping away from one, that one while it is within BLOW_SAFE and the
 // shots cannot find it (Doom II MAP06: a spectre in and out of sight, or
-// of reach, the step away begun and over ten times in 0.7 s); or -1. Not
-// one whose blows are left to the route (BLOW_NOWHERE).
+// of reach, the step away begun and over ten times in 0.7 s); or -1, and
+// while blows are left to the route (BLOW_NOWHERE).
 static int BlowFrom(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     double reach = dodging_blow ? BLOW_SAFE : BLOW_REACH;
-    const mobj_t *nowhere = leveltime < nowhere_until ? nowhere_mo : NULL;
     int best = -1, i;
+
+    if (leveltime < nowhere_until)
+    {
+        return -1;
+    }
 
     if (dodging_blow)
     {
@@ -5644,7 +5646,7 @@ static int BlowFrom(const player_t *player)
         }
     }
 
-    if (leveltime - hurt_tic <= BLOW_HOLD && player->attacker != nowhere)
+    if (leveltime - hurt_tic <= BLOW_HOLD)
     {
         i = IndexOf(player->attacker);
 
@@ -5657,11 +5659,6 @@ static int BlowFrom(const player_t *player)
     for (i = 0; i < num_monsters; ++i)
     {
         const k_monster_t *monster = &monsters[i];
-
-        if (monster_mobjs[i] == nowhere)
-        {
-            continue;
-        }
 
         if (monster->awake && monster->visible && !monster->shootable && !monster->infighting
          && monster->distance < reach && monster_mobjs[i]->info->meleestate != S_NULL
@@ -5861,7 +5858,6 @@ static void UpdateDodge(const player_t *player)
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "no way to step away from the %s, %.0f units off - "
                   "on along the route for %.0f s", monsters[blow].name, monsters[blow].distance,
                   (double) BLOW_NOWHERE / TICRATE);
-            nowhere_mo = monster_mobjs[blow];
             nowhere_until = leveltime + BLOW_NOWHERE;
         }
 
@@ -7246,7 +7242,7 @@ void K_Combat_Reset(void)
     dodging = false;
     dodging_blow = false;
     blow_mo = NULL;
-    nowhere_mo = NULL;
+    nowhere_until = 0;
     hurt_tic = -BLOW_HOLD - 1;
     memset(reach_memo, 0, sizeof(reach_memo));
     memset(struck, 0, sizeof(struck));

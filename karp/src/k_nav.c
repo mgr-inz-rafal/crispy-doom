@@ -765,10 +765,21 @@ static boolean StraightClear(k_vec2_t at, k_vec2_t to)
 
 // Whether the target can move on from waypoint k, the player at a point
 // within its advance radius: straight on to the next one is clear, or the
-// player is right at it. A jump or a teleport goes on as planned.
+// player is right at it. Into or out of a jump or a teleport it goes on as
+// planned: a step across a gap narrower than the player ends as the target
+// moves past its touchdown, and held there, the run goes on at full speed
+// (E1M3: across the ring of sector 47 and off its far edge, 120 down into
+// the pit that hurts). So it does onto a waypoint the player stops at, a
+// crossing to work or where it waits dry: what is in the way there is that
+// crossing (Doom II MAP14: lift 341 down, the slats 88 over it beside the
+// way off it, the ride never begun until stuck).
 static boolean CanAdvance(k_vec2_t at, int k)
 {
+    int r = NextClosedCrossing();
+
     return Distance(at, path.points[k]) < CAREFUL_ADVANCE || path.legs[k] != K_LEG_WALK
+        || (k > 0 && path.legs[k - 1] != K_LEG_WALK)
+        || (r >= 0 && k + 1 == ExitPoint(r)) || k + 1 == dry_point
         || StraightClear(at, path.points[k + 1]);
 }
 
@@ -2528,8 +2539,7 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
             if (OnJump(status.target))
             {
                 K_Log(K_LOG_NAV, K_LOG_INFO, "running up for the jump to (%.0f,%.0f)",
-                      path.points[status.target].x, path.points[status.target].y);
-                jump_phase = JUMP_RUNUP;
+                      path.points[status.target].x, path.points[status.target].y);                jump_phase = JUMP_RUNUP;
                 runup_floor = pose->floor;
             }
             break;

@@ -779,7 +779,9 @@ near-perfect conditions; found at level load, judged live.
   24 units straight on through the portal, if that point is in the cell, clear, and clears the
   rest of the leg. A leg clips where the box comes within 15 of a wall (`K_Graph_Clearance`),
   sampled every 8 units over its first 64, but for the last 15 before the next portal (a shut
-  door or a lift up is a wall until worked).
+  door or a lift up is a wall until worked). Not into a sector a line moves: its walls are
+  judged as it is now, not as it will be (Doom II MAP14: a step onto lift 341 planned with it
+  up, 10 from slats level with it; down, they stood 88 over it and the step was out of reach).
 - **Output** (`k_path_t`): the result, the route's cells and the portals between them (for
   progress tracking in M6), the points to follow (start, portal middles, the occasional centroid
   or step through a doorway, goal), the length, the first blocked crossing with its kind and
@@ -836,7 +838,12 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
   up to, within 8. On E3M3's stairs by the secret room, 16 short of the portal off a step, the
   next waypoint lay round the corner of the wall beside it: the bot pushed into the wall, shaking
   left and right, until stuck, 9 to 20 times a run. The commands built ahead (Act, 1) move on
-  by the same rule.
+  by the same rule. Into or out of a jump or a teleport the target moves on as before: a step
+  across a gap narrower than the player ends as the target moves past its touchdown, and held
+  there the run went on at full speed (E1M3: across the ring of sector 47 and off its far edge,
+  120 down into the pit that hurts; 2 deaths in 6 runs until this). So it does onto a waypoint
+  the player stops at, a crossing to work or where it waits dry: what is in the way there is
+  that crossing.
 - **Off the route:** a cell that is not on the route but is one open crossing from a route cell
   (a corner cut through a neighbouring cell) is tolerated, while the way straight to the target
   is clear (as above): E3M3, planned from just past the portal off a stair, the player slid back
@@ -4238,20 +4245,28 @@ Who controls the player in a fight (the user's model):
     room's two ways in, the pillars between E3M2's alcoves).
   - A waypoint counts as reached within 24 only if the way straight on to the next one is clear
     (3.4), the commands built ahead too: 16 short of the portal off a step the target moved
-    round the corner of the wall beside it.
+    round the corner of the wall beside it. Not at a jump's touchdown: found by the regression,
+    E1M3's step across a gap at the ring of sector 47 ran on off its far edge.
   - A step through a doorway, out of it straight, where the leg on turns hard round the wall
-    beside it (3.3); off the route in a neighbouring cell, a replan when the way straight to the
-    target is walled off (3.4).
+    beside it (3.3), not onto a lift (found on Doom II MAP14 without monsters); off the route in
+    a neighbouring cell, a replan when the way straight to the target is walled off (3.4).
   - Rockets and cells kept from the weak monsters however many there are while the arsenal goes
     on (the Episode 2 entry: the reserve was spent on anything above the 2000 kept).
   - Found on the way, from a hold short of area 14: on the ledge of sector 114, 64 wide, an imp
     64 below that the shots could not find clawed the bot to death, stepping away from it and
-    the route taking turns every few tics. With no way to step, its blows are left to the route
-    for 2 s (7.3: blows that cannot be answered).
-  E3M3 from the user's save, 8 salts, head against new: stucks 9 to 20 a run, now 0 to 5 (all of
-  them at the jump to (923,898), whose run-up a demon or an imp stands in, head the same);
-  finished 8 and 6 in 360 s, the 2 alive near the exit, 41 and 43 kills of 44; fights 73 s a
-  run, now 92 (the shotgun and the chaingun for the imps), about 2 kills more.
+    the route taking turns every few tics. With no way to step, blows are left to the route for
+    2 s (7.3: blows that cannot be answered).
+  E3M3 from the user's save, 8 salts, head against new: stucks 9 to 20 a run, now 0 to 6, all but
+  two of them at the jump to (923,898), whose run-up a demon or an imp stands in (head the
+  same); finished 8 and 7 in 360 s, the one left alive with 39 kills of 44; fights 73 s a run,
+  now 90 (the shotgun and the chaingun for the imps); the plasma rifle brought up for a weak
+  one 1 to 3 times a run, now once in the 8 runs. Head against new, pistol starts, salts 443, 71
+  and 7: E1M1 to E1M6 and E1M8 finished 21 and 20 of 21 (E1M5 with 3 salts more: 5 and 5 of 6,
+  the deaths a crowded fight on the nukage at low health); Doom II MAP01 to 06, 10 and 15
+  finished 15 and 21 of 24 (MAP04 3 of 3, head 1; MAP10 2 of 3, head none, the rest alive at
+  the 420 s limit; MAP15's deaths a lost soul and a baron). Without monsters, Doom II's 29 maps
+  all finished, in 1971 s against 1939 (MAP06's 7 s more a soulsphere gone for, the times
+  else within 1 to 6 s).
   Left: the jump to (923,898) with monsters in its run-up.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
@@ -4374,7 +4389,7 @@ Who controls the player in a fight (the user's model):
   monster within 96 that the shots cannot find, the player holds the route, even waiting at a
   door or lift (the action begun again after), and steps the walkable way furthest from it until
   it is 160 off, where the autoaim may find it. With no walkable way (a lift going down, the
-  floor around too high) it rides on, and that monster's blows are left to the route for 2 s
+  floor around too high) it rides on, and blows are left to the route for 2 s
   (E3M3: on a ledge 64 wide over an imp, stepping away and the route took turns every few tics,
   the route back to the edge each time, until the imp clawed the bot from 155 to death; the
   route's way down meets it level, where the shots find it). Very high lifts stay a risk.
