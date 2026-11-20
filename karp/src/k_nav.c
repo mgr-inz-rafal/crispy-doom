@@ -125,6 +125,20 @@
 #define CAREFUL_TURN 20.0
 #define CAREFUL_ADVANCE 8.0
 
+// Within the advance radius of a waypoint, the target moves on to the next
+// one only if the player can go straight there: its box off walls by more
+// than CUT_CLEARANCE (K_Graph_Clearance) over the first CUT_LOOK units of
+// the way, sampled every CUT_STEP. Otherwise the waypoint is driven up to,
+// within CAREFUL_ADVANCE (E3M3: 16 units short of the portal off a stair,
+// the next waypoint lay round the corner of the wall beside it; the bot
+// pushed into that wall, shaking left and right, until stuck). Not the
+// last CUT_CLEARANCE units before the next waypoint: a portal's, where a
+// shut door or a lift up is a wall until worked (E3M3: the door at line
+// 650, 8 past the waypoint before it, never reached, never opened).
+#define CUT_LOOK 96.0
+#define CUT_STEP 8.0
+#define CUT_CLEARANCE 15.0
+
 // A fall carries on at the speed the player left the edge at, with no
 // friction in the air, for as long as it falls: about sqrt(2h) tics for h
 // units. Off a careful step down, where the fall could carry the player
@@ -729,6 +743,35 @@ static double AdvanceRadius(int k)
     return careful[k] ? CAREFUL_ADVANCE : tuning.advance_radius;
 }
 
+// Whether the player can go straight from a point to a waypoint (CUT_LOOK).
+static boolean StraightClear(k_vec2_t at, k_vec2_t to)
+{
+    double length = Distance(at, to);
+    double along;
+
+    for (along = CUT_STEP; along < SDL_min(length - CUT_CLEARANCE, CUT_LOOK); along += CUT_STEP)
+    {
+        k_vec2_t point = { at.x + (to.x - at.x) * along / length,
+                           at.y + (to.y - at.y) * along / length };
+
+        if (K_Graph_Clearance(point, CUT_CLEARANCE) < CUT_CLEARANCE)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Whether the target can move on from waypoint k, the player at a point
+// within its advance radius: straight on to the next one is clear, or the
+// player is right at it. A jump or a teleport goes on as planned.
+static boolean CanAdvance(k_vec2_t at, int k)
+{
+    return Distance(at, path.points[k]) < CAREFUL_ADVANCE || path.legs[k] != K_LEG_WALK
+        || StraightClear(at, path.points[k + 1]);
+}
+
 // The fastest the player may go now and still slow down in time for the
 // corners ahead and stop at the goal.
 static double SpeedLimit(const body_t *body, int target)
@@ -1033,7 +1076,8 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
 
     // The waypoint may be reached during the tics still waiting to run.
     if (target < TargetLimit()
-     && Distance(at, path.points[target]) < AdvanceRadius(target))
+     && Distance(at, path.points[target]) < AdvanceRadius(target)
+     && CanAdvance(at, target))
     {
         ++target;
     }
@@ -2414,6 +2458,16 @@ static boolean Progress(k_vec2_t at, const k_pose_t *pose, boolean teleported)
                    cell, at.x, at.y);
         return Replan(at, why);
     }
+    else if (r < 0 && cell >= 0 && !StraightClear(at, path.points[status.target]))
+    {
+        // Slipped into a cell beside the route, round a corner from the
+        // target (E3M3: planned from just past the portal off a stair, the
+        // player slid back onto the stair, and drove at the next waypoint
+        // through the corner of the pillar beside the portal).
+        M_snprintf(why, sizeof(why), "off the route in cell %d at (%.0f,%.0f), round a "
+                   "corner from the way on", cell, at.x, at.y);
+        return Replan(at, why);
+    }
 
     // Out from under the crusher, its box too.
     if (crusher_run >= 0 && status.route_cell >= crusher_past
@@ -2427,7 +2481,8 @@ static boolean Progress(k_vec2_t at, const k_pose_t *pose, boolean teleported)
     limit = TargetLimit();
 
     while (status.target < limit
-        && Distance(at, path.points[status.target]) < AdvanceRadius(status.target))
+        && Distance(at, path.points[status.target]) < AdvanceRadius(status.target)
+        && CanAdvance(at, status.target))
     {
         ++status.target;
     }

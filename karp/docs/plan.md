@@ -763,15 +763,27 @@ near-perfect conditions; found at level load, judged live.
 - **Legs along a wall.** When a route enters and leaves a cell by two portals on the same edge,
   the leg between them runs along that edge. That is common and harmless along a partition line,
   where the edge is all portals, but between two doorways in one wall it would scrape the wall. A
-  leg that runs along a stretch of border that is not a way on (sampled at 1/4, 1/2 and 3/4) goes
-  through the cell's centroid instead. Not a way on: a wall, a portal to a floor more than 24
-  higher, or more than 24 lower, a ledge's edge the player would fall off, or a portal to a cell
-  under a standing solid thing (the side of its square). On Doom II MAP16 both
-  crossings of a landing lay on its open edge; followed at careful speed (3.4), the leg along it
-  dropped the bot back to the start, and the route sent it up again, round and round.
+  leg that runs along a stretch of border that is not a way on goes through the cell's centroid
+  instead. The cell is convex, so a leg between two points of its border either runs along one
+  edge, its middle on the border too, or across the cell; along an edge it is sampled every 4
+  units (it was at 1/4, 1/2 and 3/4, which missed a stub of wall 16 wide between E3M3's two ways
+  into the secret room 110, and the pillars 8 wide between E3M2's alcoves). Not a way on: a
+  wall, a portal to a floor more than 24 higher, or more than 24 lower, a ledge's edge the player
+  would fall off, or a portal to a cell under a standing solid thing (the side of its square). On
+  Doom II MAP16 both crossings of a landing lay on its open edge; followed at careful speed
+  (3.4), the leg along it dropped the bot back to the start, and the route sent it up again,
+  round and round.
+- **Stepping through a doorway.** A leg out of a portal with a line that turns hard round the
+  wall beside it clips that wall's corner: no straight line from the portal clears the player's
+  box (E3M3: off the stair at line 549, north round the pillar beside it). Such a leg goes first
+  24 units straight on through the portal, if that point is in the cell, clear, and clears the
+  rest of the leg. A leg clips where the box comes within 15 of a wall (`K_Graph_Clearance`),
+  sampled every 8 units over its first 64, but for the last 15 before the next portal (a shut
+  door or a lift up is a wall until worked).
 - **Output** (`k_path_t`): the result, the route's cells and the portals between them (for
-  progress tracking in M6), the points to follow (start, portal middles, the occasional centroid,
-  goal), the length, the first blocked crossing with its kind and height, nodes searched and time.
+  progress tracking in M6), the points to follow (start, portal middles, the occasional centroid
+  or step through a doorway, goal), the length, the first blocked crossing with its kind and
+  height, nodes searched and time.
   At a teleporter the points go on from the point on its line to one 32 units past it (so the
   player surely crosses it), then to the destination; that last leg is marked as a teleport
   (`k_path_t.legs`, `K_LEG_TELEPORT`), is not walked and does not count in the length. At a jump
@@ -818,10 +830,19 @@ Physics facts the controller is built on (`p_user.c:151-216`, `p_mobj.c:160-302`
   drift of a unit or two into it turned the bot back 150 units (a fall into an earlier, lower cell
   still counts as pushed back: no open crossing climbs out of it). The route remembers which cell
   each leg runs through (`k_path_t.leg_cells`) for this. A waypoint on the way also counts as
-  reached within 24 units (tunable).
+  reached within 24 units (tunable), if the player can go straight on to the next one: its box
+  more than 15 off walls over the first 96 units of the way, sampled every 8, but for the last
+  15 before the waypoint (a shut door or a lift up there is worked first). Otherwise it is driven
+  up to, within 8. On E3M3's stairs by the secret room, 16 short of the portal off a step, the
+  next waypoint lay round the corner of the wall beside it: the bot pushed into the wall, shaking
+  left and right, until stuck, 9 to 20 times a run. The commands built ahead (Act, 1) move on
+  by the same rule.
 - **Off the route:** a cell that is not on the route but is one open crossing from a route cell
-  (a corner cut through a neighbouring cell) is tolerated. Anywhere else (fell off a ledge, got
-  pushed) the route is replanned from where the player is, with a log line.
+  (a corner cut through a neighbouring cell) is tolerated, while the way straight to the target
+  is clear (as above): E3M3, planned from just past the portal off a stair, the player slid back
+  onto the stair and drove at the next waypoint through the corner of the pillar beside the
+  portal. Anywhere else (fell off a ledge, got pushed) the route is replanned from where the
+  player is, with a log line.
 - **Stuck:** moved under 8 units over the last 35 tics: replan, with a log line, and first step
   aside or back for 12 tics at 6 units a tic, a way clear for 32 units (walls, solid things,
   edges, floors that hurt), tried in an order a hash of the time picks (no `P_Random`, 2.4).
@@ -4000,7 +4021,9 @@ Who controls the player in a fight (the user's model):
     damage while the arsenal goes on, kept from all but the tough while the shotgun or the
     chaingun has twice its low mark, unless beset, crowded (40 of cost on the player) or health
     CRITICAL. E2M2 on from a pistol start, salts 11 and 22: cells at E2M3's end 111 and 94
-    (head 8 and 0).
+    (head 8 and 0). From the weak ones (spawn health 150 or less) all of them are kept, however
+    many (2026-11-20, the user's E3M3: 120 cells, the plasma rifle brought up for a demon and
+    kept on for the imps, spent down to the 2000).
   - The Cyberdemon: no hold short of an area with a boss inside, nor creeping toward it
     (`BossInside`, in `UnsafeAhead`) - so no "fought for, not run for" there either, the run
     for health goes on; the miss counter allows for shots still in the air (`InFlight`: plasma
@@ -4204,6 +4227,32 @@ Who controls the player in a fight (the user's model):
   and 2 unfinished alive in the sweep at the 420 s limit). Without monsters, Doom II's 29 maps
   all finished, the times as before.
   Left: Doom II MAP16's gun switch 200 "does nothing" from either spot (before too).
+- **Episode 3, explorer, the user's second run** (2026-11-20): "E3M2 when bot was visiting
+  alcoves with shotgunners (to pick up their shotguns) it was shaking a lot, trying to leave the
+  alcove"; "E3M3 bot started with plasma and kept using it on imps - shouldn't it keep the
+  reserve"; "E3M3 bot was shaking like crazy while navigating the space near the blood pool with
+  BFG. running back and forth, kind of glitching". From the save the run made at E3M3's start,
+  the stucks (3.4) were at three spots side by side at the foot of the secret room 110: a stair
+  down from it (sectors 112, 111, 138, steps of 24) and the room's two ways in, 16 apart. Done:
+  - Legs along an edge sampled every 4 units, not at their quarters (3.3: the stub between the
+    room's two ways in, the pillars between E3M2's alcoves).
+  - A waypoint counts as reached within 24 only if the way straight on to the next one is clear
+    (3.4), the commands built ahead too: 16 short of the portal off a step the target moved
+    round the corner of the wall beside it.
+  - A step through a doorway, out of it straight, where the leg on turns hard round the wall
+    beside it (3.3); off the route in a neighbouring cell, a replan when the way straight to the
+    target is walled off (3.4).
+  - Rockets and cells kept from the weak monsters however many there are while the arsenal goes
+    on (the Episode 2 entry: the reserve was spent on anything above the 2000 kept).
+  - Found on the way, from a hold short of area 14: on the ledge of sector 114, 64 wide, an imp
+    64 below that the shots could not find clawed the bot to death, stepping away from it and
+    the route taking turns every few tics. With no way to step, its blows are left to the route
+    for 2 s (7.3: blows that cannot be answered).
+  E3M3 from the user's save, 8 salts, head against new: stucks 9 to 20 a run, now 0 to 5 (all of
+  them at the jump to (923,898), whose run-up a demon or an imp stands in, head the same);
+  finished 8 and 6 in 360 s, the 2 alive near the exit, 41 and 43 kills of 44; fights 73 s a
+  run, now 92 (the shotgun and the chaingun for the imps), about 2 kills more.
+  Left: the jump to (923,898) with monsters in its run-up.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
@@ -4325,10 +4374,13 @@ Who controls the player in a fight (the user's model):
   monster within 96 that the shots cannot find, the player holds the route, even waiting at a
   door or lift (the action begun again after), and steps the walkable way furthest from it until
   it is 160 off, where the autoaim may find it. With no walkable way (a lift going down, the
-  floor around too high) it rides on. Very high lifts stay a risk. Stepping away, from blows or a
-  blast, a spot need be no further from an edge than the player already is (MAP03: on the very
-  edge of a pit, a demon below - blocking the drop, things block at any height - bit the bot to
-  death; every spot was within 24 of the edge, so none would do).
+  floor around too high) it rides on, and that monster's blows are left to the route for 2 s
+  (E3M3: on a ledge 64 wide over an imp, stepping away and the route took turns every few tics,
+  the route back to the edge each time, until the imp clawed the bot from 155 to death; the
+  route's way down meets it level, where the shots find it). Very high lifts stay a risk.
+  Stepping away, from blows or a blast, a spot need be no further from an edge than the player
+  already is (MAP03: on the very edge of a pit, a demon below - blocking the drop, things block
+  at any height - bit the bot to death; every spot was within 24 of the edge, so none would do).
 - **Danger around items**: what the monsters guarding an item would cost in health is taken off,
   weighed as health (the user, MAP02: four stimpacks guarded drew a fight a lonely medikit would
   not have). The guards are the live monsters within 1024 that could see the player at the item

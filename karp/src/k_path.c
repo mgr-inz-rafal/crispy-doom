@@ -106,6 +106,21 @@
 // the cell's centroid.
 #define BORDER_DISTANCE 1.0
 #define LEDGE_HEIGHT 24.0
+#define LEG_STEP 4.0
+
+// A leg out of a doorway that turns hard round the wall beside it clips
+// that wall's corner: no straight line from the portal clears the player's
+// box (E3M3: off the stair at line 549, north round the pillar beside it;
+// the bot pushed into the corner, shaking left and right, until stuck).
+// Such a leg goes first STEP_THROUGH straight on through the portal, if
+// that clears it. A leg clips where the box comes within CLIP_CLEARANCE of
+// a wall (K_Graph_Clearance), sampled every CLIP_STEP over its first
+// CLIP_LOOK, but for the last CLIP_CLEARANCE before the next portal, a shut
+// door or a lift up until worked.
+#define STEP_THROUGH 24.0
+#define CLIP_LOOK 64.0
+#define CLIP_STEP 8.0
+#define CLIP_CLEARANCE 15.0
 
 // The route goes this far past a teleport line, so the player crosses it.
 #define TELEPORT_OVERSHOOT 32.0
@@ -679,8 +694,9 @@ static void EnsureCapacity(k_path_t *path, int cells)
     path->portals = realloc(path->portals,
                             path->capacity * sizeof(*path->portals));
 
-    // The start, the middle of each portal, at most one centroid per cell,
-    // past each teleporter and its destination, the goal.
+    // The start, the middle of each portal, at most one centroid or step
+    // through a doorway per cell, past each teleporter and its destination,
+    // the goal.
     path->points = realloc(path->points,
                            (4 * path->capacity + 2) * sizeof(*path->points));
     path->leg_cells = realloc(path->leg_cells,
@@ -769,6 +785,24 @@ static boolean MarkShutting(const k_path_t *path)
 
 static void CellHeights(int cell, double *floor, double *ceiling);
 
+// Whether a point lies on a cell's border.
+static boolean OnBorder(int cell, k_vec2_t point)
+{
+    const k_cell_t *c = &map->cells[cell];
+    const k_vec2_t *poly = &map->points[c->first_point];
+    int i;
+
+    for (i = 0; i < c->num_points; ++i)
+    {
+        if (SegmentDistance(poly[i], poly[(i + 1) % c->num_points], point) < BORDER_DISTANCE)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // Whether a point lies on a stretch of a cell's border that is not a way
 // on: a wall, a portal to a floor more than 24 higher or lower, or to a
 // cell under a solid thing. Not a ledge's edge either: the player would
@@ -776,19 +810,10 @@ static void CellHeights(int cell, double *floor, double *ceiling);
 // edge, the leg between them along it).
 static boolean OnWall(int cell, k_vec2_t point)
 {
-    const k_cell_t *c = &map->cells[cell];
-    const k_vec2_t *poly = &map->points[c->first_point];
-    boolean on_border = false;
     double floor, ceiling;
     int i, end;
 
-    for (i = 0; i < c->num_points && !on_border; ++i)
-    {
-        on_border = SegmentDistance(poly[i], poly[(i + 1) % c->num_points],
-                                    point) < BORDER_DISTANCE;
-    }
-
-    if (!on_border)
+    if (!OnBorder(cell, point))
     {
         return false;
     }
@@ -815,15 +840,29 @@ static boolean OnWall(int cell, k_vec2_t point)
     return true;
 }
 
-// Sampled at a few points, enough to catch a wall between two doorways.
+// The cell is convex: a leg between two points on its border either runs
+// along one edge, its middle on the border too, or across the cell. Along
+// an edge, it is sampled every LEG_STEP units, enough to catch a stub of
+// wall or a pillar between two openings, not just a wall between two
+// doorways (E3M3: a stub 16 wide between the two ways into the secret room
+// 110, and E3M2: pillars 8 wide between the alcoves, both missed by
+// samples at its quarters; the bot pushed into them, shaking, until stuck).
 static boolean LegAlongWall(int cell, k_vec2_t a, k_vec2_t b)
 {
-    int i;
+    k_vec2_t middle = { (a.x + b.x) * 0.5, (a.y + b.y) * 0.5 };
+    int i, steps;
 
-    for (i = 1; i <= 3; ++i)
+    if (!OnBorder(cell, middle))
     {
-        k_vec2_t point = { a.x + (b.x - a.x) * i * 0.25,
-                           a.y + (b.y - a.y) * i * 0.25 };
+        return false;
+    }
+
+    steps = SDL_max(4, (int) ceil(Distance(a, b) / LEG_STEP));
+
+    for (i = 1; i < steps; ++i)
+    {
+        k_vec2_t point = { a.x + (b.x - a.x) * i / steps,
+                           a.y + (b.y - a.y) * i / steps };
 
         if (OnWall(cell, point))
         {
@@ -832,6 +871,60 @@ static boolean LegAlongWall(int cell, k_vec2_t a, k_vec2_t b)
     }
 
     return false;
+}
+
+// Whether the leg from a to b clips a wall near a (STEP_THROUGH).
+static boolean LegClips(k_vec2_t a, k_vec2_t b)
+{
+    double length = Distance(a, b);
+    double along;
+
+    for (along = CLIP_STEP; along <= SDL_min(length - CLIP_CLEARANCE, CLIP_LOOK);
+         along += CLIP_STEP)
+    {
+        k_vec2_t point = { a.x + (b.x - a.x) * along / length,
+                           a.y + (b.y - a.y) * along / length };
+
+        if (K_Graph_Clearance(point, CLIP_CLEARANCE) < CLIP_CLEARANCE)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Where to step through the portal crossed at `from` into route cell i,
+// on the way to `to`, when the leg straight there clips a wall's corner
+// (STEP_THROUGH); 0 if it does not, or stepping through does not help.
+static int StepThrough(const k_path_t *path, int i, k_vec2_t from, k_vec2_t to,
+                       k_vec2_t *step)
+{
+    const k_portal_t *portal = &graph->portals[path->portals[i - 1]];
+    k_vec2_t centroid = map->cells[path->cells[i]].centroid;
+    double length = Distance(portal->a, portal->b);
+    double nx, ny;
+
+    if (portal->line < 0 || length < 1e-6 || !LegClips(from, to))
+    {
+        return 0;
+    }
+
+    nx = -(portal->b.y - portal->a.y) / length;
+    ny = (portal->b.x - portal->a.x) / length;
+
+    if ((centroid.x - from.x) * nx + (centroid.y - from.y) * ny < 0.0)
+    {
+        nx = -nx;
+        ny = -ny;
+    }
+
+    step->x = from.x + nx * STEP_THROUGH;
+    step->y = from.y + ny * STEP_THROUGH;
+
+    return K_Map_CellAt(step->x, step->y) == path->cells[i]
+        && K_Graph_Clearance(*step, CLIP_CLEARANCE) >= CLIP_CLEARANCE
+        && !LegClips(*step, to);
 }
 
 // Adds a point; the leg to it is in route cell `cell`, taken as `leg`.
@@ -857,6 +950,8 @@ static k_vec2_t PastLine(int portal, k_vec2_t at)
 
 static void BuildPoints(k_path_t *path)
 {
+    boolean walked = false;     // the last point is a portal's, walked through
+    k_vec2_t step;
     int i;
 
     path->num_points = 0;
@@ -876,19 +971,33 @@ static void BuildPoints(k_path_t *path)
         {
             AddPoint(path, map->cells[path->cells[i]].centroid, i, K_LEG_WALK);
         }
+        else if (walked && StepThrough(path, i, path->points[path->num_points - 1], middle,
+                                       &step))
+        {
+            AddPoint(path, step, i, K_LEG_WALK);
+        }
 
         AddPoint(path, middle, i, K_LEG_WALK);
+        walked = true;
 
         // A jump: from the run-up's start straight to the touchdown.
         if (graph->portals[path->portals[i]].jump >= 0)
         {
             AddPoint(path, graph->portals[path->portals[i]].b, i + 1, K_LEG_JUMP);
+            walked = false;
         }
         else if (teleport >= 0)
         {
             AddPoint(path, PastLine(path->portals[i], middle), i, K_LEG_WALK);
             AddPoint(path, graph->teleports[teleport].to, i + 1, K_LEG_TELEPORT);
+            walked = false;
         }
+    }
+
+    if (walked && StepThrough(path, path->num_cells - 1, path->points[path->num_points - 1],
+                              goal_point, &step))
+    {
+        AddPoint(path, step, path->num_cells - 1, K_LEG_WALK);
     }
 
     AddPoint(path, goal_point, path->num_cells - 1, K_LEG_WALK);
