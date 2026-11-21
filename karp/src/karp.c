@@ -36,6 +36,9 @@
 #include "k_specials.h"
 #include "k_trace.h"
 
+// A tic of Karp's this long shows as a stall: near two game tics' worth.
+#define SLOW_TIC_MS 50.0
+
 static boolean autoplay_enabled;
 static boolean console_enabled;
 static boolean console_open;
@@ -172,6 +175,11 @@ boolean K_AutoplayEnabled(void)
     return autoplay_enabled;
 }
 
+boolean K_HoldsTally(void)
+{
+    return K_Demo_Enabled();
+}
+
 // Installed only while the console exists.
 static boolean EventFilter(SDL_Event *event)
 {
@@ -298,6 +306,8 @@ void K_Ticker(void)
 {
     static boolean netgame_logged = false;
     boolean moved = leveltime != world_tic;
+    Uint64 begin = SDL_GetPerformanceCounter();
+    double ms;
 
     // Only as the world moves: paused, or in a menu (P_Ticker), leveltime
     // stands still and so does Karp's picture of the level - looked at again
@@ -364,6 +374,15 @@ void K_Ticker(void)
         K_Brain_Tick();
     }
 
+    // A tic long enough to show on screen as a stall (the user, E1M9: the
+    // brain's look at the items about, 165 ms every second).
+    ms = (SDL_GetPerformanceCounter() - begin) * 1000.0 / SDL_GetPerformanceFrequency();
+
+    if (moved && ms > SLOW_TIC_MS)
+    {
+        K_Log(K_LOG_SYS, K_LOG_WARN, "slow tic: %.0f ms in Karp", ms);
+    }
+
     K_Demo_Tick();
 }
 
@@ -374,6 +393,12 @@ void K_BuildTiccmd(ticcmd_t *cmd, int maketic)
     k_command_t command;
     double aim, vx, vy;
     int aiming;
+
+    // Demo mode goes through an intermission with fire (k_demo.h).
+    if (!(cmd->buttons & BT_SPECIAL) && K_Demo_Fire())
+    {
+        cmd->buttons |= BT_ATTACK;
+    }
 
     if (!K_OwnsControls())
     {

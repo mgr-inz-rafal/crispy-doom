@@ -100,6 +100,11 @@ typedef struct
 // look it up. The arrays in path are reused from call to call.
 void K_Path_Find(k_path_t *path, k_vec2_t start, int start_cell, k_vec2_t goal);
 
+// The least length any route from `from` to `to` can have: the straight
+// line, or less by teleporter (the search's own heuristic). A search whose
+// route could not beat one already found need not be run.
+double K_Path_LeastWay(k_vec2_t from, k_vec2_t to);
+
 // What a blocked crossing adds to the cost of a route. More than any route
 // on a map could cost, so open routes always win; set by the brain, which
 // knows which blocked crossings it could get past (a key, a switch).

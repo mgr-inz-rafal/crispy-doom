@@ -120,10 +120,11 @@ karp/
 | H8 | `src/doom/d_main.c` `D_RunFrame`: end of function (after :584) and before the wipe-branch `return` (:548) | `K_Frame();` | Redraw the console (rate-limited); the second call keeps it alive during screen melts |
 | H10 | `src/doom/d_main.c` after the `-karpsalt` block | `//!` doc block + `if (M_CheckParm("-karpdemo")) K_EnableDemo();` | Demo mode (3.11) |
 | H11 | `src/doom/g_game.c` end of `G_DoLoadGame` | `K_GameLoaded();` | Rebuild Karp's copy of the level from the world a savegame restored: H4 ran inside `G_InitNew`, before every thing and mover was replaced |
+| H12 | `src/doom/wi_stuff.c` `WI_drawStats`, crispy's early exit from the tally after ExM8 | `&& !K_HoldsTally()` | In demo mode that tally waits for fire like any other intermission (3.11), not leaving the moment it is counted |
 | H9 | `src/i_video.c` / `i_video.h` (shared by all games) | `I_SetEventFilter(fn)`; call `if (event_filter && event_filter(&sdlevent)) continue;` at the top of the `SDL_PollEvent` loop in `I_GetEvent` (:474); `I_GetWindow()` accessor (`struct SDL_Window;` forward declaration, since i_video.h does not include SDL.h) | Route console events to Karp. Only Doom registers a filter, and only with `-karpconsole`; otherwise it stays NULL. |
 
-`karp.h` is included only by the four doom files above (`d_main.c`, `p_setup.c`, `d_net.c`,
-`g_game.c`). H9 is generic and does not reference Karp. None of the hooks write a configuration
+`karp.h` is included only by the five doom files above (`d_main.c`, `p_setup.c`, `d_net.c`,
+`g_game.c`, `wi_stuff.c`). H9 is generic and does not reference Karp. None of the hooks write a configuration
 variable.
 
 Ordering note: with `-warp`, `G_InitNew` (and so `P_SetupLevel`/H4) runs inside `D_DoomMain`
@@ -390,7 +391,11 @@ has a diagonal key door between two short jambs on the same line; the portal had
 jamb, so the door looked like a closed sector that nothing opens.
 
 **Passability** of a portal, leaving a given cell, is evaluated **live** (`K_Graph_CanCross`). It
-is cheap, and it makes doors and lifts work naturally in later stages. It mirrors
+makes doors and lifts work naturally in later stages. Each portal side is judged once a tic and
+the verdict kept for that tic (`JudgeOnce`): the world changes only as it moves, and the route
+searches of one tic ask of the same crossings again and again (2026-11-21, E1M9: two thirds of
+a 165 ms tic). Judged afresh after the graph or a lift's turns change, and never kept while a
+door is assumed open (`K_Graph_AssumeOpen`). It mirrors
 `P_TryMove`/`PIT_CheckLine` (`src/doom/p_map.c:212-285, 564-631`), with the sector of each cell's
 subsector:
 - blocked if the crossed linedef is one-sided (a map error) or has `ML_BLOCKING`;
@@ -1527,7 +1532,12 @@ unless `-karpsalt` gives one), starts the game at once and overrides `-quitonexi
   The bot need not clear every level with every salt: some salt clearing it is enough (the user).
   Tried for ever, never skipped (the user: a level no salt clears sends Karp back to the drawing
   table).
-- **The intermission** moves on after 5 s.
+- **The intermission** is gone through with fire, as a player would (the user, 2026-11-21): a
+  press 1 s in shows every stat at once; 5 s later a press leaves them - in Doom II for the next
+  level, in Doom 1 for the map of the episode ("entering"), which a press 1 s later leaves. After
+  an episode's last level the second press leaves for the end of the episode: crispy's tally
+  there, which leaves by itself the moment it is counted, waits for it in demo mode (H12). Still
+  there after 30 s, it moves on regardless.
 - **A text screen between levels** (Doom II) stays as long as Doom 1 shows its own by itself: 3
   tics a letter, then 250 (`F_Ticker`'s TEXTSPEED, TEXTWAIT).
 - **The end of an episode** - every Doom 1 finale, Doom II's after MAP30 (No Rest for the
@@ -1539,8 +1549,11 @@ unless `-karpsalt` gives one), starts the game at once and overrides `-quitonexi
 - **The title screen** (a game ended from the menu) starts a new game after 10 s.
 - Nothing waits while the game is paused or a menu is open; nothing happens in a netgame.
 - Logged: "demo: saving the start of MAP06 (try 1) to ...", "demo: died on MAP06 - loading its
-  start, try 2", "demo: intermission over - on to the next level", "demo: the end of the
+  start, try 2", "demo: intermission - fire, every stat shown", "demo: the end of the
   episode - a new game from episode 2".
+- **Secrets found** are announced on screen ("A secret is revealed!") with crispy's own option,
+  Crispness - Report Revealed Secrets (`crispy_secretmessage` in `crispy-doom.cfg`), off by
+  default; Karp does not set it.
 
 Loading a savegame needed Karp's copy of the level rebuilt (H11): `G_DoLoadGame` sets the level up
 (H4) and only then restores the saved world, every monster, item and mover replaced.
@@ -4284,6 +4297,40 @@ Who controls the player in a fight (the user's model):
   top of an item more than 1024 out of the way 21, now 2 (secrets, 1508 and 1864); the
   soulsphere picked up 3 to 15 s after it was gone for in both (head once never); areas seen
   42 of 46 in all; finished all 12, in 323 s on average, now 311.
+- **Episode 1, explorer, the user's second run** (2026-11-21, "mostly OK, no major issues", ammo
+  and health kept up all through):
+  - "In E1M9 during the final sweep there were stalls of the engine - it looked like a brain had
+    to think for too long". E1M9 from a pistol start with the same switches, 2 salts, every Karp
+    tic timed: the look at items each second (`ConsiderItems`) took up to 187 route searches
+    in one tic, 165 ms, every second for 10 s at a time; the sweep's look at places up to 95. An
+    item behind barrels was costed through all 48 spots round them, two searches each (86 to
+    93 a look); a box behind lift 124's walk-over line, 18. Two thirds of a search went on
+    judging crossings (`K_Graph_CanCross`: the door, lift and crusher thinkers, the portal's
+    clearance), the same ones over and over within the tic. Now each portal side is judged once
+    a tic (3.2.1: `JudgeOnce`; checked against fresh verdicts all through E1M9, E1M3 and E2M2,
+    none differed). A fix's spots are looked at by the least way through them, the 8 best at
+    most (FIX_SPOTS; going for the fix, all of them), and none that could not beat the best way
+    found; in the sweep, no place whose way could not be shorter than the nearest found
+    (`K_Path_LeastWay`, the search's own heuristic). E1M9 again: the worst tic 170 ms, now 37;
+    tics over 30 ms 25 to 32 a run, now 0 or 1. A Karp tic over 50 ms is logged ("slow tic"),
+    which found the cap needed: MAP25 without monsters, a megasphere behind a chain of barrels
+    costed through all 64 spots, 128 searches, 80 ms every second for 5 s; none now.
+  - "In E1M8, before exiting, the bot went for a long stroll on the open area - I guess this was
+    the explorer attitude kicking in": it was the sweep before the exit. At 1:19.7, at the exit,
+    28 places were not seen yet; 20 areas were gone to one after another, nearest first, for
+    57 s, one of them (area 26) 7397 out of the way and 11 s. An area counts as seen from
+    within PLACE_SEEN_REACH (1024) only, so the open area's parts were walked to one by one. Left
+    as it is (the user: long sweeps are OK); a longer seen reach under the sky would shorten it.
+  - The intermission and the secret message: 3.11 (fire pressed through the intermission; "A
+    secret is revealed!" is crispy's own option, off in the bot's `crispy-doom.cfg`, now on).
+  Pistol starts, salts 443, 71 and 7, against the batch before: E1M1 to E1M6 and E1M8 finished
+  20 of 21 in both, every run the same to the tenth of a second but E1M4's (a unit's drift in a
+  fight at 20.3 s, all three finished); Doom II MAP01 to 06, 10 and 15 finished 20 of 24, before
+  21 (MAP10 salt 7 at the 420 s limit on its way to the exit, MAP15 1 of 3 in both, its deaths a
+  lost soul and a baron again). No slow tic in any of the 45 runs. With the cap, MAP04 (the
+  shotguns behind barrels) and E1M9 ran as before it. Without monsters, Doom II's maps but
+  MAP07 (it needs them) all finished, in 1932 s against 1930 (MAP13 3.5 s more, the rest within
+  a second); two single slow tics, 51 and 53 ms, with seven games running at once.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

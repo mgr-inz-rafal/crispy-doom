@@ -313,7 +313,12 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // on to the item and on, and FIX_WORK for the work there (the user, Doom II
 // MAP04: the shotguns dropped behind barrels in a doorway, and a super
 // shotgun behind a door a switch opens, were left with the shells gone).
+// Of the fix's spots, the FIX_SPOTS with the least way through them are
+// looked at; going for the fix, every one (MAP25 without monsters: a
+// megasphere behind a chain of barrels costed through all 64 spots round
+// them, 128 route searches, 80 ms every second).
 #define FIX_WORK 300.0
+#define FIX_SPOTS 8
 
 // Telefrags (the user: map designers shut a monster in on a teleporter's
 // landing spot for the player to kill by teleporting onto it - E4M2's
@@ -490,7 +495,8 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // at 8 times in 90 s; E1M5: PlaceReach); never into the area of a live
 // Cyberdemon or spider mastermind. The
 // PLACE_ROUTES most promising (PLACE_SWEEP_ROUTES in the sweep: E1M2, the
-// two nearest had no way there, and the exit was reached before the next)
+// two nearest had no way there, and the exit was reached before the next;
+// none whose way could not be shorter than the nearest found)
 // are looked at by route every PLACE_CHECK_TICS, one too far for now not
 // again for ITEM_SKIP_TICS. One with no way there, or that did not work out
 // (the user: decoys, secrets a map's bugs put out of reach), is set aside
@@ -713,6 +719,8 @@ static int through_stamp;
 static int health_ring[FALL_TICS];
 static int fall_again;
 static candidate_t fix_candidates[MAX_CANDIDATES];
+static int fix_order[MAX_CANDIDATES];       // least way through them first
+static double fix_least[MAX_CANDIDATES];    // the least way through each
 
 static char outcome[K_LOG_LINE_LEN];    // how the list last emptied
 static char status[K_LOG_LINE_LEN * 2];
@@ -3723,6 +3731,27 @@ static void LeaveOpen(const k_path_t *path)
     }
 }
 
+// The fix's spots (fix_candidates) by the least way from start through each
+// on to spot (K_Path_LeastWay), least first: fix_order, fix_least.
+static void OrderFixCandidates(k_vec2_t start, k_vec2_t spot, int count)
+{
+    int i, k;
+
+    for (i = 0; i < count; ++i)
+    {
+        double least = K_Path_LeastWay(start, fix_candidates[i].at)
+                     + K_Path_LeastWay(fix_candidates[i].at, spot);
+
+        for (k = i; k > 0 && fix_least[fix_order[k - 1]] > least; --k)
+        {
+            fix_order[k] = fix_order[k - 1];
+        }
+
+        fix_order[k] = i;
+        fix_least[i] = least;
+    }
+}
+
 // The extra way an item takes: there and on to where the route goes, less
 // the way left; the way there (the work at a fix counted); and the health
 // the floors take there and on, less what they take on the way left. Ways
@@ -3733,7 +3762,11 @@ static void LeaveOpen(const k_path_t *path)
 // fix); through, if not NULL, what those on the way there would cost, the
 // route's too (WayThrough; 0 through a fix: never in a fight). Returns
 // false if there is no way there, or none on, or the waits there come to
-// more than wait_most.
+// more than wait_most. The fix's spots are looked at by the least way
+// through them first (OrderFixCandidates), FIX_SPOTS at most, and none
+// that could not beat the best way found (the user, E1M9: a box behind
+// barrels looked at through all 48 spots round them, two route searches
+// each, every second, the game stalling).
 static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
                           double remaining, double remaining_damage, boolean fixes,
                           double wait_most, double *detour, double *way, double *damage,
@@ -3783,12 +3816,19 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
         }
 
         count = Candidates(&fix, fix_candidates, MAX_CANDIDATES);
+        OrderFixCandidates(start, spot, count);
 
-        for (i = 0; i < count; ++i)
+        for (i = 0; i < count && i < FIX_SPOTS; ++i)
         {
+            k_vec2_t at = fix_candidates[fix_order[i]].at;
             double to_fix, to_fix_damage, to_fix_wait;
 
-            K_Path_Find(&fix_probe, start, cell, fix_candidates[i].at);
+            if (there >= 0.0 && fix_least[fix_order[i]] + FIX_WORK >= there)
+            {
+                break;
+            }
+
+            K_Path_Find(&fix_probe, start, cell, at);
 
             if (fix_probe.result != K_PATH_FOUND)
             {
@@ -3798,7 +3838,13 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
             to_fix = fix_probe.length + fix_probe.wait * WAIT_WAY;
             to_fix_damage = fix_probe.damage;
             to_fix_wait = fix_probe.wait;
-            K_Path_Find(&fix_probe, fix_candidates[i].at, -1, spot);
+
+            if (there >= 0.0 && to_fix + K_Path_LeastWay(at, spot) + FIX_WORK >= there)
+            {
+                continue;
+            }
+
+            K_Path_Find(&fix_probe, at, -1, spot);
 
             if (OpenOrFixed(&fix_probe, true, type, param)
              && to_fix_wait + fix_probe.wait <= wait_most
@@ -4793,6 +4839,15 @@ static boolean ConsiderPlaces(goal_t *goal)
         double reach = PlaceReach(place, stacking);
         double detour, way, damage, risk, cost;
         boolean fixed, one_way = false;
+
+        // In the sweep, none whose way there could not be shorter than the
+        // nearest found (K_Path_LeastWay; the user, E1M9: 16 places looked
+        // at by route at each turn of the sweep, up to 95 route searches in
+        // a tic).
+        if (sweep_since > 0 && best >= 0 && K_Path_LeastWay(start, place->spot) >= best_cost)
+        {
+            continue;
+        }
 
         if (!ItemDetour(start, player.cell, place->spot, end, remaining_way, remaining_damage,
                         !stacking, sweep_since > 0 ? PLACE_WAIT_MOST : ITEM_WAIT_MOST, &detour,

@@ -1226,6 +1226,15 @@ void K_Path_Find(k_path_t *path, k_vec2_t start, int from_cell, k_vec2_t goal)
                     / SDL_GetPerformanceFrequency();
 }
 
+double K_Path_LeastWay(k_vec2_t from, k_vec2_t to)
+{
+    map = K_Map_Get();
+    graph = K_Graph_Get();
+    goal_point = to;
+    PrepareTeleports();
+    return Heuristic(from);
+}
+
 void K_Path_SetBlockCost(k_blockcost_t cost)
 {
     block_cost = cost;

@@ -49,6 +49,8 @@
 
 #include "d_pwad.h" // [crispy] kex secret level
 
+#include "karp.h" // [Karp]
+
 //
 // Data needed to add patches to full screen intermission pics.
 // Patches are statistics messages, and animations.
@@ -1615,7 +1617,8 @@ void WI_drawStats(void)
     }
 
     // [crispy] exit early from the tally screen after ExM8
-    if (sp_state == 10 && ((gamemode != commercial && gamemap == 8) || (gameversion == exe_chex && gamemap == 5)))
+    if (sp_state == 10 && ((gamemode != commercial && gamemap == 8) || (gameversion == exe_chex && gamemap == 5))
+        && !K_HoldsTally()) // [Karp]
     {
 	acceleratestage = 1;
     }

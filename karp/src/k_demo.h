@@ -3,9 +3,9 @@
 //	Karp demo mode (karp/docs/plan.md, 3.11): -karpdemo plays on by itself,
 //	level after level, for as long as the game runs - an exhibition PC
 //	showing Doom all day. Each level's start is saved; a death loads it
-//	again with another salt; intermissions and text screens move on by
-//	themselves; the end of an episode starts the next (after the last, the
-//	first).
+//	again with another salt; intermissions are gone through with fire, text
+//	screens move on by themselves; the end of an episode starts the next
+//	(after the last, the first).
 //
 //	Plain C types only.
 //
@@ -30,6 +30,10 @@ void K_Demo_GameLoaded(void);
 
 // Once a game tic, after G_Ticker and the bot's own tic.
 void K_Demo_Tick(void);
+
+// Whether fire is pressed in the command being built: an intermission gone
+// through as a player would (K_Demo_Tick). True once for each press.
+int K_Demo_Fire(void);
 
 #ifdef __cplusplus
 }

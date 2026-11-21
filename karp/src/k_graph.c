@@ -198,6 +198,18 @@ static unsigned char *assumed_open;     // per sector, K_Graph_AssumeOpen
 static boolean assumed_any;
 static k_vec2_t *sector_min, *sector_max;   // per sector, its bounding box
 
+// Per portal side (2 * portal + 0 from its cell[0], + 1 from its cell[1]):
+// Judge's verdict this tic (JudgeOnce), valid while its stamp is
+// judged_now; judged_tic the leveltime they hold for.
+static int *judged_stamp;
+static unsigned char *judged_crossing;
+static double *judged_wait, *judged_beyond;
+static int judged_capacity;
+static int judged_now = 1;
+static int judged_tic = -1;
+
+static void ForgetJudged(void);
+
 // Per line: the teleporter it belongs to, -1 if none.
 static int *line_teleports;
 static int teleports_capacity;
@@ -1383,6 +1395,7 @@ void K_Graph_Build(void)
 
     graph.num_portals = 0;
     num_covers = 0;
+    ForgetJudged();
 
     CollectEdges(map);
     BuildGrid(map);
@@ -1405,6 +1418,7 @@ void K_Graph_Build(void)
     }
 
     graph.generation = map->generation;
+    ForgetJudged();
     graph.build_ms = (SDL_GetPerformanceCounter() - start) * 1000.0
                    / SDL_GetPerformanceFrequency();
 
@@ -1468,6 +1482,7 @@ static void StoppedSector(const k_map_t *map, int sector)
     }
 
     BuildLinks(map);
+    ForgetJudged();
 }
 
 void K_Graph_Tick(void)
@@ -2622,11 +2637,75 @@ static k_crossing_t Judge(int portal_index, int from, double *wait, double *beyo
     return crossing;
 }
 
+// Every verdict judged afresh: a portal added, or a lift's turns counted.
+static void ForgetJudged(void)
+{
+    if (++judged_now <= 0)
+    {
+        if (judged_stamp != NULL)
+        {
+            memset(judged_stamp, 0, judged_capacity * sizeof(*judged_stamp));
+        }
+
+        judged_now = 1;
+    }
+}
+
+// Judge, once a tic for each portal side: the heights, doors, lifts and
+// solid things change only as the world moves, and the route searches of a
+// tic ask of the same crossings again and again (the user, E1M9: looking at
+// items and places, up to 187 route searches in a tic, 165 ms with the game
+// stalling, two thirds of it judging crossings; 37 ms judged once). Judged
+// afresh each tic, after the graph or a lift's turns change, and always
+// while a door is assumed open (K_Graph_AssumeOpen).
+static k_crossing_t JudgeOnce(int portal_index, int from, double *wait, double *beyond)
+{
+    const k_portal_t *portal = &graph.portals[portal_index];
+    int slot;
+
+    if (assumed_any || (from != portal->cell[0] && from != portal->cell[1]))
+    {
+        return Judge(portal_index, from, wait, beyond);
+    }
+
+    if (2 * graph.num_portals > judged_capacity)
+    {
+        judged_capacity = 2 * SDL_max(2 * graph.num_portals, judged_capacity);
+        free(judged_stamp);
+        free(judged_crossing);
+        free(judged_wait);
+        free(judged_beyond);
+        judged_stamp = calloc(judged_capacity, sizeof(*judged_stamp));
+        judged_crossing = malloc(judged_capacity * sizeof(*judged_crossing));
+        judged_wait = malloc(judged_capacity * sizeof(*judged_wait));
+        judged_beyond = malloc(judged_capacity * sizeof(*judged_beyond));
+    }
+
+    if (judged_tic != leveltime)
+    {
+        judged_tic = leveltime;
+        ForgetJudged();
+    }
+
+    slot = 2 * portal_index + (from == portal->cell[0] ? 0 : 1);
+
+    if (judged_stamp[slot] != judged_now)
+    {
+        judged_stamp[slot] = judged_now;
+        judged_crossing[slot] = (unsigned char) Judge(portal_index, from, &judged_wait[slot],
+                                                      &judged_beyond[slot]);
+    }
+
+    *wait = judged_wait[slot];
+    *beyond = judged_beyond[slot];
+    return (k_crossing_t) judged_crossing[slot];
+}
+
 k_crossing_t K_Graph_CanCross(int portal, int from)
 {
     double wait, beyond;
 
-    return Judge(portal, from, &wait, &beyond);
+    return JudgeOnce(portal, from, &wait, &beyond);
 }
 
 void K_Graph_AssumeOpen(int sector)
@@ -3052,7 +3131,7 @@ double K_Graph_CrossingWait(int portal, int from, double *beyond)
 {
     double wait, past;
 
-    Judge(portal, from, &wait, &past);
+    JudgeOnce(portal, from, &wait, &past);
 
     if (beyond != NULL)
     {
@@ -3677,6 +3756,7 @@ int K_Graph_LiftTurnedBack(int sector)
     if (lift_turns != NULL && lift_turns[sector] < MAX_TURNS)
     {
         ++lift_turns[sector];
+        ForgetJudged();
     }
 
     return lift_turns != NULL ? lift_turns[sector] : 0;
@@ -3684,8 +3764,9 @@ int K_Graph_LiftTurnedBack(int sector)
 
 void K_Graph_LiftRidden(int sector)
 {
-    if (lift_turns != NULL)
+    if (lift_turns != NULL && lift_turns[sector] != 0)
     {
         lift_turns[sector] = 0;
+        ForgetJudged();
     }
 }

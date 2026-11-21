@@ -64,4 +64,9 @@ boolean K_OwnsControls(void);
 
 boolean K_AutoplayEnabled(void);
 
+// WI_drawStats: whether crispy's tally after an episode's last level waits
+// for fire like any other intermission, not leaving once counted - in demo
+// mode, which presses it (k_demo.h).
+boolean K_HoldsTally(void);
+
 #endif

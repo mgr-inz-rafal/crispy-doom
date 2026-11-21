@@ -12,7 +12,10 @@
 //	  or the bot died at once), the level starts again from scratch. Tried
 //	  for ever, never skipped (the user: a level no salt clears is one Karp
 //	  must learn to play);
-//	- an intermission moves on after INTERMISSION_WAIT;
+//	- an intermission is gone through with fire, as a player would (the
+//	  user): INTERMISSION_PRESS in, every stat shown at once; on after
+//	  INTERMISSION_WAIT of them, in Doom 1 by the map of the episode, left
+//	  INTERMISSION_PRESS later (TickIntermission);
 //	- a text screen between levels (Doom II) stays as long as Doom 1 shows
 //	  its own by itself - the text written out, and TEXT_WAIT more;
 //	- the end of an episode - its last text, then Doom 1's end picture for
@@ -46,7 +49,9 @@
 #define DEMO_SLOT 7
 #define DEATH_WAIT (3 * TICRATE)
 #define LEVEL_MOST (15 * 60 * TICRATE)
+#define INTERMISSION_PRESS TICRATE
 #define INTERMISSION_WAIT (5 * TICRATE)
+#define INTERMISSION_MOST (30 * TICRATE)
 #define TEXT_WAIT 250               // f_finale.c: TEXTWAIT, after TEXTSPEED a letter
 #define TEXT_SPEED 3
 #define END_WAIT (30 * TICRATE)
@@ -82,6 +87,11 @@ static int tries_map;
 // and whether Doom II's cast of characters has begun.
 static int text_tics;
 static boolean cast;
+
+// The intermission: the presses of fire made, and one for the command
+// being built (K_Demo_Fire).
+static int presses;
+static boolean fire;
 
 static void LevelName(char *buf, int buf_len)
 {
@@ -277,6 +287,54 @@ static void TickLevel(void)
     }
 }
 
+// Fire pressed through the intermission (WI_Ticker): the first press,
+// INTERMISSION_PRESS in, shows every stat at once; the next, after
+// INTERMISSION_WAIT of them, leaves them - in Doom II for the next level,
+// after an episode's last level for its end (crispy's tally there held
+// for it: K_HoldsTally), else in Doom 1 for the map of the episode, which
+// the third press leaves INTERMISSION_PRESS later. Still there after
+// INTERMISSION_MOST, on regardless.
+static void TickIntermission(void)
+{
+    static const char *what[] = { "every stat shown", "on to the next level",
+                                  "on to the map of the episode", "on to the end of the episode" };
+    boolean ends = gamemode != commercial && gamemap == 8;
+    int last = gamemode == commercial || ends ? 2 : 3;
+    int at = INTERMISSION_PRESS + (presses > 0 ? INTERMISSION_WAIT : 0)
+           + (presses > 1 ? INTERMISSION_PRESS : 0);
+
+    if (gameaction != ga_nothing)
+    {
+        return;
+    }
+
+    if (state_tics == INTERMISSION_MOST)
+    {
+        K_Log(K_LOG_SYS, K_LOG_INFO, "demo: the intermission still on after %d s - on to the "
+              "next level", INTERMISSION_MOST / TICRATE);
+        G_WorldDone();
+        return;
+    }
+
+    if (presses >= last || state_tics != at)
+    {
+        return;
+    }
+
+    K_Log(K_LOG_SYS, K_LOG_INFO, "demo: intermission - fire, %s",
+          what[presses == 0 ? 0 : presses == 2 ? 1 : ends ? 3 : last == 3 ? 2 : 1]);
+    ++presses;
+    fire = true;
+}
+
+int K_Demo_Fire(void)
+{
+    boolean press = fire && gamestate == GS_INTERMISSION;
+
+    fire = false;
+    return press;
+}
+
 static void TickFinale(void)
 {
     if (gameaction != ga_nothing)
@@ -322,6 +380,8 @@ void K_Demo_Tick(void)
         state = (int) gamestate;
         state_tics = 0;
         cast = false;
+        presses = 0;
+        fire = false;
         text_tics = (finaletext != NULL ? (int) strlen(finaletext) * TEXT_SPEED : 0) + TEXT_WAIT;
     }
     else if (!paused && !menuactive)
@@ -349,11 +409,7 @@ void K_Demo_Tick(void)
             break;
 
         case GS_INTERMISSION:
-            if (state_tics == INTERMISSION_WAIT && gameaction == ga_nothing)
-            {
-                K_Log(K_LOG_SYS, K_LOG_INFO, "demo: intermission over - on to the next level");
-                G_WorldDone();
-            }
+            TickIntermission();
             break;
 
         case GS_FINALE:
