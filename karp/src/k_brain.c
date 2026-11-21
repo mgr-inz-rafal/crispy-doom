@@ -485,9 +485,10 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // The monsters inside the areas on the way and the place's own count against
 // it, as for an item (DAMAGE_WAY). Only out of a fight, health OK and ammo
 // not LOW, no boss on the player, no other place on; on top of an item gone
-// for, but one that goes first (GoesFirst), within STACK_SHARE of its reach
-// (E1M2: items gone for one after another, a place looked at 8 times in 90
-// s); never into the area of a live Cyberdemon or spider mastermind. The
+// for, but one that goes first (GoesFirst), within STACK_SHARE of its reach,
+// in the sweep too (E1M2: items gone for one after another, a place looked
+// at 8 times in 90 s; E1M5: PlaceReach); never into the area of a live
+// Cyberdemon or spider mastermind. The
 // PLACE_ROUTES most promising (PLACE_SWEEP_ROUTES in the sweep: E1M2, the
 // two nearest had no way there, and the exit was reached before the next)
 // are looked at by route every PLACE_CHECK_TICS, one too far for now not
@@ -4631,12 +4632,16 @@ static int PlacesSweepable(void)
 }
 
 // How far out of its way the player may go for a place: on top of an item
-// gone for, STACK_SHARE of it; any way in the sweep.
+// gone for, STACK_SHARE of it, in the sweep too; else any way in the sweep.
+// Stacked any way, the nearest place by the way there was gone to first and
+// the item after, from wherever that was (the user, E1M5: the soulsphere 278
+// off, the secret doors to it opened, then left for an area by the exit 3272
+// off, "16989 units out of the way", and gone back for across the map).
 static double PlaceReach(const place_t *place, boolean stacking)
 {
     double reach = place->sector < 0 ? PLACE_AREA_REACH : PLACE_SECRET_REACH;
 
-    return sweep_since > 0 ? PLACE_SWEEP_REACH : stacking ? reach * STACK_SHARE : reach;
+    return stacking ? reach * STACK_SHARE : sweep_since > 0 ? PLACE_SWEEP_REACH : reach;
 }
 
 // An explorer's places off the way (PLACE_AREA_REACH), looked for as items

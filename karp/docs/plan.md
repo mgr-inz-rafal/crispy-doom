@@ -4082,7 +4082,8 @@ Who controls the player in a fight (the user's model):
     power-up and weapon the player would pick up is worth 10 and a 1536 detour (the
     invulnerability sphere only in the sweep). No walk-over exit crossed but the one gone for.
     The sweep is on every level, begun once GO TO EXIT is all that is left with a way, for the
-    places not seen too, any way off, the nearest first, 30 s of doors and lifts allowed; looked
+    places not seen too, any way off, the nearest first (on top of an item gone for still at
+    half the reach: 2026-11-21, the Episode 1 run), 30 s of doors and lifts allowed; looked
     for every tic within 256 of the exit; over when nothing is left, after 15 minutes, or with
     nothing new reached for 2 minutes. E1M2 from a pistol start: 254 s (default 74), kills 40 of
     41 (20), items 29 of 42 (2), secrets 5 of 6 (1), 42 of 71 areas; the 30 given up lie behind
@@ -4268,6 +4269,21 @@ Who controls the player in a fight (the user's model):
   all finished, in 1971 s against 1939 (MAP06's 7 s more a soulsphere gone for, the times
   else within 1 to 6 s).
   Left: the jump to (923,898) with monsters in its run-up.
+- **Episode 1, explorer, the user's run** (2026-11-21, `-karpexit secret -karpattitude
+  explorer`, "pretty healthy"): E1M5, the bot came up to the exit, turned back for the sweep,
+  opened the triple secret door to the soulsphere, "but then ignored the soulsphere and kept
+  exploring", and came back for it from the exit. The door was opened for it: the sweep sent
+  the bot to area 3 behind door 423, the soulsphere was gone for from there (396 off), doors 613
+  and 575 opened on the way. 278 off it, the sweep put an area by the exit on top of it, 3272
+  off ("16989 units out of the way"): in the sweep a place went on top of an item gone for any
+  way off, the nearest by the way there, the item underneath not counted. The same 12 times in
+  the run (E1M1, E1M3 to E1M5; places 3000 to 17000 out of the way on a blue armour, health
+  bonuses, a clip). Now on top of an item it is half the reach in the sweep too (2048 of
+  detour for an area, 4096 for a secret, halved); further places wait for the item, and are
+  chosen from where it lay. E1M5 from the user's save, 6 salts, head against new: places on
+  top of an item more than 1024 out of the way 21, now 2 (secrets, 1508 and 1864); the
+  soulsphere picked up 3 to 15 s after it was gone for in both (head once never); areas seen
+  42 of 46 in all; finished all 12, in 323 s on average, now 311.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
