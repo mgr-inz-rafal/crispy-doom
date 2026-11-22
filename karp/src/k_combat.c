@@ -4617,15 +4617,41 @@ static double Room(k_vec2_t me, double ux, double uy, double floor, boolean hurt
     return (free - MOVE_LOOK) / (ROOM_REACH - MOVE_LOOK);
 }
 
+static boolean BallClear(const player_t *player, k_vec2_t from, double facing,
+                         const k_monster_t *monster, const weapon_t *weapon);
+
+// Whether the shots of the gun wanted (or in hand) find the target from a
+// spot: its line of fire, or for one that fires a ball, the ball's way
+// (BallClear), as the trigger judges it (the user, E4M2: "holding a plasma
+// against a baron, but not shooting constantly, just barely scratching the
+// trigger" - on the sill of door 9, the baron in the corridor behind it,
+// the balls' way grazed the corner of its opening, 48 wide, and the
+// trigger was let go for each one; 40 units along the sill they got
+// through).
+static boolean ShotsFind(const player_t *player, k_vec2_t at, double gun,
+                         const k_monster_t *target)
+{
+    const weapon_t *weapon = WeaponOf(wanted >= 0 ? wanted : player->readyweapon);
+
+    if (weapon != NULL && weapon->flies)
+    {
+        return BallClear(player, at, atan2(target->at.y - at.y, target->at.x - at.x), target,
+                         weapon);
+    }
+
+    return K_Sight_Aim(at.x, at.y, gun, target->at.x, target->at.y, target->z,
+                       target->z + target->height);
+}
+
 // Where to move while fighting: each of MOVE_WAYS directions that can be
 // walked, over no trip, scored by the side strafed to (and across the line
 // of fire rather than along it), the distance from where the fight began
 // (holding, from the spot held at, on a shorter leash: back off a door) -
 // none while pressed - and the awake monsters nearer than they are kept off
 // (KEEP_PUSH), which it backs away from, pressed toward the room to back
-// off further; keeping the target where the shots find it (the user:
-// strafing into a corridor and out, the bot looked to be peeking round the
-// corner), and open floor before a passage; out of the sight of the other
+// off further; keeping the target where the shots find it (ShotsFind; the
+// user: strafing into a corridor and out, the bot looked to be peeking round
+// the corner), and open floor before a passage; out of the sight of the other
 // monsters that shoot (Exposure); and out of the way of projectiles
 // (THREAT_WEIGHT). Round the monster by its place in the list: the target,
 // or in a standoff the hopeless one kept off (AVOID_PAST), which is not
@@ -4793,8 +4819,7 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
               + 0.3 * K_Graph_Clearance(far, OPEN_REACH) / OPEN_REACH
               + MOVE_KEEP * SDL_max(0.0, ux * was.x + uy * was.y);
 
-        if (!standoff && !K_Sight_Aim(far.x, far.y, gun, target->at.x, target->at.y, target->z,
-                                      target->z + target->height))
+        if (!standoff && !ShotsFind(player, far, gun, target))
         {
             score -= 1.5;
         }
@@ -5069,10 +5094,14 @@ static void EndBattle(const player_t *player, const char *why)
 }
 
 // An island: the dry floor the player can walk to from its cell without
-// stepping onto a floor that hurts fits within ISLAND_SPAN either way, in
-// ISLAND_CELLS cells at the most, and such a floor lies round it - not a
-// small room shut all round. Looked at again when the player's cell
-// changes.
+// stepping onto a floor that hurts, or down off a ledge (no fight's step
+// does: Steppable), fits within ISLAND_SPAN either way, in ISLAND_CELLS
+// cells at the most, and such a floor or drop lies round it - not a small
+// room shut all round (E4M2: the sill of door 9, 64 wide between the
+// nukage and a pit 136 down, and the corridor behind it over the west room;
+// every way to step aside from the cacodemons' balls cost more, and the bot
+// stood there and died, 3 runs of 6). Looked at again when the player's
+// cell changes.
 #define ISLAND_SPAN 192.0
 #define ISLAND_CELLS 32
 
@@ -5092,7 +5121,7 @@ static boolean OnIsland(int cell)
     const k_graph_t *graph = K_Graph_Get();
     int queue[ISLAND_CELLS];
     int head = 0, tail = 0, k, i;
-    boolean slime = false, island = true;
+    boolean rim = false, island = true;
     k_vec2_t min, max;
 
     if (cell == last_cell && map->generation == last_generation)
@@ -5127,9 +5156,10 @@ static boolean OnIsland(int cell)
                 continue;
             }
 
-            if (CellHurts(link->neighbor))
+            if (CellHurts(link->neighbor)
+             || K_Map_CellFloor(link->neighbor) < K_Map_CellFloor(at) - MAX_CLIMB)
             {
-                slime = true;
+                rim = true;
                 continue;
             }
 
@@ -5156,7 +5186,7 @@ static boolean OnIsland(int cell)
         }
     }
 
-    last_island = island && slime;
+    last_island = island && rim;
     return last_island;
 }
 
@@ -5230,7 +5260,7 @@ static void UpdateBattle(const player_t *player)
     {
         EndBattle(player, flee ? escape_why
                         : burning ? "the floor hurts, going on to dry floor"
-                        : "a floor that hurts all round, going on off it");
+                        : "a floor that hurts or a drop all round, going on off it");
     }
     else if (battle && calm >= BATTLE_CALM)
     {

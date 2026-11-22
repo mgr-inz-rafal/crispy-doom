@@ -125,6 +125,15 @@
 #define CAREFUL_TURN 20.0
 #define CAREFUL_ADVANCE 8.0
 
+// A jump's run-up start the route turns into by more than CAREFUL_TURN is
+// careful wherever it is, and stopped at: the run goes on once slower than
+// JUMP_START_SPEED. A jump is found from a standing start (k_jump.c); come
+// to at a corner's speed, the run kept the momentum across its way, slower
+// along it, and fell short (E4M2: off the cross's south arm onto the sill
+// of door 9, a run-up of 8, come to from the north at 8 units a tic - off
+// the edge at 4.6, 10 units off the line, and down into the nukage).
+#define JUMP_START_SPEED 1.0
+
 // Within the advance radius of a waypoint, the target moves on to the next
 // one only if the player can go straight there: its box off walls by more
 // than CUT_CLEARANCE (K_Graph_Clearance) over the first CUT_LOOK units of
@@ -243,6 +252,19 @@
 #define DRY_SPEED 10.0
 #define DRY_SAVING 32.0
 
+// A jump with a monster in its way (K_Jump_InTheWay) is waited for at its
+// run-up's start, coming up to it within JUMP_HOLD_REACH: run into it, the
+// player stops in the air and falls (E4M2: a cacodemon over the inner pit,
+// the bot down in the nukage at 6 health). A fight may begin meanwhile.
+// Hurt while waiting, or with it still there after JUMP_HOLD_MOST, the
+// jump is run all the same (never stuck, nor shot standing: the user, E4M2,
+// "looking at a baron and shaking like crazy, waiting to be shot" - one on
+// the ledge beyond the landing, left alone as it could not come at the
+// player, its balls took the bot from 71 to 7 in the 7 s, each sidestep
+// pulled back to the start), and not waited for again on this route.
+#define JUMP_HOLD_REACH 256.0
+#define JUMP_HOLD_MOST (10 * TICRATE)
+
 // Sliding along walls: within AVOID_DISTANCE of anything that stops the
 // player (its radius is 16), the part of the velocity toward it is
 // dropped; touching it, the player eases away at AVOID_PUSH.
@@ -333,6 +355,15 @@ static action_t action;
 static int dry_point = -1;
 static double dry_back;
 static int dry_since;
+
+// Waiting for a jump's way to clear (JUMP_HOLD_MOST): the waypoint its
+// run-up starts at, which the target stops at, -1 when not; since when
+// (status.tics), and the player's health then; the jump run all the same on
+// this route, -1 if none.
+static int jump_hold = -1;
+static int jump_hold_since;
+static double jump_hold_health;
+static int jump_run_anyway = -1;
 
 // Running under a crusher: the route crossing into it, which reads open
 // meanwhile, -1 when not; the crusher, the route cell past it, where the
@@ -623,13 +654,15 @@ static int NextClosedCrossing(void)
 }
 
 // The furthest waypoint the target may move to: not past a crossing that
-// is not open yet, nor where the player waits dry.
+// is not open yet, nor where the player waits dry or for a jump's way to
+// clear.
 static int TargetLimit(void)
 {
     int r = NextClosedCrossing();
     int limit = r >= 0 ? ExitPoint(r) : path.num_points - 1;
 
-    return dry_point >= 0 ? SDL_min(limit, dry_point) : limit;
+    limit = dry_point >= 0 ? SDL_min(limit, dry_point) : limit;
+    return jump_hold >= 0 ? SDL_min(limit, jump_hold) : limit;
 }
 
 // Where the player waits dry: dry_back short of dry_point, back along the
@@ -716,11 +749,26 @@ static double CarefulSpeed(int k)
     return DROP_DRIFT / tics;
 }
 
+// Whether the player stops at waypoint k, a jump's run-up start, before the
+// run (JUMP_START_SPEED): the route turns into it, and it is no floor that
+// sinks (Doom II MAP08's pillars: stopped on one, the next jump is too
+// high).
+static boolean StopsForJump(int k)
+{
+    const k_map_t *map = K_Map_Get();
+    int cell = K_Map_CellAt(path.points[k].x, path.points[k].y);
+
+    return path.legs[k] == K_LEG_JUMP && careful[k]
+        && (cell < 0
+            || !K_Graph_FloorSinking(map->subsectors[map->cells[cell].subsector].sector));
+}
+
 // The speed to take a waypoint at, from how sharply the route turns there,
 // out of the top speed there (careful near an edge). 0 in front of a door
 // or lift; full speed into a teleporter, which stops the player anyway,
 // and out of one, where there is no corner, and at a jump's touchdown,
-// reached in the air. A jump's run-up start is a corner like any other.
+// reached in the air. A jump's run-up start is a corner like any other,
+// but one the route turns into, stopped at (JUMP_START_SPEED).
 static double CornerSpeed(int k)
 {
     k_vec2_t a = path.points[k - 1], b = path.points[k], c = path.points[k + 1];
@@ -733,6 +781,11 @@ static double CornerSpeed(int k)
     if (path.legs[k] == K_LEG_TELEPORT || path.legs[k - 1] != K_LEG_WALK)
     {
         return tuning.max_speed;
+    }
+
+    if (StopsForJump(k))
+    {
+        return 0.0;
     }
 
     crossing = path.leg_cells[k] != r ? CrossingOut(r) : K_CROSS_OPEN;
@@ -793,9 +846,14 @@ static boolean CanAdvance(k_vec2_t at, int k)
 {
     int r = NextClosedCrossing();
 
+    if (StopsForJump(k))
+    {
+        return status.speed < JUMP_START_SPEED;
+    }
+
     return Distance(at, path.points[k]) < CAREFUL_ADVANCE || path.legs[k] != K_LEG_WALK
         || (k > 0 && path.legs[k - 1] != K_LEG_WALK)
-        || (r >= 0 && k + 1 == ExitPoint(r)) || k + 1 == dry_point
+        || (r >= 0 && k + 1 == ExitPoint(r)) || k + 1 == dry_point || k + 1 == jump_hold
         || StraightClear(at, path.points[k + 1]);
 }
 
@@ -818,7 +876,7 @@ static double SpeedLimit(const body_t *body, int target)
     for (k = target; k <= last && along < LOOKAHEAD; ++k)
     {
         // Waiting dry, the stop is short of the waypoint.
-        double corner = k == last || k == dry_point ? 0.0 : CornerSpeed(k);
+        double corner = k == last || k == dry_point || k == jump_hold ? 0.0 : CornerSpeed(k);
         double ahead = k == dry_point ? SDL_max(along - dry_back, 0.0) : along;
         double braking = careful[k] ? tuning.braking * CAREFUL_BRAKING : tuning.braking;
 
@@ -2337,7 +2395,8 @@ static double CellFloor(int cell)
 }
 
 // Which route points to take carefully: near an edge, where the route
-// turns or steps down. The edge is judged from the floor before the point.
+// turns or steps down, and a jump's run-up start it turns into
+// (JUMP_START_SPEED). The edge is judged from the floor before the point.
 static void MarkCareful(void)
 {
     double turn_cos = cos(CAREFUL_TURN * K_PI / 180.0);
@@ -2361,6 +2420,12 @@ static void MarkCareful(void)
                      && ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y))
                         / (in * out) < turn_cos;
 
+        if (path.legs[k] == K_LEG_JUMP && path.legs[k - 1] == K_LEG_WALK)
+        {
+            careful[k] = turns;
+            continue;
+        }
+
         if (path.legs[k] != K_LEG_WALK || path.legs[k - 1] != K_LEG_WALK
          || (!turns && after >= before))
         {
@@ -2375,6 +2440,8 @@ static void StartRoute(void)
 {
     MarkCareful();
     dry_point = -1;
+    jump_hold = -1;
+    jump_run_anyway = -1;
     crusher_run = -1;
     unstick_tics = 0;
     status.target = 1;
@@ -2559,7 +2626,8 @@ static void TrackJump(const k_pose_t *pose, k_vec2_t at)
             if (OnJump(status.target))
             {
                 K_Log(K_LOG_NAV, K_LOG_INFO, "running up for the jump to (%.0f,%.0f)",
-                      path.points[status.target].x, path.points[status.target].y);                jump_phase = JUMP_RUNUP;
+                      path.points[status.target].x, path.points[status.target].y);
+                jump_phase = JUMP_RUNUP;
                 runup_floor = pose->floor;
             }
             break;
@@ -2801,6 +2869,64 @@ static void UpdateDry(void)
     }
 }
 
+// Whether the player waits for a jump's way to clear, and where (jump_hold):
+// the first leg ahead that is not walked, short of anything else that stops
+// the target, is a jump whose run-up starts within JUMP_HOLD_REACH, and a
+// monster is in its way (JUMP_HOLD_MOST). Judged again every tic until the
+// run-up begins.
+static void UpdateJumpHold(k_vec2_t at)
+{
+    const k_graph_t *graph = K_Graph_Get();
+    int was = jump_hold;
+    int jump = -1, limit, k;
+    k_vec2_t monster;
+
+    jump_hold = -1;
+    limit = TargetLimit();
+
+    if (action.kind == K_ACTION_NONE && jump_phase == JUMP_NONE && !OnJump(status.target))
+    {
+        for (k = SDL_max(status.target, 0); k < limit && path.legs[k] == K_LEG_WALK; ++k)
+        {
+        }
+
+        if (k < limit && path.legs[k] == K_LEG_JUMP
+         && Distance(at, path.points[k]) < JUMP_HOLD_REACH)
+        {
+            jump = graph->portals[path.portals[path.leg_cells[k] - 1]].jump;
+
+            if (jump >= 0 && jump != jump_run_anyway && K_Jump_InTheWay(jump, &monster))
+            {
+                jump_hold = k;
+            }
+        }
+    }
+
+    if (jump_hold >= 0 && was != jump_hold)
+    {
+        jump_hold_since = status.tics;
+        jump_hold_health = K_Map_PlayerHealth();
+        K_Log(K_LOG_NAV, K_LOG_INFO, "waiting at (%.0f,%.0f) for the jump to (%.0f,%.0f): a "
+              "monster at (%.0f,%.0f) is in its way", path.points[k].x, path.points[k].y,
+              path.points[k + 1].x, path.points[k + 1].y, monster.x, monster.y);
+    }
+    else if (jump_hold >= 0 && (status.tics - jump_hold_since >= JUMP_HOLD_MOST
+                                || K_Map_PlayerHealth() < jump_hold_health))
+    {
+        K_Log(K_LOG_NAV, K_LOG_INFO, "running the jump all the same - a monster at (%.0f,%.0f) "
+              "still in its way %s %.1f s", monster.x, monster.y,
+              K_Map_PlayerHealth() < jump_hold_health ? "and the player hurt, after" : "after",
+              (double) (status.tics - jump_hold_since) / TICRATE);
+        jump_run_anyway = jump;
+        jump_hold = -1;
+    }
+    else if (jump_hold < 0 && was >= 0)
+    {
+        K_Log(K_LOG_NAV, K_LOG_INFO, "going on after waiting %.1f s for the jump's way to clear",
+              (double) (status.tics - jump_hold_since) / TICRATE);
+    }
+}
+
 k_navstate_t K_Nav_Tick(void)
 {
     k_pose_t pose;
@@ -2852,6 +2978,7 @@ k_navstate_t K_Nav_Tick(void)
     last_at = at;
     last_floor = pose.floor;
     UpdateDry();
+    UpdateJumpHold(at);
 
     if (unstick_tics > 0)
     {
@@ -2899,8 +3026,10 @@ k_navstate_t K_Nav_Tick(void)
     }
 
     // Standing still is the point while working a door or lift, or waiting
-    // dry; the action has its own time limits, and the wait its end.
-    if ((action.kind != K_ACTION_NONE && action.phase != PHASE_APPROACH) || dry_point >= 0)
+    // dry or for a jump's way to clear; the action has its own time limits,
+    // and the wait its end.
+    if ((action.kind != K_ACTION_NONE && action.phase != PHASE_APPROACH) || dry_point >= 0
+     || jump_hold >= 0)
     {
         history_count = 0;
         history_next = 0;
@@ -2998,6 +3127,7 @@ void K_Nav_Reset(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    jump_hold = -1;
     crusher_run = -1;
     unstick_tics = 0;
     stray_teleports = 0;
@@ -3318,6 +3448,7 @@ void K_Nav_Clear(void)
     have_goal = false;
     cross_first = false;
     dry_point = -1;
+    jump_hold = -1;
     crusher_run = -1;
     unstick_tics = 0;
     stray_teleports = 0;

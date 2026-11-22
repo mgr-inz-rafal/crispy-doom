@@ -618,8 +618,10 @@ near-perfect conditions; found at level load, judged live.
 - **Long run-ups.** Where neither run-up gives a jump off a point, a long one is tried: up to 320
   units, over floors within a step of one another, up or down, kept with 90% of the thrust
   instead of 85% (the user's choice), the margin each jump keeps (`k_jump_t.margin`) and is judged
-  with live. The run counts a step down with nothing lower passed over as more run-up, and so
-  does nav (3.4). Doom II MAP20: the way to line 271 is a jump off the foot of a walkway that steps
+  with live; however far below the takeoff it starts, each floor within a step of the last (E4M2:
+  up the stairs from the start room onto the ledge, 144 over the nukage onto the cross, 2026-11-22).
+  The run counts a step down or up with nothing lower passed over as more run-up, and so does nav
+  (3.4): a floor walked up to is no landing. Doom II MAP20: the way to line 271 is a jump off the foot of a walkway that steps
   down from 208 to 160, 8 or 16 at a time, over 240 units of blood onto a ledge in a wall opening
   (floor 72, ceiling 200); it needs about 14 units a tic, which 128 units of level floor do not
   give. At full speed it has about 11% to spare, short of the 15% the usual margin asks (the user
@@ -1102,7 +1104,8 @@ up from the player's current one on first.
   up, or blocked), the route is replanned.
 
 **Jumps on the route** (3.2.2). A jump that works is run like an open crossing: no stop at the
-run-up's start, a corner like any other on the way to it. From there the bot runs straight at
+run-up's start, a corner like any other on the way to it - but where the route turns into it by
+more than 20 degrees (below). From there the bot runs straight at
 full speed along the line to the touchdown, eased back onto the line while on the ground
 (nothing steers in the air, and the run was checked clear, so walls and solid things are not
 gone round). The speed profile does not brake for anything past it.
@@ -1129,13 +1132,19 @@ gone round). The speed profile does not brake for anything past it.
   "landed at (x,y)", and no "dropped" while flying over the gap. Off the edge means off the
   ground over a floor more than a step below the one the run-up was last on: a step down on the
   way is still run-up (MAP20's long run-up down a walkway, 3.2.2).
-- Not yet: a run-up's start is approached like any corner, at up to a fifth of top speed through
-  a sharp turn and turning within 32 units of it. A short run-up has no room to undo that: MAP09's
-  jump out of door 33 (26 units of run-up, 7.4 a tic at the edge from a standing start) was left
-  at 2.7 and missed once (5 s). Stopping at the start and driving right up to it fixed that jump,
-  but then the hop just before it (37 units, across a narrow gap, never off the ground) was not
-  seen to be over and the bot ran on along its line into a lift's pit; tried and taken back, to
-  look into.
+- A run-up's start the route turns into by more than 20 degrees is stopped at: the run goes on
+  once slower than a unit a tic (JUMP_START_SPEED; not on a floor that sinks). Approached like any
+  corner, at up to a fifth of top speed through a sharp turn and turning within 32 units of it, a
+  short run-up had no room to undo that: MAP09's jump out of door 33 (26 units of run-up, 7.4 a
+  tic at the edge from a standing start) was left at 2.7 and missed once (5 s); E4M2's hop off
+  the cross onto the sill of door 9 (8 of run-up), come to from the north at 8 a tic, left at 4.6,
+  10 off its line, short into the nukage (2026-11-22). An earlier try, stopping at every start
+  and driving right up to it, fixed MAP09's jump, but the hop just before it (37 units, across a
+  narrow gap, never off the ground) was not seen to be over and the bot ran on along its line
+  into a lift's pit; taken back then. Now only the turned-into starts, and the target moves on
+  as for any careful point: MAP09 without monsters runs its jumps as before, none missed.
+- A monster in the jump's way (K_Jump_InTheWay) is waited for at the run-up's start, up to 10 s,
+  or until the player is hurt (2026-11-22, 7.8: "E4M2, the lock").
 
 **Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
 before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
@@ -4358,6 +4367,61 @@ Who controls the player in a fight (the user's model):
   fight at 81.9 s, 336 and 383 s against 223 and 207, more kills and secrets). No slow tic, no
   stray teleport. Left: the sweep's first look at places, once a level, 57 to 93 ms on E4M3
   (16 places by route, 1.1 ms a search there).
+- **E4M2, the lock** (2026-11-22; below, "Navigation, left for later"): no way to any switch, key
+  or exit, from every salt - the bot idled at the start, or died wading in the nukage. The
+  level begins with a running jump: up the stairs by the start onto a platform (sector 23 or
+  39, floor 32), off it north 144 units over the nukage pit (sector 4, -128) onto a south arm
+  of the cross (6 or 31, floor 16); every other way out of the pit goes round to the start (the
+  stairs from 49 to 36, line 383). It needs about 12.4 units a tic off the edge, some 177 units
+  of run-up at the margin's thrust; a run-up began no more than a step below the takeoff
+  (`k_jump.c` RunUp), here the foot of the platform's 8-unit stairs, 128 back: 12.9 at full
+  thrust, 11.5 at 85%. Now a long run-up climbs any number of steps, and a step climbed on the
+  run-up raises the takeoff and the lowest floor passed over with it (Run, as a step down
+  lowered them already) - else the stairs' top counted as landed on. Over the 68 maps of both
+  games: 25 jumps more (E4M2's three; E3M7, E4M3, E4M8, MAP09, MAP16, MAP19, MAP20, MAP27),
+  about 200 fewer - each of those whose cell no other jump lands in checked, a walk up or down
+  stairs (MAP24: off a platform 48 down into a pit, on across it and up two steps of 24, landed
+  "too high to climb to"). E4M2 without monsters: normal exit 6 of 6 (70 to 76 s) - the jump
+  onto the cross, door 9, switches 166 and 649, the yellow key, the cross's NE arm, a jump into
+  the east cave, the blue key, the stairs, line 613, the exit; secret exit, explorer, 6 of 6
+  (88 to 108 s), 3 secrets of 3. E3M7 and E4M3 without monsters as before, to the tenth of a
+  second.
+  With monsters, from a pistol start, still none of 6 finished, but on 49 to 180 s against 17
+  to 59 (34 on average). From those runs:
+  - An island (`k_combat.c` OnIsland, no fight begun or kept on one) is ringed by drops as by
+    floors that hurt: no fight steps down one (Steppable). The sill of door 9, 64 wide between
+    the nukage and a pit 136 down, the corridor behind it over the west room: 3 runs of 6 died
+    there, every way to step aside from the cacodemons' balls dearer than the hit; there was
+    always open floor below, down a drop.
+  - A monster in a jump's way (`K_Jump_InTheWay`: its box within reach of the run's, at a
+    height the player passes, 32 further when awake) is waited for at the run-up's start
+    (`k_nav.c` UpdateJumpHold, JUMP_HOLD_MOST): a cacodemon over the inner pit stopped the bot
+    in the air, down into the nukage at 6 health. Hurt while waiting, or after 10 s, the jump
+    is run all the same (the user: "looking at a baron and shaking like crazy, waiting to be
+    shot" - one beyond the landing, 64 then, left alone as it could not come at the player;
+    its balls took the bot from 71 to 7 in 7 s, each sidestep pulled back to the start).
+  - A jump's run-up start the route turns into is stopped at (JUMP_START_SPEED; not on a
+    floor that sinks, MAP08): jumps are found from a standing start. The hop off the cross
+    onto the sill, 8 of run-up, come to from the north at 8 units a tic, left the edge at 4.6,
+    10 off the line, and fell short into the nukage (2 of 6 runs); none missed since, in 24
+    runs.
+  - A fight with a gun that fires balls keeps where the balls get through (ShotsFind, as the
+    trigger judges them: BallClear; the user: "holding a plasma against a baron, but not
+    shooting constantly, just barely scratching the trigger" - from the sill's end, the balls
+    grazed the corner of the corridor's opening, 48 wide, the trigger let go for each, 20 tics
+    lost every time; 40 units along the sill they got through).
+  Left: the pistol start's barons - the bot back on the sill at 22 to 35 health, a baron in the
+  corridor behind it 70 to 120 off.
+  Regression: Doom II without monsters, 28 maps, all finished, 1928.5 s against 1934.9 (MAP06
+  5.5 s less, MAP29 2.1 more); MAP08's sinking pillars as before; no jump missed. Pistol starts,
+  salts 443, 71 and 7: E1M1 to E1M6 and E1M8 20 of 21 as before; Doom II MAP01 to 06, 10 and 15
+  16 of 24 against 21 - MAP06 two dead at 42 s (a hell knight beside the teleporter's landing at
+  (32,992)), MAP03 one at 13.5 s (imps clawing up from the pit beside the landing of the jump to
+  (2314,3540)), MAP05 and MAP10 one each. The builds part early by drift: MAP06 at 14.9 s, the
+  bot some 20 units back on its way to the lift jump's start (the stop before it), MAP03 0.2 to
+  0.8 s later off its jump (the stop; a wait for an imp). Six salts more, the jump fix alone
+  against all of it: MAP06 2 of 6 against 4 (of 9: 4 against 5), MAP03 5 of 6 each (of 9: 8
+  against 7); the jump fix alone died by MAP06's hell knight at 41 s too.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
@@ -4374,7 +4438,8 @@ Who controls the player in a fight (the user's model):
     secret exit's and the cage lift's (618) are blocked by steps of 144 to 160 out of the
     nukage pit (sector 4, floor -128) and a jump at (-16,823) that does not work; the bot
     walks about and dies in the pit at 10 s, or idles. The telefrag of its Cyberdemon (the
-    WR teleporter at (160,992), its booth opened by walk-over line 613) waits on this.
+    WR teleporter at (160,992), its booth opened by walk-over line 613) waits on this. Done
+    (2026-11-22, above: "E4M2, the lock" - run-ups up stairs).
   - Steps across a strip narrower than the player (the user, E2M7: a box of shells on a crate
     in the north-east room, up small crates 16 apart, never gone for). The first small crate
     (floor 16) and the big one (32) are 8 apart, the room's floor (0) between them in a cell

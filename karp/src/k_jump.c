@@ -66,7 +66,9 @@
 // long one of up to RUNUP_LONG, over floors a step up or down from one
 // another (Doom II MAP20: off the foot of a walkway that steps down 8 at a
 // time, over 240 units of blood, which 128 units of run-up are too short
-// for).
+// for), however far below the takeoff it starts (E4M2: up the stairs from
+// the start room onto the ledge, off it 144 units over the nukage onto the
+// cross; from the stairs' foot, 128 units back, too slow with the margin).
 #define RUNUP_MAX 128.0
 #define RUNUP_STEP 8.0
 #define RUNUP_SHORT 8.0
@@ -107,6 +109,11 @@ static const double ray_angles[] = { 0.0, 25.0, -25.0, 45.0, -45.0 };
 // Only this many jumps are logged one by one (and as many of those found
 // as if a sector had moved).
 #define MAX_REPORTS 12
+
+// A monster awake within JUMP_CLEAR of the run, beyond touching it, is in
+// its way (K_Jump_InTheWay): it can come into it while the player runs (a
+// baron or a cacodemon about 50 units in the run-up and flight).
+#define JUMP_CLEAR 32.0
 
 // Searching as if a sector had moved: the edges this near it, and up to
 // MAX_TARGETS places its lines send it.
@@ -648,9 +655,11 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
         // On the ground, its centre over the floor it stands on: landed if
         // that is too high to climb to from the lowest floor passed over,
         // and it stops there; if it cannot stop, it runs on (a pillar's top
-        // on the way). Fell if it is down among them. Down a step with
-        // nothing lower passed over, the run-up goes on from there. Over an
-        // edge, the box still stands on the floor it is leaving.
+        // on the way). Fell if it is down among them. A step down or up with
+        // nothing lower passed over, the run-up goes on from there: a floor
+        // walked up to is no landing (E4M2: up the stairs from the start
+        // onto the ledge over the nukage, their top step counted as landed
+        // on). Over an edge, the box still stands on the floor it is leaving.
         if (body.z <= body.floorz && fabs(Floor(under) - body.floorz) < 0.01)
         {
             if (body.floorz > lowest + MAX_STEP)
@@ -676,6 +685,10 @@ static void Run(k_vec2_t start, k_vec2_t dir, double thrust, run_t *run)
             {
                 takeoff = body.floorz;
                 left_ground = false;
+            }
+            else if (!left_ground && body.floorz > takeoff + 0.01 && lowest > takeoff - 0.01)
+            {
+                takeoff = lowest = body.floorz;
             }
         }
     }
@@ -821,8 +834,9 @@ static k_vec2_t Back(k_vec2_t at, k_vec2_t dir, double back)
 // floors below it that the player only climbs from, up to a step below:
 // going up a step costs no speed (Doom II MAP14: the jump over a channel to
 // the red key starts from a step 16 deep, run up to from the corridor
-// before it). With steps, it also goes over floors that step down on the
-// way to the edge, each within a step of the last. Its centre never crosses
+// before it). With steps, it goes over floors that step down or up on the
+// way to the edge, each within a step of the last, however far below the
+// takeoff (E4M2: up the stairs from the start room). Its centre never crosses
 // a door's side: nav would not know to open the door on the way.
 static double RunUp(k_vec2_t at, k_vec2_t dir, double from_floor, int from_sector, double max,
                     boolean steps)
@@ -841,7 +855,7 @@ static double RunUp(k_vec2_t at, k_vec2_t dir, double from_floor, int from_secto
 
         if (!CheckPosition(x, y, &floorz, &ceilingz)
          || floorz > last + (steps ? MAX_STEP : 0.0) + 0.01
-         || floorz < from_floor - MAX_STEP - 0.01
+         || (!steps && floorz < from_floor - MAX_STEP - 0.01)
          || (steps && floorz < last - MAX_STEP - 0.01)
          || ceilingz - floorz < PLAYER_HEIGHT
          || Floor(sector) < (steps ? floorz : from_floor) - MAX_STEP - 0.01
@@ -1229,4 +1243,48 @@ int K_Jump_Possible(int jump)
     }
 
     return possible[jump];
+}
+
+int K_Jump_InTheWay(int jump, k_vec2_t *at)
+{
+    const k_jump_t *j = &jumps[jump];
+    double low = SDL_min(j->from_floor, j->land_floor) - MAX_STEP;
+    double high = SDL_max(j->from_floor, j->land_floor) + PLAYER_HEIGHT;
+    double dx = j->land.x - j->start.x, dy = j->land.y - j->start.y;
+    double length2 = dx * dx + dy * dy;
+    const thinker_t *thinker;
+
+    for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
+    {
+        const mobj_t *mo = (const mobj_t *) thinker;
+        double x, y, z, t, reach;
+
+        if (thinker->function.acp1 != (actionf_p1) P_MobjThinker || mo->player != NULL
+         || mo->health <= 0 || (mo->flags & (MF_SOLID | MF_SHOOTABLE)) != (MF_SOLID | MF_SHOOTABLE))
+        {
+            continue;
+        }
+
+        x = Height(mo->x);
+        y = Height(mo->y);
+        z = Height(mo->z);
+
+        if (z >= high || z + Height(mo->height) <= low)
+        {
+            continue;
+        }
+
+        t = length2 > 0.0 ? ((x - j->start.x) * dx + (y - j->start.y) * dy) / length2 : 0.0;
+        t = SDL_max(0.0, SDL_min(t, 1.0));
+        reach = Height(mo->radius) + PLAYER_RADIUS + (mo->target != NULL ? JUMP_CLEAR : 0.0);
+
+        if (hypot(j->start.x + dx * t - x, j->start.y + dy * t - y) < reach)
+        {
+            at->x = x;
+            at->y = y;
+            return true;
+        }
+    }
+
+    return false;
 }

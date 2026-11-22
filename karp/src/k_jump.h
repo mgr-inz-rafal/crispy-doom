@@ -52,7 +52,7 @@ typedef struct
 // works with a margin: with 85% of the thrust, and from starts 6 units to
 // either side.
 // Where no run-up of up to 128 units gives one, a long one of up to 320,
-// down steps too, is tried, kept with 90% of the thrust.
+// down and up steps too, is tried, kept with 90% of the thrust.
 // Then again around each sector a line moves, as if it were where the line
 // sends it, with every door open: those jumps work only once it gets there
 // (Doom II MAP09: one onto a floor a switch raises, one out of a door a
@@ -72,6 +72,15 @@ const k_jump_t *K_Jump_Get(int jump);
 // (lifts, floors), and a solid thing can stand in the way. Judged once a
 // tic.
 int K_Jump_Possible(int jump);
+
+// Whether a monster is in the jump's way now, and where (at): alive and
+// solid, its box within reach of the player's along the run from the
+// run-up's start to the touchdown, at a height the player passes - 32
+// further for one awake, which can come into the way as the player runs.
+// A monster in the air stops the player there, and it falls (E4M2: a
+// cacodemon over the inner pit as the bot ran the jump from the cross's NW
+// arm to its south arm; down into the nukage at 6 health).
+int K_Jump_InTheWay(int jump, k_vec2_t *at);
 
 #ifdef __cplusplus
 }
