@@ -1245,19 +1245,17 @@ int K_Jump_Possible(int jump)
     return possible[jump];
 }
 
-int K_Jump_InTheWay(int jump, k_vec2_t *at)
+int K_Jump_InTheWay(int jump, k_vec2_t from, k_vec2_t *at)
 {
     const k_jump_t *j = &jumps[jump];
-    double low = SDL_min(j->from_floor, j->land_floor) - MAX_STEP;
-    double high = SDL_max(j->from_floor, j->land_floor) + PLAYER_HEIGHT;
-    double dx = j->land.x - j->start.x, dy = j->land.y - j->start.y;
+    double dx = j->land.x - from.x, dy = j->land.y - from.y;
     double length2 = dx * dx + dy * dy;
     const thinker_t *thinker;
 
     for (thinker = thinkercap.next; thinker != &thinkercap; thinker = thinker->next)
     {
         const mobj_t *mo = (const mobj_t *) thinker;
-        double x, y, z, t, reach;
+        double x, y, t, reach;
 
         if (thinker->function.acp1 != (actionf_p1) P_MobjThinker || mo->player != NULL
          || mo->health <= 0 || (mo->flags & (MF_SOLID | MF_SHOOTABLE)) != (MF_SOLID | MF_SHOOTABLE))
@@ -1267,18 +1265,11 @@ int K_Jump_InTheWay(int jump, k_vec2_t *at)
 
         x = Height(mo->x);
         y = Height(mo->y);
-        z = Height(mo->z);
-
-        if (z >= high || z + Height(mo->height) <= low)
-        {
-            continue;
-        }
-
-        t = length2 > 0.0 ? ((x - j->start.x) * dx + (y - j->start.y) * dy) / length2 : 0.0;
+        t = length2 > 0.0 ? ((x - from.x) * dx + (y - from.y) * dy) / length2 : 0.0;
         t = SDL_max(0.0, SDL_min(t, 1.0));
         reach = Height(mo->radius) + PLAYER_RADIUS + (mo->target != NULL ? JUMP_CLEAR : 0.0);
 
-        if (hypot(j->start.x + dx * t - x, j->start.y + dy * t - y) < reach)
+        if (hypot(from.x + dx * t - x, from.y + dy * t - y) < reach)
         {
             at->x = x;
             at->y = y;

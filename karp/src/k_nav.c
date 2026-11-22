@@ -262,8 +262,16 @@
 // the ledge beyond the landing, left alone as it could not come at the
 // player, its balls took the bot from 71 to 7 in the 7 s, each sidestep
 // pulled back to the start), and not waited for again on this route.
+// Running up, the way is judged on, from where the player is: a monster come
+// into it more than JUMP_BRAKE_ROOM short of the edge - room to stop, at full
+// speed, with a tic or two to spare - breaks the run off, back to the start
+// to wait (E4M2: a cacodemon over the pit 88 units ahead, half way up the
+// run-up off the start's platform; run on into, and down into the nukage),
+// at most JUMP_BRAKES_MOST times on a route.
 #define JUMP_HOLD_REACH 256.0
 #define JUMP_HOLD_MOST (10 * TICRATE)
+#define JUMP_BRAKE_ROOM 96.0
+#define JUMP_BRAKES_MOST 3
 
 // Sliding along walls: within AVOID_DISTANCE of anything that stops the
 // player (its radius is 16), the part of the velocity toward it is
@@ -359,11 +367,12 @@ static int dry_since;
 // Waiting for a jump's way to clear (JUMP_HOLD_MOST): the waypoint its
 // run-up starts at, which the target stops at, -1 when not; since when
 // (status.tics), and the player's health then; the jump run all the same on
-// this route, -1 if none.
+// this route, -1 if none; the run-ups broken off on it (JUMP_BRAKES_MOST).
 static int jump_hold = -1;
 static int jump_hold_since;
 static double jump_hold_health;
 static int jump_run_anyway = -1;
+static int jump_brakes;
 
 // Running under a crusher: the route crossing into it, which reads open
 // meanwhile, -1 when not; the crusher, the route cell past it, where the
@@ -2442,6 +2451,7 @@ static void StartRoute(void)
     dry_point = -1;
     jump_hold = -1;
     jump_run_anyway = -1;
+    jump_brakes = 0;
     crusher_run = -1;
     unstick_tics = 0;
     status.target = 1;
@@ -2873,7 +2883,8 @@ static void UpdateDry(void)
 // the first leg ahead that is not walked, short of anything else that stops
 // the target, is a jump whose run-up starts within JUMP_HOLD_REACH, and a
 // monster is in its way (JUMP_HOLD_MOST). Judged again every tic until the
-// run-up begins.
+// run-up begins, and on during it, while it can still be broken off
+// (JUMP_BRAKE_ROOM): the target back to the run-up's start, waited at.
 static void UpdateJumpHold(k_vec2_t at)
 {
     const k_graph_t *graph = K_Graph_Get();
@@ -2883,6 +2894,32 @@ static void UpdateJumpHold(k_vec2_t at)
 
     jump_hold = -1;
     limit = TargetLimit();
+
+    if (action.kind == K_ACTION_NONE && jump_phase == JUMP_RUNUP && OnJump(status.target)
+     && jump_brakes < JUMP_BRAKES_MOST)
+    {
+        const k_jump_t *j;
+
+        k = status.target - 1;
+        jump = graph->portals[path.portals[path.leg_cells[k] - 1]].jump;
+        j = jump >= 0 ? K_Jump_Get(jump) : NULL;
+
+        if (j != NULL && jump != jump_run_anyway
+         && (j->edge.x - at.x) * j->dir.x + (j->edge.y - at.y) * j->dir.y > JUMP_BRAKE_ROOM
+         && K_Jump_InTheWay(jump, at, &monster))
+        {
+            K_Log(K_LOG_NAV, K_LOG_INFO, "breaking off the run-up for the jump to (%.0f,%.0f): a "
+                  "monster at (%.0f,%.0f) came into its way", path.points[k + 1].x,
+                  path.points[k + 1].y, monster.x, monster.y);
+            ++jump_brakes;
+            status.target = k;
+            jump_phase = JUMP_NONE;
+            jump_hold = k;
+
+            // Come back to from beyond it: stopped at, as one turned into.
+            careful[k] = true;
+        }
+    }
 
     if (action.kind == K_ACTION_NONE && jump_phase == JUMP_NONE && !OnJump(status.target))
     {
@@ -2895,7 +2932,8 @@ static void UpdateJumpHold(k_vec2_t at)
         {
             jump = graph->portals[path.portals[path.leg_cells[k] - 1]].jump;
 
-            if (jump >= 0 && jump != jump_run_anyway && K_Jump_InTheWay(jump, &monster))
+            if (jump >= 0 && jump != jump_run_anyway
+             && K_Jump_InTheWay(jump, K_Jump_Get(jump)->start, &monster))
             {
                 jump_hold = k;
             }

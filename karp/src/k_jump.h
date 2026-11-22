@@ -74,13 +74,18 @@ const k_jump_t *K_Jump_Get(int jump);
 int K_Jump_Possible(int jump);
 
 // Whether a monster is in the jump's way now, and where (at): alive and
-// solid, its box within reach of the player's along the run from the
-// run-up's start to the touchdown, at a height the player passes - 32
-// further for one awake, which can come into the way as the player runs.
-// A monster in the air stops the player there, and it falls (E4M2: a
-// cacodemon over the inner pit as the bot ran the jump from the cross's NW
-// arm to its south arm; down into the nukage at 6 health).
-int K_Jump_InTheWay(int jump, k_vec2_t *at);
+// solid, its box within reach of the player's along the run from `from` -
+// the run-up's start, or where the player is on it - to the touchdown, at
+// any height - 32 further for one awake, which can come into the way as the
+// player runs. A monster in the air stops the player there, and it falls
+// (E4M2: a cacodemon over the inner pit as the bot ran the jump from the
+// cross's NW arm to its south arm; down into the nukage at 6 health). Its
+// height is no matter: in vanilla only missiles pass over or under things
+// (PIT_CheckThing), so one down in the pit, or floating under the flight,
+// stops it as well (E4M2: the jump from the start's platform onto the cross
+// run with a cacodemon over the pit; the bot hit it 33 units out, and
+// fell).
+int K_Jump_InTheWay(int jump, k_vec2_t from, k_vec2_t *at);
 
 #ifdef __cplusplus
 }

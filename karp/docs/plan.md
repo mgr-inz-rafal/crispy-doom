@@ -1144,7 +1144,10 @@ gone round). The speed profile does not brake for anything past it.
   into a lift's pit; taken back then. Now only the turned-into starts, and the target moves on
   as for any careful point: MAP09 without monsters runs its jumps as before, none missed.
 - A monster in the jump's way (K_Jump_InTheWay) is waited for at the run-up's start, up to 10 s,
-  or until the player is hurt (2026-11-22, 7.8: "E4M2, the lock").
+  or until the player is hurt (2026-11-22, 7.8: "E4M2, the lock"). At any height: in vanilla only
+  missiles pass over or under things. Judged on during the run-up, from where the player is: one
+  come into the way more than 96 units short of the edge breaks the run off, back to the start
+  to wait, up to 3 times on a route (7.8: "E4, the user's explorer run").
 
 **Measured** with the drive test on Doom (36 maps): with doors, 250 goals could be picked (204
 before; areas behind doors became reachable) and 148 were reached; 46 doors were opened along
@@ -4394,7 +4397,8 @@ Who controls the player in a fight (the user's model):
     there, every way to step aside from the cacodemons' balls dearer than the hit; there was
     always open floor below, down a drop.
   - A monster in a jump's way (`K_Jump_InTheWay`: its box within reach of the run's, at a
-    height the player passes, 32 further when awake) is waited for at the run-up's start
+    height the player passes - any height since, below - 32 further when awake) is waited for
+    at the run-up's start
     (`k_nav.c` UpdateJumpHold, JUMP_HOLD_MOST): a cacodemon over the inner pit stopped the bot
     in the air, down into the nukage at 6 health. Hurt while waiting, or after 10 s, the jump
     is run all the same (the user: "looking at a baron and shaking like crazy, waiting to be
@@ -4422,6 +4426,29 @@ Who controls the player in a fight (the user's model):
   0.8 s later off its jump (the stop; a wait for an imp). Six salts more, the jump fix alone
   against all of it: MAP06 2 of 6 against 4 (of 9: 4 against 5), MAP03 5 of 6 each (of 9: 8
   against 7); the jump fix alone died by MAP06's hell knight at 41 s too.
+- **E4, the user's explorer run** (2026-11-22, secret exits, explorer, demo mode; E4M1 finished,
+  E4M2 dead at 174 s): three things seen, all generic.
+  - A. The jump off the start's platform onto the cross: missed twice. Once an imp's fireball,
+    fired while the bot waited, met it on the run-up - 12 health, the knockback against the run,
+    off the edge at 13.0 against 15.8, down a unit short (the user: natural, left as it is). Once
+    a cacodemon over the pit, 88 units ahead half way up the run-up: off the edge at 16.5, into
+    it 33 units out, and down. The wait for a monster in the way (`K_Jump_InTheWay`) counted
+    only one at a height the player passes - but in vanilla things block each other at any
+    height (`PIT_CheckThing`: only missiles go over or under; crispy's over/under is off), so a
+    cacodemon floating low in the pit, or a monster on its floor under the flight, stops the
+    player as well - and it was judged only until the run-up began. Now at any height, and on
+    through the run-up from where the player is (`k_nav.c` UpdateJumpHold): one come into the
+    way more than JUMP_BRAKE_ROOM (96) short of the edge - room to stop at full speed, about 50
+    units and a tic or two - breaks the run off, the target back to the start, stopped at as a
+    turned-into one, waited at; up to JUMP_BRAKES_MOST (3) times on a route, and never once the
+    jump is run all the same.
+    From the user's E4M2 save, salts 443, 71, 7, 11, 23 and 99, against the build before: 6
+    run-ups broken off, every one stopped short of the edge, none down in the pit after; jumps
+    missed 1 against 2 (the one left a cacodemon's ball on the run-up, in both builds). Doom II
+    MAP02, 03 and 06 with monsters, salts 443, 71, 7, 240 s: 7 of 9 finished against 6 - MAP03
+    salt 443 broke off the run-up for the jump to (2314,3540) as an imp came to the landing, and
+    lived, where the build before landed among three imps and died at 13.5 s. Without monsters
+    nothing can change (no monster is ever in the way): not run.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
