@@ -240,7 +240,9 @@ int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found);
 // if none is nearer, 0 off the floor. Distances are measured as the engine
 // collides the player's square box: the larger of the x and y distances,
 // so a box of radius r overlaps what is nearer than r. A door is open only
-// where the point is in it: else as it is now.
+// where the point is in it: else as it is now. A walk-over teleport line
+// the point is in front of counts as such a line too: the box touching one
+// sets it off as the centre crosses its line, at any height.
 double K_Graph_Clearance(k_vec2_t at, double reach);
 
 // Where the player can stand to pick up a thing of radius 20 lying at `at`
@@ -274,9 +276,11 @@ typedef struct
 // Returns how many. Judged from
 // the floor the player stands on, not the one under its centre: over a
 // ledge's edge, the ledge would look like a wall to climb, and the player
-// would be steered off it (Doom II MAP17's bridge over a pit).
+// would be steered off it (Doom II MAP17's bridge over a pit). Teleport
+// lines count as in K_Graph_Clearance, but for those of the teleporter
+// keep (the one the route goes by; -1 for none).
 int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
-                          int max);
+                          int max, int keep);
 
 // How far a point is from the nearest edge within reach that a player
 // standing there on the given floor could drop over but not climb back: a

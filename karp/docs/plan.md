@@ -395,7 +395,11 @@ makes doors and lifts work naturally in later stages. Each portal side is judged
 the verdict kept for that tic (`JudgeOnce`): the world changes only as it moves, and the route
 searches of one tic ask of the same crossings again and again (2026-11-21, E1M9: two thirds of
 a 165 ms tic). Judged afresh after the graph or a lift's turns change, and never kept while a
-door is assumed open (`K_Graph_AssumeOpen`). It mirrors
+door is assumed open (`K_Graph_AssumeOpen`). A walk-over teleport line the player is in front of
+is kept off like a wall by route clearance (`K_Graph_Clearance`), waypoints on portals and
+steering, but for the teleporter the route goes by: `P_TryMove` sets one off when the box
+touches it and the centre crosses its line, at any height and past its ends (2026-11-22, E4M3).
+It mirrors
 `P_TryMove`/`PIT_CheckLine` (`src/doom/p_map.c:212-285, 564-631`), with the sector of each cell's
 subsector:
 - blocked if the crossed linedef is one-sided (a map error) or has `ML_BLOCKING`;
@@ -4331,6 +4335,29 @@ Who controls the player in a fight (the user's model):
   shotguns behind barrels) and E1M9 ran as before it. Without monsters, Doom II's maps but
   MAP07 (it needs them) all finished, in 1932 s against 1930 (MAP13 3.5 s more, the rest within
   a second); two single slow tics, 51 and 53 ms, with seven games running at once.
+- **E4M3, demo mode, the user's run** (2026-11-22, `-karpexit secret -karpattitude explorer`):
+  "doing an amazing work with clearing the map, yet it got stuck in a loop in the end ... it
+  clipped the teleport line and was teleported back and repeated". Every route east ran along
+  the rim of the pit in the big room (sector 23, floor 112; the pit, sector 18, at -96, the
+  pad of teleport lines 335 to 338 at its bottom), through the strip 8 wide between the pad and
+  the rim, a floor of the rim's height for the player (3.2: too thin to stand in). At
+  (2374,453) the box was over the end of pad line 338 as the centre crossed its line: the
+  engine teleports then at any height, past the line's ends too. Back at (320,352), 12 s from
+  there, every goal east failed after two such, and the next one went the same way: 110 kills
+  of 110, and no way out. Without monsters, 3 salts of 3 looped until stopped at 7 minutes.
+  The same took E1M5's explorer runs past the pentagram's points (12 stray teleports in 6
+  runs). Now a teleport line is kept off from its front side like a wall (3.2.1): route
+  clearance, waypoints on portals and steering, but for the teleporter the route goes by. E4M3
+  without monsters: all 3 finished (129 to 211 s); E1M5 from the user's save, 6 salts: stray
+  teleports 12 to 0, all finished, in 278 s on average against 311. Doom II without monsters,
+  28 maps: all finished, 1935 s against 1930 (MAP21's first route 23 units longer round a
+  teleporter, the run 6.6 s more). Pistol starts, salts 443, 71 and 7: E1M1 to E1M6 and E1M8
+  finished 20 of 21 as before, the same to the tenth of a second but on the maps with
+  teleporters (E1M5 8 to 21 s more, E1M8 1 to 11 s); Doom II MAP01 to 06, 10 and 15 finished 21
+  of 24, the batch before 20 (MAP10 salt 7 in 349.5 s again; MAP05's runs parted by drift in a
+  fight at 81.9 s, 336 and 383 s against 223 and 207, more kills and secrets). No slow tic, no
+  stray teleport. Left: the sweep's first look at places, once a level, 57 to 93 ms on E4M3
+  (16 places by route, 1.1 ms a search there).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

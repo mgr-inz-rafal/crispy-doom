@@ -578,6 +578,22 @@ static boolean TeleportOut(int r)
     return path.legs[ExitPoint(r)] == K_LEG_TELEPORT;
 }
 
+// The teleporter the route goes by next, from the route cell on, or -1.
+static int RouteTeleporter(void)
+{
+    int r;
+
+    for (r = SDL_max(status.route_cell, 0); path.num_points > 0 && r < path.num_cells - 1; ++r)
+    {
+        if (TeleportOut(r))
+        {
+            return K_Graph_Teleport(path.portals[r], path.cells[r]);
+        }
+    }
+
+    return -1;
+}
+
 // Whether the target is the end of a jump's leg: the player is running it.
 static boolean OnJump(int target)
 {
@@ -968,11 +984,15 @@ static void SteerToHold(const body_t *body, k_vec2_t to, const double *face,
 // Near is measured with the player's square box, and away is from the
 // nearest point: a wall end caught by the side of the box turns the player
 // round it (MAP16, a wall stub at the top of a staircase).
+// Walk-over teleport lines are kept off as walls are, but for those of the
+// teleporter the route goes by (RouteTeleporter): the box touching one sets
+// it off at any height (k_graph.h: K_Graph_Clearance).
 static void AvoidWalls(const body_t *body, double *vx, double *vy)
 {
     k_nearline_t walls[MAX_AVOID];
     k_vec2_t at = { body->x, body->y };
-    int count = K_Graph_ObstaclesNear(at, body->floor, AVOID_DISTANCE, walls, MAX_AVOID);
+    int count = K_Graph_ObstaclesNear(at, body->floor, AVOID_DISTANCE, walls, MAX_AVOID,
+                                      RouteTeleporter());
     int i;
 
     for (i = 0; i < count; ++i)

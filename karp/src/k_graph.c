@@ -210,8 +210,10 @@ static int judged_tic = -1;
 
 static void ForgetJudged(void);
 
-// Per line: the teleporter it belongs to, -1 if none.
+// Per line: the teleporter it belongs to, -1 if none; for how many lines
+// (0 while the graph is built, before FindTeleporters).
 static int *line_teleports;
+static int line_teleports_count;
 static int teleports_capacity;
 
 // Chords across cells where a gap inside one may be narrower than the
@@ -1081,6 +1083,26 @@ static boolean IsTeleportLine(int special)
     return special == 39 || special == 97;
 }
 
+// Whether a teleport line, its special live and with somewhere to send the
+// player, would be set off from `at`, in front of it; never one of the
+// teleporter keep (the one the route goes by). P_TryMove sets it off when
+// the box touches it and the centre crosses its line - at any height, and
+// along its line past its ends too - so it is kept off like a wall (the
+// user, E4M3: the route along the rim of a pit, the pad 208 below; the box
+// over the end of pad line 338 as the centre crossed its line, the bot was
+// sent back across the map, over and over. E1M5: past the pentagram's
+// points).
+static boolean TeleportsAt(int index, k_vec2_t at, int keep)
+{
+    const k_line_t *line = &K_Map_Get()->lines[index];
+    int teleport = index < line_teleports_count ? line_teleports[index] : -1;
+
+    return teleport >= 0 && teleport != keep && graph.teleports[teleport].cell >= 0
+        && IsTeleportLine(lines[index].special) && line->back_sector >= 0
+        && (line->v2.y - line->v1.y) * (at.x - line->v1.x)
+         - (line->v2.x - line->v1.x) * (at.y - line->v1.y) > 0.0;
+}
+
 // Where crossing a teleport line with this tag sends the player, as
 // EV_Teleport finds it: the first teleport destination, in thinker order,
 // in the first sector with the tag.
@@ -1161,6 +1183,7 @@ static void FindTeleporters(const k_map_t *map)
 
     free(line_teleports);
     line_teleports = malloc(SDL_max(numlines, 1) * sizeof(*line_teleports));
+    line_teleports_count = numlines;
     graph.num_teleports = 0;
 
     for (i = 0; i < numlines; ++i)
@@ -1395,6 +1418,7 @@ void K_Graph_Build(void)
 
     graph.num_portals = 0;
     num_covers = 0;
+    line_teleports_count = 0;
     ForgetJudged();
 
     CollectEdges(map);
@@ -2730,6 +2754,48 @@ void K_Graph_AssumeOpen(int sector)
     assumed_any = true;
 }
 
+// The teleport lines within reach of a portal that would be set off from
+// its middle (TeleportsAt), but those of the teleporter it crosses, added
+// to found after the count already there, up to max. Returns the count.
+static int NearTeleports(const k_portal_t *portal, int keep, double reach, int *found,
+                         int count, int max)
+{
+    k_vec2_t middle = PointAlong(portal->a, portal->b, Length(Sub(portal->b, portal->a)) * 0.5);
+    k_vec2_t min = { SDL_min(portal->a.x, portal->b.x) - reach,
+                     SDL_min(portal->a.y, portal->b.y) - reach };
+    k_vec2_t max_ = { SDL_max(portal->a.x, portal->b.x) + reach,
+                      SDL_max(portal->a.y, portal->b.y) + reach };
+    int first = count;
+    int x, y, x0, y0, x1, y1, k, i;
+
+    CellRange(min, max_, &x0, &y0, &x1, &y1);
+
+    for (y = y0; y <= y1; ++y)
+    {
+        for (x = x0; x <= x1; ++x)
+        {
+            int grid = y * grid_width + x;
+
+            for (k = cell_first[grid]; k < cell_first[grid + 1] && count < max; ++k)
+            {
+                int line = cell_items[k] - num_edges;
+
+                // A line spanning several grid cells comes up more than once.
+                for (i = first; i < count && line >= 0 && found[i] != line; ++i)
+                {
+                }
+
+                if (line >= 0 && i == count && TeleportsAt(line, middle, keep))
+                {
+                    found[count++] = line;
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
 k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
 {
     const k_map_t *map = K_Map_Get();
@@ -2752,6 +2818,8 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
 
     Stance(portal_index, from, &stance);
     count = NearObstacles(&stance, WAYPOINT_CLEARANCE, found, MAX_NEAR_LINES);
+    count = NearTeleports(portal, K_Graph_Teleport(portal_index, from), WAYPOINT_CLEARANCE,
+                          found, count, MAX_NEAR_LINES);
     num_blocks = NearBlocks(portal->a, portal->b, WAYPOINT_CLEARANCE, blocks,
                             MAX_NEAR_BLOCKS);
 
@@ -3229,9 +3297,10 @@ static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
 
 // K_Graph_ObstaclesNear for a player standing in the given cell - on `on`
 // if that is higher than the cell's floor - and the standing blocks too if
-// asked; doors as standing_t takes door_reach.
+// asked; doors as standing_t takes door_reach; teleport lines but keep's
+// (TeleportsAt).
 static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *found,
-                           int max, boolean with_blocks, double door_reach, double on)
+                           int max, boolean with_blocks, double door_reach, double on, int keep)
 {
     const k_map_t *map = K_Map_Get();
     k_vec2_t min = { at.x - reach, at.y - reach };
@@ -3300,7 +3369,8 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
                 length = Length(Sub(at, closest));
                 distance = BoxDistance(at, a, ab);
 
-                if (distance >= reach || !Obstacle(line, floor, ceiling, &standing))
+                if (distance >= reach
+                 || (!Obstacle(line, floor, ceiling, &standing) && !TeleportsAt(line, at, keep)))
                 {
                     continue;
                 }
@@ -3364,7 +3434,7 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
 }
 
 int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t *found,
-                          int max)
+                          int max, int keep)
 {
     // Only a door the box is in. From the floor the player stands on: on the
     // edge of a stair, its centre over the floor below (the cell it plans
@@ -3372,7 +3442,7 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t 
     // MAP03: on the stairs to the blue key, the next riser judged from the
     // floor below, 32 high, held the creeping player off it for 20 s).
     return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max,
-                           false, PLAYER_RADIUS, floor);
+                           false, PLAYER_RADIUS, floor, keep);
 }
 
 double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
@@ -3439,7 +3509,7 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
 {
     k_nearline_t found[MAX_NEAR_LINES];
     int cell = K_Map_CellAt(at.x, at.y);
-    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0, -1.0e6);
+    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0, -1.0e6, -1);
     double clearance = reach;
     int i;
 
