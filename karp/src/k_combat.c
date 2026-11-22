@@ -15,7 +15,8 @@
 //	One that cannot come at the player (behind bars, on a ledge) is shot
 //	at on the way, a shot or two, and never fought - unless it is a gunman,
 //	or the player is comfy, with health and ammo to spare, or its blow has
-//	just hurt the player (from a pit below a ledge: it can come after all).
+//	just hurt the player (from a pit below a ledge: it can come after all),
+//	or it stands where the route goes on to: there it can.
 //	The weapon is the one that would hurt it most a tic, counting no more
 //	than kills it, brought up only when clearly better than the one in
 //	hand (a switch takes about 0.9 s), and never instead of one whose next
@@ -740,7 +741,15 @@ extern void A_CyberAttack();
 // passing by again and again, until they killed it). And one whose blow
 // hurt the player, from within BLOW_REACH, can come at it for STRUCK_TICS
 // after, whatever the straight line says (MAP05: the struck imp alone was
-// fought, the three beside it still left alone).
+// fought, the three beside it still left alone). And one in an area the
+// route goes into, within ON_WAY_REACH along it from the player, is fought
+// as any (UpdateOnWay): areas join over floor open both ways, so there it
+// can come at the player - which goes where it cannot, by a jump, a drop, a
+// lift (the user, E4M2: a baron on a ledge across a gap from the bot's, on
+// the way to the yellow key, left alone after two shots as one that could
+// not come; the bot jumped the gap onto its ledge, was clawed for 14 and
+// killed it point blank - "cannot come, but we need the path cleared").
+// Not one in a pit or on a ledge the route only passes by: another area.
 #define BLOW_RANGE 60.0
 #define REACH_TICS 17
 #define REACH_PIECE 128.0
@@ -751,6 +760,8 @@ extern void A_CyberAttack();
 #define UNCOMFY_AMMO 0.5
 #define STRUCK_TICS (30 * TICRATE)
 #define MAX_STRUCK 8
+#define ON_WAY_REACH 1024.0
+#define MAX_WAY_AREAS 64
 
 // Barrels (MT_BARREL, 20 health): dead, one blows up 12 to 15 tics later
 // (S_BEXP to A_Explode), hurting whatever can see it for BLAST less the
@@ -1487,6 +1498,12 @@ static struck_t struck[MAX_STRUCK];
 // shots on the way at the target that cannot.
 static boolean comfy;
 static int out_shots;
+
+// The monsters in an area the route goes into (ON_WAY_REACH): this tic, by
+// place in the list, for the first on_way_count.
+static boolean *on_way;
+static int on_way_capacity;
+static int on_way_count;
 
 static double ToMap(fixed_t value)
 {
@@ -2580,6 +2597,91 @@ static boolean BitesOnly(int type)
     return type == MT_SERGEANT || type == MT_SHADOWS || type == MT_SKULL;
 }
 
+// Each tic: the monsters in an area the route goes into, from the player's
+// route cell on, within ON_WAY_REACH along it (leg i runs from point i in
+// route cell leg_cells[i]).
+static void UpdateOnWay(k_vec2_t me)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    const k_path_t *path = K_Nav_GetPath();
+    int areas[MAX_WAY_AREAS];
+    int num_areas = 0, crossed, last, area, i, k, r;
+    double along = 0.0;
+    k_vec2_t from = me;
+
+    if (on_way_capacity < num_monsters)
+    {
+        on_way_capacity = monster_capacity;
+        on_way = realloc(on_way, on_way_capacity * sizeof(*on_way));
+    }
+
+    on_way_count = num_monsters;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        on_way[i] = false;
+    }
+
+    if (path == NULL || nav->state != K_NAV_DRIVING || path->num_cells <= 0)
+    {
+        return;
+    }
+
+    crossed = SDL_max(nav->route_cell, 0);
+
+    for (i = SDL_max(nav->target, 1); i < path->num_points; ++i)
+    {
+        along += Distance(from, path->points[i]);
+        from = path->points[i];
+        last = i < path->num_points - 1 ? path->leg_cells[i] : path->num_cells - 1;
+
+        // The player's own route cell, however far the point.
+        if (along > ON_WAY_REACH)
+        {
+            last = crossed;
+        }
+
+        for (k = crossed; k <= last && k < path->num_cells; ++k)
+        {
+            area = K_Area_Of(path->cells[k]);
+
+            for (r = 0; r < num_areas && areas[r] != area; ++r)
+            {
+            }
+
+            if (area >= 0 && r == num_areas && num_areas < MAX_WAY_AREAS)
+            {
+                areas[num_areas++] = area;
+            }
+        }
+
+        crossed = SDL_max(crossed, last + 1);
+
+        if (along > ON_WAY_REACH)
+        {
+            break;
+        }
+    }
+
+    for (i = 0; i < num_monsters && num_areas > 0; ++i)
+    {
+        area = K_Area_Of(K_Map_CellAt(monsters[i].at.x, monsters[i].at.y));
+
+        for (r = 0; r < num_areas && areas[r] != area; ++r)
+        {
+        }
+
+        on_way[i] = area >= 0 && r < num_areas;
+    }
+}
+
+// Whether the monster (by its place in this tic's list) stands where the
+// route goes on to (UpdateOnWay).
+static boolean OnWay(int index)
+{
+    return index < on_way_count && on_way[index];
+}
+
 // Whether those that cannot come at the player are fought as any: comfy,
 // health OK and the weapon in hand's ammo plentiful (COMFY_AMMO, until
 // under UNCOMFY_AMMO).
@@ -2600,10 +2702,12 @@ static void UpdateComfy(const player_t *player)
 }
 
 // Whether the target must be fought as any: a gunman, or one that can come
-// at the player, or comfy, or one fought from afar (FoughtFar).
+// at the player, or comfy, or one fought from afar (FoughtFar), or one where
+// the route goes on to (OnWay).
 static boolean FoughtAsAny(int index)
 {
-    return monsters[index].hitscan || comfy || FoughtFar(monsters[index].type) || Reaches(index);
+    return monsters[index].hitscan || comfy || FoughtFar(monsters[index].type) || OnWay(index)
+        || Reaches(index);
 }
 
 // Whether a monster (by its place in this tic's list) is left alone as a
@@ -3346,7 +3450,10 @@ static void ChooseTarget(const player_t *player)
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "target: the %s at (%.0f,%.0f), %.0f units%s%s",
                   monsters[best].name, monsters[best].at.x, monsters[best].at.y,
                   monsters[best].distance, monsters[best].awake ? "" : ", asleep",
-                  FoughtAsAny(best) ? "" : ", cannot come at the player");
+                  !FoughtAsAny(best) ? ", cannot come at the player"
+                  : OnWay(best) && !Reaches(best) && !monsters[best].hitscan && !comfy
+                    && !FoughtFar(monsters[best].type)
+                  ? ", cannot come at the player, but stands where the way goes on" : "");
             progress_tic = leveltime;
             misses = 0;
             out_shots = 0;
@@ -7370,8 +7477,11 @@ void K_Combat_Tick(int driving)
     // Not driving (a menu, the pause): everything stays as it is.
     if (driving)
     {
+        k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+
         UpdateClear();
         UpdateComfy(player);
+        UpdateOnWay(me);
         UpdateReserve(player);
         ChooseTarget(player);
         CountMisses(player);
@@ -7390,6 +7500,7 @@ void K_Combat_Tick(int driving)
     {
         barrel_target = -1;
         avoid = -1;
+        on_way_count = 0;
     }
 
     status.barrel = barrel_target >= 0;

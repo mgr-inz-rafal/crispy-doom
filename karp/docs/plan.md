@@ -2981,7 +2981,9 @@ Who controls the player in a fight (the user's model):
   shots, then left alone 10 s; never fought (the route goes on), never shot asleep, nor if it
   only bites (demon, spectre, lost soul). Gunmen are cleared always, as before (the user). And
   when comfy - health OK and the weapon in hand's ammo at 3/4 of what the player can carry,
-  until under half - the bot fights them as any.
+  until under half - the bot fights them as any. So it does one standing in an area the route
+  goes into within 1024 units along it: there it can come at the player, which crosses what
+  stops it (2026-11-22, 7.8: "E4, the user's explorer run").
 - **Barrels in the way, and barrels hit already** (the user, Doom 1 E1M5). Barrels in a doorway
   the map shows room to pass held the bot for seconds before it squeezed by. Done: following a
   route, kept within 48 units of one spot for 2.5 s with a standing barrel within 24 of its box,
@@ -4449,6 +4451,29 @@ Who controls the player in a fight (the user's model):
     salt 443 broke off the run-up for the jump to (2314,3540) as an imp came to the landing, and
     lived, where the build before landed among three imps and died at 13.5 s. Without monsters
     nothing can change (no monster is ever in the way): not run.
+  - B. A baron on a ledge (sector 1, floor 16) across a gap from the bot's, 64 wide and 144
+    deep, on the way to the yellow key: it could not come at the player, so two shots and left
+    alone 10 s (the rule shooting monsters behind bars or up on ledges no more - "one of the
+    best rules": it saves ammo and looks natural). Within those 10 s the bot jumped the gap onto
+    its ledge, was clawed for 14 and killed it point blank (the user: "barons can't jump, but
+    the bot can"); 15 such "left alone" in the level. Now one that cannot come but stands in an
+    area the route goes into, within ON_WAY_REACH (1024) along it, is fought as any
+    (`k_combat.c` UpdateOnWay, OnWay in FoughtAsAny): areas join over floor open both ways, so
+    there it can come - the player gets there by a jump, a drop, a lift it cannot use. Judged
+    every tic from the route ahead, from the player's route cell. Not one in a pit or on a
+    ledge the route passes by, behind bars or a window, on a pillar: other areas. Backing off
+    still heeds only those that can come (Reaches): across the gap the player stands and shoots.
+    The target line says so: "cannot come at the player, but stands where the way goes on".
+    From the user's E4M2 save, salts 443, 71, 7, 11, 23, 99, 200 s: the imps on the cross (the
+    start jump's landing) fought from the platform at once, in every salt, the east ledge's
+    baron and others in the route's areas from across; 5 dead against 6 (one alive at
+    200 s, 33 kills, 4 barons), kills alike - the level stays hard. The user watched it kill the
+    yellow key's baron from across the gap. MAP05, MAP06, E1M5, E1M6, salts 443, 71, 7, 330 s:
+    8 of 12 finished each (E1M5 2 against 1, MAP05 1 against 2 and one alive at the end, the
+    runs parted by a tic's drift at 15.8 s, before the rule was first used); 2 to 5 targets on
+    the way a run - imps, demons, spectres in the route's areas; MAP06's hell knights up on
+    their ledge never among them (the try that fought every tough one shooting from where it
+    stands died there 3 runs of 3).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
