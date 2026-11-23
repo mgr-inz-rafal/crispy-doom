@@ -4524,6 +4524,30 @@ Who controls the player in a fight (the user's model):
     fights where it stands, as before - salt 99's death: a medikit run at LOW health past the
     baron, no cover, shot down retreating); the spot chosen for each target, so it moves as the
     target changes. Next: with no cover in reach, contact broken - out of the pack's sight.
+    Step 2 (the user: "it will make the monsters spread out, making them easier to kill. This
+    is also a very natural behavior of human players"): outmatched, in a fight, no cover found,
+    seen by the pack for half a second - the player hides from the pack: the nearest spot out
+    of the sight of every one of its 8 costliest, by the hopeless monster's hide (FindRetreat:
+    open crossings, the way clear of awake monsters, spots few others see first; the search
+    now stops once no further cell could score better). There, the fight's leash moves to the
+    spot and the fight is held 4 s with nothing to shoot (PACK_LURK): they come round the
+    corner one by one, fought from beside it as cover (the outmatched peek finds it there). Not
+    again for 10 s after one ends (PACK_AGAIN), nor looked for again for 1 s when none was
+    found (meanwhile to open floor if pressed hard, as before). Logged: "hiding from the pack -
+    N monsters, no cover in reach - to a spot out of their sight at ...", "waiting up to 4 s
+    for the pack to come round the corner".
+    From the user's E4M2 save, the same 8 salts against step 1: 3 finished against 1 (salts
+    443, 99, 606 against 7); 1743 s lived in all against 1049; 318 kills against 251; 31 pack
+    hides, 18 waits round a corner (salt 443: twice into the corridor behind door 9, where the
+    user's run died, and on). Salt 7, finished before, died at 166 s on the sill of door 9 at
+    10 health: the barons on the cross cannot come round any corner, so the wait was for
+    nothing; out again for the blue key, no cover from the sill (drops both sides), the next
+    hide not yet due - fought in the open. MAP05, MAP06, E1M5, E1M6, salts 443, 71, 7, 360 s:
+    11 of 12 finished each (MAP06 salt 7 dead at the hell knight by the teleporter, both);
+    0 to 2 pack hides a run there. Left: packs that cannot come (the wait is for nothing, and
+    the way on leads back into their sight); a fall back ended for an item "to go for first"
+    (C: FirstInReach, as the crow flies) that ConsiderItems, weighing the way and its danger,
+    then did not go for (salt 7: a soulsphere among the barons).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

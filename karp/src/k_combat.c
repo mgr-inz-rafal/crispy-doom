@@ -125,7 +125,8 @@
 //	fewest can shoot it. Those bosses are fought from beside cover, a step
 //	out of their sight - and so is any fight while the player is outmatched,
 //	the monsters on it costing more than half of what it has (a pack met as
-//	a boss).
+//	a boss); with no cover in reach, it hides from the pack round a corner
+//	and waits for them there, to come one by one.
 //
 //	Danger (plan, 7.5): what going to a spot would cost in health - the
 //	monsters that could see the player there, each by what a fight with its
@@ -606,9 +607,20 @@ extern void A_CyberAttack();
 // finished; the build before backed off from the baron in the open, a ball
 // for 43, and died 3 s later). Over once they cost less than OUTMATCH_LEAVE
 // of it for OUTMATCH_LINGER: they come and go from sight.
+// With no cover in reach, seen by one of them for RETREAT_AFTER, contact is
+// broken (the user: "it will make the monsters spread out, making them
+// easier to kill... a very natural behavior of a human player"): the
+// player hides from the pack - the nearest spot out of the sight of every
+// one of them (FindRetreat, as from a hopeless monster) - and there waits
+// for them, the fight held on PACK_LURK with nothing to shoot, its leash
+// from that spot: they come round the corner one by one. Not again for
+// PACK_AGAIN (they may not come: back out, it is fought in the open).
 #define OUTMATCH_SHARE 0.5
 #define OUTMATCH_LEAVE 0.35
 #define OUTMATCH_LINGER (3 * TICRATE)
+#define PACK_LURK (4 * TICRATE)
+#define PACK_AGAIN (10 * TICRATE)
+#define MAX_PACK 8
 
 // Left alone for a telefrag (K_Combat_Telefrag): the monsters a player
 // landing on the spot would overlap (PIT_StompThing), TELEFRAG_SLACK more for
@@ -1288,6 +1300,7 @@ static double press;                // by how many KEEP_AWAY inside its distance
 // pressed hard in a row, and when it may be looked for again.
 static boolean retreating;
 static boolean retreat_hide;        // out of the sight of a hopeless monster
+static boolean retreat_pack;        // or of the pack, outmatched (PACK_LURK)
 static int seen_tics;               // in a standoff, seen by it, in a row
 static k_vec2_t retreat_points[RETREAT_POINTS];
 static int retreat_num_points;
@@ -1490,9 +1503,17 @@ static const mobj_t *peek_mo;
 static int peek_tic;
 static const mobj_t *peek_none_mo;
 
-// Outmatched (OUTMATCH_SHARE), and when last at OUTMATCH_LEAVE or more.
+// Outmatched (OUTMATCH_SHARE), and when last at OUTMATCH_LEAVE or more; the
+// pack this tic (by place in the list, the costliest MAX_PACK); hiding from
+// it (PACK_LURK): seen out of cover for how long, waiting round the corner
+// until when, and not again until when.
 static boolean outmatched;
 static int outmatched_seen;
+static int pack[MAX_PACK];
+static int num_pack;
+static int pack_exposed;
+static int pack_lurk_until;
+static int pack_again;
 
 // What exposes the player (EXPOSE_WEIGHT): this tic's costliest awake
 // monsters in sight, but the target.
@@ -5397,7 +5418,7 @@ static void UpdateBattle(const player_t *player)
                         : burning ? "the floor hurts, going on to dry floor"
                         : "a floor that hurts or a drop all round, going on off it");
     }
-    else if (battle && calm >= BATTLE_CALM)
+    else if (battle && calm >= BATTLE_CALM && leveltime >= pack_lurk_until)
     {
         EndBattle(player, NULL);
     }
@@ -5468,13 +5489,34 @@ static boolean RetreatClear(k_vec2_t at, const int *near, int num_near)
     return true;
 }
 
+// Whether a spot is out of the sight of the monster (by its place in the
+// list), or with `from_pack` of every one in the pack (MAX_PACK).
+static boolean HiddenAt(int away, boolean from_pack, k_vec2_t at, double floor)
+{
+    int k;
+
+    for (k = 0; k < (from_pack ? num_pack : 1); ++k)
+    {
+        const k_monster_t *from = &monsters[from_pack ? pack[k] : away];
+
+        if (K_Sight_Check(from->at.x, from->at.y, from->z + from->height * 0.75, at.x, at.y,
+                          floor, floor + PLAYER_HEIGHT))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Where to retreat to from a monster (by its place in the list): open floor
-// (RETREAT_OPEN), or with `hide` a spot out of its sight (HIDE_REACH) - the
-// nearest cell's middle, walked to through open crossings (portal middle to
-// portal middle), none on a floor that hurts unless the player stands on
-// one; the way there, the spot last.
-static boolean FindRetreat(const player_t *player, int away, boolean hide, k_vec2_t *points,
-                           int *num_points)
+// (RETREAT_OPEN), or with `hide` a spot out of its sight (HIDE_REACH) - out
+// of the sight of the whole pack with `from_pack` - the nearest cell's
+// middle, walked to through open crossings (portal middle to portal
+// middle), none on a floor that hurts unless the player stands on one; the
+// way there, the spot last.
+static boolean FindRetreat(const player_t *player, int away, boolean hide, boolean from_pack,
+                           k_vec2_t *points, int *num_points)
 {
     const k_map_t *map = K_Map_Get();
     const k_graph_t *graph = K_Graph_Get();
@@ -5482,7 +5524,6 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, k_vec
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
     double reach = hide ? HIDE_REACH : RETREAT_REACH;
-    double eye = from->z + from->height * 0.75;
     int start = K_Map_CellAt(me.x, me.y);
     int near[MAX_PUSHERS];
     int num_open = 0, num_near = 0, best = -1, cell, k, i;
@@ -5531,7 +5572,8 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, k_vec
         cell = cover_open[nearest];
         cover_open[nearest] = cover_open[--num_open];
 
-        if (cover_distance[cell] > reach)
+        // No further one scores less than the best: its way is longer.
+        if (cover_distance[cell] > reach || cover_distance[cell] > best_score)
         {
             break;
         }
@@ -5545,10 +5587,9 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, k_vec
             double floor = K_Map_CellFloor(cell);
 
             if (Steppable(c->centroid, floor, hurts, EDGE_MARGIN)
-             && (hide ? !K_Sight_Check(from->at.x, from->at.y, eye, c->centroid.x, c->centroid.y,
-                                       floor, floor + PLAYER_HEIGHT)
-                      : K_Graph_Clearance(c->centroid, RETREAT_OPEN) >= RETREAT_OPEN)
-             && RetreatClear(c->centroid, near, num_near))
+             && RetreatClear(c->centroid, near, num_near)
+             && (hide ? HiddenAt(away, from_pack, c->centroid, floor)
+                      : K_Graph_Clearance(c->centroid, RETREAT_OPEN) >= RETREAT_OPEN))
             {
                 double score = length + DUCK_SEEN * Exposure(c->centroid, floor);
 
@@ -5616,17 +5657,36 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, k_vec
 
 static void StopRetreat(const char *why)
 {
+    const mobj_t *mo = players[consoleplayer].mo;
+
     retreating = false;
     retreat_again = leveltime + RETREAT_AGAIN;
     hard_pressed = 0;
     K_Log(K_LOG_COMBAT, K_LOG_INFO, "retreat over after %.1f s - %s",
           (double) (leveltime - retreat_since) / TICRATE, why);
+
+    // Hidden from the pack: waiting for it here, the fight leashed to the
+    // spot (PACK_LURK).
+    if (retreat_pack)
+    {
+        pack_again = leveltime + PACK_AGAIN;
+
+        if (battle && mo != NULL)
+        {
+            anchor.x = ToMap(mo->x);
+            anchor.y = ToMap(mo->y);
+            pack_lurk_until = leveltime + PACK_LURK;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "waiting up to %d s for the pack to come round the "
+                  "corner", PACK_LURK / TICRATE);
+        }
+    }
 }
 
 // Retreating to open floor when pressed hard (RETREAT_AFTER), or out of the
-// sight of a hopeless monster kept off that sees the player (HIDE_REACH):
-// begun, over, and the step along the way there, instead of the fight's own
-// move - unless something flying would hit it.
+// sight of a hopeless monster kept off that sees the player (HIDE_REACH), or
+// of the pack, outmatched with no cover in reach (PACK_LURK): begun, over,
+// and the step along the way there, instead of the fight's own move -
+// unless something flying would hit it.
 static void UpdateRetreat(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -5638,10 +5698,13 @@ static void UpdateRetreat(const player_t *player)
                 && !BitesOnly(monsters[presser].type)
                 && K_Graph_Clearance(me, RETREAT_OPEN) < RETREAT_OPEN ? hard_pressed + 1 : 0;
     seen_tics = standoff && monsters[avoid].visible ? seen_tics + 1 : 0;
+    pack_exposed = battle && outmatched && !peeking && !holding && status.target >= 0
+                && num_pack > 0 ? pack_exposed + 1 : 0;
 
     if (retreating)
     {
-        retreat_calm = (retreat_hide ? seen_tics > 0 : presser >= 0) ? 0 : retreat_calm + 1;
+        retreat_calm = (retreat_pack ? num_pack > 0 : retreat_hide ? seen_tics > 0 : presser >= 0)
+                     ? 0 : retreat_calm + 1;
 
         if (!battle)
         {
@@ -5649,11 +5712,13 @@ static void UpdateRetreat(const player_t *player)
         }
         else if (Distance(me, retreat_points[retreat_num_points - 1]) < RETREAT_NEAR)
         {
-            StopRetreat(retreat_hide ? "out of its sight" : "on open floor");
+            StopRetreat(retreat_pack ? "out of the pack's sight"
+                        : retreat_hide ? "out of its sight" : "on open floor");
         }
         else if (retreat_calm >= RETREAT_CALM)
         {
-            StopRetreat(retreat_hide ? "out of its sight" : "nothing presses now");
+            StopRetreat(retreat_pack ? "out of the pack's sight"
+                        : retreat_hide ? "out of its sight" : "nothing presses now");
         }
         else if (leveltime - retreat_since >= RETREAT_MOST)
         {
@@ -5661,27 +5726,54 @@ static void UpdateRetreat(const player_t *player)
         }
     }
     else if (leveltime >= retreat_again && !bfg_pending
-          && (seen_tics >= RETREAT_AFTER || hard_pressed >= RETREAT_AFTER))
+          && (seen_tics >= RETREAT_AFTER || hard_pressed >= RETREAT_AFTER
+              || (pack_exposed >= RETREAT_AFTER && leveltime >= pack_again)))
     {
         boolean hide = seen_tics >= RETREAT_AFTER;
-        int away = hide ? avoid : presser;
+        boolean from_pack = !hide && pack_exposed >= RETREAT_AFTER && leveltime >= pack_again;
+        int away = hide ? avoid : from_pack ? status.target : presser;
+        boolean found = FindRetreat(player, away, hide || from_pack, from_pack, retreat_points,
+                                    &retreat_num_points);
 
-        if (FindRetreat(player, away, hide, retreat_points, &retreat_num_points))
+        // No spot out of the pack's sight: looked for again in a while; to
+        // open floor meanwhile, if pressed hard.
+        if (!found && from_pack)
+        {
+            pack_again = leveltime + RETREAT_LOOK;
+            from_pack = false;
+            away = presser;
+            found = hard_pressed >= RETREAT_AFTER
+                 && FindRetreat(player, away, false, false, retreat_points, &retreat_num_points);
+        }
+
+        if (found)
         {
             k_vec2_t spot = retreat_points[retreat_num_points - 1];
 
             retreating = true;
-            retreat_hide = hide;
+            retreat_hide = hide || from_pack;
+            retreat_pack = from_pack;
             retreat_next = 0;
             retreat_since = leveltime;
             retreat_calm = 0;
-            K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s the %s, %.0f units off - to %s at (%.0f,%.0f), "
-                  "%.0f units%s", hide ? "hiding from" : "retreating from", monsters[away].name,
-                  monsters[away].distance, hide ? "a spot out of its sight" : "open floor",
-                  spot.x, spot.y, Distance(me, spot),
-                  retreat_num_points > 1 ? ", round a corner" : "");
+
+            if (from_pack)
+            {
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "hiding from the pack - %d monsters, no cover in "
+                      "reach - to a spot out of their sight at (%.0f,%.0f), %.0f units%s",
+                      num_pack, spot.x, spot.y, Distance(me, spot),
+                      retreat_num_points > 1 ? ", round a corner" : "");
+            }
+            else
+            {
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s the %s, %.0f units off - to %s at (%.0f,%.0f), "
+                      "%.0f units%s", hide ? "hiding from" : "retreating from", monsters[away].name,
+                      monsters[away].distance, hide ? "a spot out of its sight" : "open floor",
+                      spot.x, spot.y, Distance(me, spot),
+                      retreat_num_points > 1 ? ", round a corner" : "");
+            }
         }
-        else
+        else if (hide || hard_pressed >= RETREAT_AFTER)
         {
             retreat_again = leveltime + RETREAT_LOOK;
         }
@@ -7244,7 +7336,9 @@ static void UpdateOutmatched(const player_t *player)
     double means = player->health
                  + SDL_min(player->armorpoints, player->health * share / (1.0 - share));
     double cost = 0.0;
-    int count = 0, i;
+    int count = 0, i, k;
+
+    num_pack = 0;
 
     for (i = 0; i < num_monsters; ++i)
     {
@@ -7259,6 +7353,21 @@ static void UpdateOutmatched(const player_t *player)
 
         cost += Kind(monster->type)->cost;
         ++count;
+
+        // The costliest kept, for hiding from (MAX_PACK).
+        if (num_pack == MAX_PACK
+         && Kind(monster->type)->cost <= Kind(monsters[pack[num_pack - 1]].type)->cost)
+        {
+            continue;
+        }
+
+        for (k = num_pack < MAX_PACK ? num_pack++ : num_pack - 1;
+             k > 0 && Kind(monsters[pack[k - 1]].type)->cost < Kind(monster->type)->cost; --k)
+        {
+            pack[k] = pack[k - 1];
+        }
+
+        pack[k] = i;
     }
 
     if (cost > OUTMATCH_SHARE * means || (outmatched && cost >= OUTMATCH_LEAVE * means))
@@ -7419,6 +7528,11 @@ void K_Combat_Reset(void)
     peek_none_mo = NULL;
     peek_tic = 0;
     outmatched = false;
+    num_pack = 0;
+    pack_exposed = 0;
+    pack_lurk_until = 0;
+    pack_again = 0;
+    retreat_pack = false;
 
     for (i = 0; i < MAX_HOPELESS; ++i)
     {
