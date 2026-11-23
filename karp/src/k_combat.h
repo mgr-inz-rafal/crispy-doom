@@ -114,11 +114,12 @@ void K_Combat_LogSummary(void);
 
 // What going to (x, y), on a floor at `floor`, would cost in health,
 // roughly: the live monsters within 1024 that could see the player there
-// (in full within 512, less beyond), each by what a fight with its kind
-// takes; asleep and facing away, half. Only the monsters at the spot, not
-// those on the way to it (the user: those are met and fought anyway, and
-// move about). boss gets the share of it from Cyberdemons and spider
-// masterminds, whom no fight soon ends.
+// (in full within 512, less beyond), each by K_Combat_MonsterCost; asleep
+// and facing away, half; a hopeless one awake within 384 whether it sees
+// the spot or not. Only the monsters at the spot, not those on the way to
+// it (the user: those are met and fought anyway, and move about). boss gets
+// the share of it from Cyberdemons and spider masterminds, whom no fight
+// soon ends, and from hopeless monsters, never fought.
 double K_Combat_Danger(double x, double y, double floor, double *boss);
 
 // How many monsters the player can see within reach of it.
@@ -202,9 +203,14 @@ void K_Combat_Fire(int tic, k_command_t *command);
 // What a kind of monster (a mobjtype_t) is called: "baron of hell".
 const char *K_Combat_KindName(int type);
 
-// What a fight with a kind of monster takes in health, roughly (the cost
-// K_Combat_Danger counts it by); 0 for one never fought (Commander Keen).
+// What a fight with a kind of monster takes in health, roughly; 0 for one
+// never fought (Commander Keen).
 double K_Combat_KindCost(int type);
+
+// What a monster (by its place in this tic's list) is counted at where a
+// route or an item is judged: its kind's cost, four times that for a
+// hopeless one left alone - there is no fight with it.
+double K_Combat_MonsterCost(int index);
 
 int K_Combat_MonsterCount(void);
 const k_monster_t *K_Combat_Monster(int index);

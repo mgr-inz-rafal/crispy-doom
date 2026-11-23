@@ -4548,6 +4548,36 @@ Who controls the player in a fight (the user's model):
     the way on leads back into their sight); a fall back ended for an item "to go for first"
     (C: FirstInReach, as the crow flies) that ConsiderItems, weighing the way and its danger,
     then did not go for (salt 7: a soulsphere among the barons).
+  - E. E4M1, the user's demo runs (2026-11-23; "having only a fist, he run to the room with the
+    Baron that he left alone earlier (which was good), just to dance with the fist in the same
+    room and die. Bot didn't try to fight, but also didn't try to escape"; "maybe it wanted to
+    take a shortcut to the exit. I think there could be a longer, but safer way"). Try 3: the
+    blue key taken at 56 health, the shells gone by 1:57, the fist only; the explorer's sweep
+    before leaving went for health bonuses worth 1 by the rooms south of the west hall (55,
+    56), where a baron wounded to 300 had been left; "0 of its 300 health in hand - not
+    fought, kept off". The way there went through those rooms, by the 8-high steps 57 and 59
+    the baron climbs: 1000 units and 600 for its area (the route's 20 a point of danger, the
+    baron at its kind's 30), against some 1850 north round the central room. And the bonuses
+    beside the room's step counted unguarded: the baron did not see their spot. Kept off 9 s
+    in the room, no spot out of its sight found, then passed at 53 - a blow, dead. Now a
+    hopeless monster left alone weighs four times its kind's cost wherever a route or an item
+    is judged (`k_combat.c` HOPELESS_DANGER, K_Combat_MonsterCost: the danger of areas,
+    `k_area.c`; K_Combat_Danger, for items, as a boss's share: in full, not offset by the
+    danger where the player stands) - a fight with it is not what the kind costs, there is
+    none - and within HOPELESS_NEAR (384) of an item, awake, it guards it whether it sees the
+    spot or not: it walks there. Here: 2400 for its area, the way round 1850; the bonuses
+    guarded by 120, more than the 56 health. The run cannot be played again (it parts from
+    the user's at 0.2 s, as runs do from session to session).
+    From the user's E4M1 save, 8 salts (two of them the user's tries' seeds), 240 s: a finish
+    each; five as before to the line; salt 6, dead in the baron's rooms at 95 s before (a
+    shotgun by the red key there, 68 health at risk, gone for), lived to 140 s - another
+    shotgun first, the red key's room later; salt 12 another shotgun first, both finished;
+    salt 10 parted at 0.2 s (drift). Doom II MAP10 and MAP15 from a pistol start (the only
+    ones of the pistol sets with hopeless monsters), salts 443, 71, 7, 420 s: as before but
+    MAP10 salt 7, where the invulnerability's way logs 400 at risk against 100 (the
+    Cyberdemon hopeless, four times over) and is run for all the same (SphereRun), the runs
+    parting after by two cell charges taken the other way round. Left: the escape - why no
+    spot out of the baron's sight was found (next).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

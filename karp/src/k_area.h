@@ -36,8 +36,9 @@ typedef struct
                             // asleep at half
     double danger;          // what the monsters that could hit the player
                             // in it would cost: inside it or not, by sight
-                            // and distance, the asleep at half; looked at
-                            // about once a second
+                            // and distance, the asleep at half, a hopeless
+                            // one four times over; looked at about once a
+                            // second
     double awake_danger;    // of that, the awake monsters'
     int visited;            // the player has been in it
     double hurts;           // the share of its floor that hurts

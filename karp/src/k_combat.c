@@ -724,6 +724,18 @@ extern void A_CyberAttack();
 // level needs dead, met, with none of those left to fetch, is fought with
 // what there is (K_Combat_Needed): kept off and passed for good it would
 // never die.
+// A hopeless monster left alone (LeftAlone) weighs HOPELESS_DANGER times
+// its kind's cost where a route or an item is judged (K_Combat_MonsterCost:
+// the danger of areas, K_Combat_Danger): a fight with it is not what the
+// kind costs, there is none - it is kept off, or it kills (the user, E4M1:
+// "having only a fist, he ran to the room with the baron that he left alone
+// earlier, just to dance with the fist in the same room and die" - a health
+// bonus worth 1 gone for through the wounded baron's rooms, 1000 units and
+// 600 for the baron, not round the central room, 1850; the bonus beside its
+// door counted unguarded, out of its sight). And within HOPELESS_NEAR of an
+// item awake, it guards it whether it sees the spot or not: it walks there.
+#define HOPELESS_DANGER 4.0
+#define HOPELESS_NEAR 384.0
 #define HOPELESS_SHARE 0.5
 #define HOPELESS_KEEP 0.25
 #define HOPELESS_TICS (60 * TICRATE)
@@ -8285,13 +8297,15 @@ double K_Combat_Danger(double x, double y, double floor, double *boss)
     for (i = 0; i < num_monsters; ++i)
     {
         const k_monster_t *monster = &monsters[i];
-        double cost = Kind(monster->type)->cost;
+        double cost = K_Combat_MonsterCost(i);
         double distance = Distance(monster->at, at);
+        boolean left = LeftAlone(i);
         double share;
 
         if (cost <= 0.0 || distance > DANGER_REACH
-         || !K_Sight_Check(monster->at.x, monster->at.y, monster->z + monster->height * 0.75,
-                           x, y, floor, floor + PLAYER_HEIGHT))
+         || (!(left && monster->awake && distance <= HOPELESS_NEAR)
+             && !K_Sight_Check(monster->at.x, monster->at.y, monster->z + monster->height * 0.75,
+                               x, y, floor, floor + PLAYER_HEIGHT)))
         {
             continue;
         }
@@ -8307,7 +8321,7 @@ double K_Combat_Danger(double x, double y, double floor, double *boss)
 
         danger += cost * share;
 
-        if (monster->type == MT_CYBORG || monster->type == MT_SPIDER)
+        if (monster->type == MT_CYBORG || monster->type == MT_SPIDER || left)
         {
             *boss += cost * share;
         }
@@ -8491,6 +8505,11 @@ const char *K_Combat_KindName(int type)
 double K_Combat_KindCost(int type)
 {
     return Kind(type)->cost;
+}
+
+double K_Combat_MonsterCost(int index)
+{
+    return Kind(monsters[index].type)->cost * (LeftAlone(index) ? HOPELESS_DANGER : 1.0);
 }
 
 int K_Combat_MonsterCount(void)

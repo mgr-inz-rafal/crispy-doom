@@ -21,7 +21,8 @@
 //	every tic, each about once a second (REFRESH_TICS) - every live monster
 //	within DANGER_REACH that can see one of its sample points (up to
 //	SAMPLES cells' middles, spread over it) or stands in it, by what a fight
-//	with its kind costs, in full within DANGER_FULL and less and less
+//	with its kind costs (a hopeless one, never fought, four times that:
+//	K_Combat_MonsterCost), in full within DANGER_FULL and less and less
 //	beyond, the asleep at ASLEEP_SHARE (the user). A sector shut at load (a
 //	door a switch opens, bars) is a passage too. Missiles never count:
 //	they pass. The areas the player has stood in are visited.
@@ -592,7 +593,7 @@ static void Refresh(int a)
     for (i = 0; i < K_Combat_MonsterCount(); ++i)
     {
         const k_monster_t *monster = K_Combat_Monster(i);
-        double cost = K_Combat_KindCost(monster->type);
+        double cost = K_Combat_MonsterCost(i);
         double distance = BoxDistance(area, monster->at);
         boolean sees = monster_area[i] == a;
 
