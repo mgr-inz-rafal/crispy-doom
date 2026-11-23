@@ -40,6 +40,12 @@ static int *line_marks;
 static int marks_size;
 static int mark;
 
+// A door taken as open (K_Sight_AssumeOpen), or -1, and its ceiling then;
+// the shut door the last check stopped at, or -1.
+static int open_door = -1;
+static fixed_t open_top;
+static int shut_door = -1;
+
 void K_Sight_Reset(void)
 {
     free(line_marks);
@@ -128,6 +134,7 @@ static boolean CrossSubsector(sight_t *sight, int num)
     {
         const line_t *line = seg->linedef;
         const sector_t *front, *back;
+        fixed_t front_ceiling, back_ceiling;
         fixed_t opentop, openbottom, frac, slope;
         divline_t divl;
         int index, s1, s2;
@@ -176,19 +183,22 @@ static boolean CrossSubsector(sight_t *sight, int num)
 
         front = seg->frontsector;
         back = seg->backsector;
+        front_ceiling = (int) (front - sectors) == open_door ? open_top : front->ceilingheight;
+        back_ceiling = (int) (back - sectors) == open_door ? open_top : back->ceilingheight;
 
-        if (front->floorheight == back->floorheight
-         && front->ceilingheight == back->ceilingheight)
+        if (front->floorheight == back->floorheight && front_ceiling == back_ceiling)
         {
             continue;
         }
 
-        opentop = SDL_min(front->ceilingheight, back->ceilingheight);
+        opentop = SDL_min(front_ceiling, back_ceiling);
         openbottom = SDL_max(front->floorheight, back->floorheight);
 
         // A closed door.
         if (openbottom >= opentop)
         {
+            shut_door = front_ceiling <= front->floorheight ? (int) (front - sectors)
+                      : back_ceiling <= back->floorheight ? (int) (back - sectors) : -1;
             return false;
         }
 
@@ -204,7 +214,7 @@ static boolean CrossSubsector(sight_t *sight, int num)
             }
         }
 
-        if (front->ceilingheight != back->ceilingheight)
+        if (front_ceiling != back_ceiling)
         {
             slope = FixedDiv(opentop - sight->eye, frac);
 
@@ -270,6 +280,8 @@ static int Check(fixed_t x1, fixed_t y1, fixed_t eye, fixed_t x2, fixed_t y2,
 {
     sight_t sight;
 
+    shut_door = -1;
+
     if (line_marks == NULL || marks_size != numlines || Rejected(x1, y1, x2, y2))
     {
         return false;
@@ -315,8 +327,20 @@ int K_Sight_Aim(double x1, double y1, double z, double x2, double y2, double bot
 
     top = SDL_min(top, z + reach);
     bottom = SDL_max(bottom, z - reach);
+    shut_door = -1;
 
     return top > bottom && K_Sight_Check(x1, y1, z, x2, y2, bottom, top);
+}
+
+void K_Sight_AssumeOpen(int sector, double top)
+{
+    open_door = sector;
+    open_top = ToFixed(top);
+}
+
+int K_Sight_ShutDoor(void)
+{
+    return shut_door;
 }
 
 int K_Sight_Things(const mobj_t *looker, const mobj_t *target)

@@ -38,6 +38,15 @@ int K_Sight_Things(const struct mobj_s *looker, const struct mobj_s *target);
 int K_Sight_Aim(double x1, double y1, double z, double x2, double y2, double bottom,
                 double top);
 
+// The checks after it as if a door were open, its ceiling at top: by its
+// sector, -1 for none again (k_brain.c BarrelSpots: a spot that sees a
+// barrel once the door between is opened).
+void K_Sight_AssumeOpen(int sector, double top);
+
+// The sector of the shut door the last check stopped at, if it failed
+// there, else -1.
+int K_Sight_ShutDoor(void);
+
 #ifdef __cplusplus
 }
 #endif

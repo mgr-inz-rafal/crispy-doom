@@ -593,6 +593,8 @@ typedef struct
     int line;               // the line to work, -1 for a key or a point
     k_vec2_t aim;           // GOAL_BARREL: the barrel to shoot from there;
                             // GOAL_KILL: where the monster stood
+    int door;               // GOAL_BARREL: the shut door it sees the barrel
+                            // through once open (BarrelSpots), else -1
     char what[64];          // "exit switch at line 162", "blue keycard"...
 } candidate_t;
 
@@ -1220,7 +1222,12 @@ static int BarrelChain(int block, int *chain)
 // Spots to set off a barrel in the way from (BARREL_RINGS): round any
 // barrel of its chain, on floor the player can stand on, that barrel in
 // reach of the shots, every barrel of the chain BARREL_SAFE off or out of
-// sight. Returns how many.
+// sight. Also one that sees the barrel only through a shut door, as it
+// would once the door is open, the door opened first (PlanGoal; Doom II
+// MAP23: the barrel at (1184,-320) narrows the only ways to the spots
+// beyond it, and the only others, west of door 31, see the chain through
+// that door; they were got to only because the door was taken for one that
+// narrowed a way, 110 units off). Returns how many.
 static int BarrelSpots(int block, candidate_t *out, int max)
 {
     const k_map_t *map = K_Map_Get();
@@ -1243,6 +1250,7 @@ static int BarrelSpots(int block, candidate_t *out, int max)
                                   barrel->at.y + sin(angle) * barrel_rings[r] };
                 int cell = K_Map_CellAt(spot.x, spot.y);
                 boolean safe = true;
+                int door = -1;
                 double floor;
 
                 if (cell < 0 || K_Graph_Clearance(spot, 17.0) < 17.0)
@@ -1255,7 +1263,16 @@ static int BarrelSpots(int block, candidate_t *out, int max)
                 if (!K_Sight_Aim(spot.x, spot.y, floor + GUN_HEIGHT, barrel->at.x, barrel->at.y,
                                  bottom, bottom + BARREL_HEIGHT))
                 {
-                    continue;
+                    door = K_Sight_ShutDoor();
+
+                    if (door < 0 || !K_Graph_IsDoor(door))
+                    {
+                        continue;
+                    }
+
+                    K_Sight_AssumeOpen(door, K_Graph_DoorTop(door));
+                    safe = K_Sight_Aim(spot.x, spot.y, floor + GUN_HEIGHT, barrel->at.x,
+                                       barrel->at.y, bottom, bottom + BARREL_HEIGHT);
                 }
 
                 for (c = 0; c < length && safe; ++c)
@@ -1268,6 +1285,8 @@ static int BarrelSpots(int block, candidate_t *out, int max)
                                           other->at.y, other_floor, other_floor + BLAST_HEIGHT);
                 }
 
+                K_Sight_AssumeOpen(-1, 0.0);
+
                 if (!safe)
                 {
                     continue;
@@ -1277,6 +1296,7 @@ static int BarrelSpots(int block, candidate_t *out, int max)
                 out[count].kind = K_GOAL_POINT;
                 out[count].line = -1;
                 out[count].aim = barrel->at;
+                out[count].door = door;
 
                 if (m == 0)
                 {
@@ -1739,6 +1759,12 @@ static int Candidates(const goal_t *goal, candidate_t *out, int max)
                        goal->point.x, goal->point.y);
             count = 1;
             break;
+    }
+
+    // Only a barrel's spots wait on a door (BarrelSpots).
+    for (i = 0; goal->type != GOAL_BARREL && i < count; ++i)
+    {
+        out[i].door = -1;
     }
 
     return count;
@@ -2512,8 +2538,8 @@ static void LogReasons(const char *name)
 }
 
 // Whether some candidate of a goal is open to the player now: one it can
-// work (no key it lacks, none needed for a door in front of a switch), with
-// an open route there.
+// work (no key it lacks, none needed for a door in front of a switch, no
+// shut door between it and a barrel), with an open route there.
 static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 {
     static candidate_t candidates[MAX_CANDIDATES];
@@ -2523,7 +2549,7 @@ static boolean HasOpenWay(const goal_t *goal, const k_pose_t *player)
 
     for (i = 0; i < count; ++i)
     {
-        if (WasTried(goal, candidates[i].at))
+        if (WasTried(goal, candidates[i].at) || candidates[i].door >= 0)
         {
             continue;
         }
@@ -2958,6 +2984,42 @@ static void PlanGoal(goal_t *goal)
 
                 continue;
             }
+        }
+
+        // A spot that sees the barrel only through a shut door (BarrelSpots),
+        // an open way there: the door opened first, a fix on the way.
+        if (candidates[i].door >= 0)
+        {
+            if (scratch.result == K_PATH_FOUND
+             && LiveTrigger(candidates[i].door, OPENING_MOVES | K_MOVE_DOOR)
+             && Allowed(GOAL_TRIGGER, candidates[i].door))
+            {
+                double score = FIXABLE_COST + scratch.length;
+
+                if (best_blocked < 0 || score < blocked_score)
+                {
+                    best_blocked = i;
+                    blocked_score = score;
+                    fix_type = GOAL_TRIGGER;
+                    fix_param = candidates[i].door;
+                    fix_want = OPENING_MOVES | K_MOVE_DOOR;
+                    fix_portal = -1;
+                    fix_from = -1;
+                    M_snprintf(blocker, sizeof(blocker), "the %s sees it only through the "
+                               "door of sector %d, shut", candidates[i].what,
+                               candidates[i].door);
+                }
+            }
+            else
+            {
+                M_snprintf(reason, sizeof(reason), "the %s sees it only through the door of "
+                           "sector %d, shut, and %s", candidates[i].what, candidates[i].door,
+                           scratch.result != K_PATH_FOUND ? "there is no open way there"
+                                                          : "nothing opens it");
+                KeepReason(reason);
+            }
+
+            continue;
         }
 
         if (scratch.result == K_PATH_FOUND)
@@ -3939,6 +4001,12 @@ static boolean ItemDetour(k_vec2_t start, int cell, k_vec2_t spot, k_vec2_t end,
             if (there >= 0.0 && fix_least[fix_order[i]] + FIX_WORK >= there)
             {
                 break;
+            }
+
+            // Not a barrel's spot past a shut door: a fix of its own first.
+            if (fix_candidates[fix_order[i]].door >= 0)
+            {
+                continue;
             }
 
             K_Path_Find(&fix_probe, start, cell, at);
