@@ -4617,6 +4617,34 @@ Who controls the player in a fight (the user's model):
     140.8 s. The E4M1 save, 20 salts, 240 s: 15 finished against 13 (salt 18, and salt 19
     parting at a stuck). Doom II without monsters, 29 maps: all finished, as before to the
     tenth but MAP20 (+0.1 s) and MAP28 (+0.2 s), where a stuck now steps the other way.
+  - G. A monster fighting another, in the way (the user, E4M2 demo run: "bot got stuck in a
+    narrow corridor with IMP blocking its way. However, this IMP was infighting with some
+    distant monster, so bot never killed it and couldn't progress"). The corridor at the top
+    of the stairs west of the cross, 64 wide (an imp's 20 and the player's 16 do not pass):
+    "leaving the imp alone - it fights the cacodemon", then stuck at (-544,1055), stepping
+    aside and back, the switch goal failed twice and every goal hanging on it; the bot stood.
+    A monster fighting another is no target at any distance (a shot turns it on the player):
+    989 times in the test logs within 96 of the bot, mostly demons and lost souls brawling
+    beside it. A first try fought the one standing on the route at once; the user: "imagine
+    a baron instead of the imp - attacking it would be deadly, it will retaliate badly ...
+    try to stay away from such a monster for some time, fighting or avoiding others, and let
+    it move. Only if it doesn't move enough to let us pass, take the risk and attack". Now one
+    within 96 whose box the route's next 128 runs through is a blocker (`k_combat.c`
+    UpdateBlocker): kept off as a hopeless one is (Avoided: a standoff, the route waiting,
+    others fought meanwhile), up to BLOCK_WAIT (6 s) while it stays on the route within 512 -
+    once off it, the way goes on, its fight undisturbed; still there after, it is fought, its
+    fight broken off - but a hopeless one is kept off still. Logged: "the imp, 78 units off,
+    fights the cacodemon in the way - kept off up to 6 s, to let it move", "... still in the
+    way after 6 s - fought, its fight broken off" (or "beyond what the player holds, kept off
+    still"); the target line "..., fighting another, but in the way".
+    From the user's first E4M2 save, salts 443, 71, 7, 11, 23, 99, 404, 606, 300 s: 7 as
+    before to the line; salt 443 met two (an imp fighting a cacodemon 78 off, which turned on
+    the bot 1.6 s later and was shot; an imp fighting a baron at the top of those stairs, the
+    bot dead 1.6 s later in that fight, as before). E3M2, E3M6, E1M8 from a pistol start
+    (where most of the 989 were), salts 443, 71, 7, 330 s: all 18 as before to the tenth;
+    three blockers met (a lost soul on E3M2, a demon and an imp on E3M6), each off the way
+    within the wait. The user's run itself cannot be played again; its save starts E4M2 at
+    18 health and dies in 2 s.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

@@ -43,7 +43,9 @@
 //	would turn it on the player - but kept off as any; not the boss the level
 //	needs dead (the user, E3M8: the spider mastermind fought the baron, the
 //	bot stood in the open doing nothing, its stray bullets hitting it - busy,
-//	it keeps its target 100 tics after each hit it takes). Telefrags: what stands
+//	it keeps its target 100 tics after each hit it takes); but one standing
+//	in the player's way, close, is kept off a while to let it move, and
+//	fought if it does not (UpdateBlocker). Telefrags: what stands
 //	where the brain goes to land by a teleporter is left alone, its death on
 //	its way (K_Combat_Telefrag). Invulnerable, the player fights far
 //	monsters too and begins no hold (INVULN_BOLD); a hard fight is what a
@@ -212,7 +214,22 @@ extern void A_CyberAttack();
 // A monster within CLOSE_REACH - in reach of its blows, or in the way -
 // scores CLOSE_FIRST times more (plan 7.3: a monster within melee reach
 // goes first; MAP04: a zombieman in the way held the bot 1.1 s, unshot).
+// One fighting another in the player's way - within CLOSE_REACH, the
+// route's next WAY_AHEAD through its box - is a blocker (UpdateBlocker; the
+// user, E4M2: an imp fighting a monster afar, in the 64-wide corridor at the
+// top of the stairs west of the cross, never shot; the bot pushed on it,
+// stepped aside and back, its goals failed, and it stood there - "maybe we
+// should eventually attack such a monster"). First it is kept off as a
+// hopeless one is (Avoided: the route waits, others fought meanwhile), up to
+// BLOCK_WAIT, while it stays on the route within BLOCK_AHEAD: let it move,
+// its fight undisturbed (the user: "attacking a baron in such a situation
+// would be deadly - it will retaliate badly"). Still there after, it is
+// fought as any - but a hopeless one, kept off still. Not one fighting
+// beside the way: their fight goes on.
 #define CLOSE_REACH 96.0
+#define WAY_AHEAD 128.0
+#define BLOCK_AHEAD 512.0
+#define BLOCK_WAIT (6 * TICRATE)
 #define CLOSE_FIRST 4.0
 
 // While a pain elemental the shots can find is within TARGET_REACH, and not
@@ -1372,6 +1389,11 @@ static boolean fight_needed;        // and fought anyway this tic, hopeless or n
 static double boss_spare = 1.0;     // the share of the ammo not kept for it (BOSS_MARGIN)
 static boolean boss_short;          // none to spare, as last logged
 static const mobj_t *hopeless_logged[MAX_HOPELESS];
+// A monster fighting another in the player's way (BLOCK_WAIT): which, and
+// since when.
+static const mobj_t *blocker_mo;
+static int blocker_since;
+
 static int avoid = -1;
 static const mobj_t *avoid_mo;
 static int avoid_tics;
@@ -3336,8 +3358,18 @@ static void UpdateReserve(const player_t *player)
     carry = carried;
 }
 
+// Whether the monster (by its place in this tic's list) is the one fighting
+// another in the player's way, waited for still (BLOCK_WAIT); or waited for
+// long enough, to be fought.
+static boolean BlockerWaited(int index, boolean done)
+{
+    return monster_mobjs[index] == blocker_mo
+        && (leveltime - blocker_since >= BLOCK_WAIT) == done;
+}
+
 // The hopeless monster to keep off (AVOID_PAST): awake, in sight - or the
 // one kept off, seen within AVOID_LINGER - nearer than its kind's distance;
+// or the one fighting another in the player's way, waited for (BLOCK_WAIT);
 // the nearest; not the one passed, unless within CLOSE_REACH, nor one ammo
 // is kept from for the level's boss (ForBoss: passed from the first, the
 // user - "easy to avoid"; E3M8, kept off as any, the cacodemons and the
@@ -3357,7 +3389,8 @@ static int Avoided(void)
         boolean kept = battle && monster_mobjs[i] == avoid_mo;
         double keep = SDL_max(Kind(monster->type)->keep, KEEP_AWAY) + (kept ? AVOID_PAST : 0.0);
 
-        if (LeftAlone(i) && !Spared(i) && monster->awake && monster->distance < keep
+        if ((LeftAlone(i) || BlockerWaited(i, false)) && !Spared(i) && monster->awake
+         && monster->distance < keep
          && (monster->visible || (kept && leveltime - avoid_seen < AVOID_LINGER))
          && !(((monster_mobjs[i] == passed_mo && leveltime < passed_until)
                || ForBoss(monster))
@@ -3407,6 +3440,97 @@ static void UpdateAvoid(void)
     }
 }
 
+// Whether the monster (by its place in this tic's list) stands on the
+// route's next `ahead` from the player, its box in the player's way.
+static boolean OnRouteAhead(int index, k_vec2_t me, double ahead)
+{
+    const k_monster_t *monster = &monsters[index];
+    const k_path_t *path = K_Nav_GetPath();
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+    double reach = monster->radius + PLAYER_RADIUS, left = ahead;
+    k_vec2_t a = me;
+    int k;
+
+    if (path == NULL || nav->state != K_NAV_DRIVING)
+    {
+        return false;
+    }
+
+    for (k = SDL_max(nav->target, 1); k < path->num_points && left > 0.0; ++k)
+    {
+        k_vec2_t b = path->points[k], nearest;
+        double dx = b.x - a.x, dy = b.y - a.y;
+        double length2 = dx * dx + dy * dy;
+        double t = length2 > 1e-9 ? ((monster->at.x - a.x) * dx + (monster->at.y - a.y) * dy)
+                                    / length2 : 0.0;
+
+        t = SDL_max(0.0, SDL_min(1.0, t));
+        nearest.x = a.x + dx * t;
+        nearest.y = a.y + dy * t;
+
+        if (Distance(monster->at, nearest) < reach)
+        {
+            return true;
+        }
+
+        left -= sqrt(length2);
+        a = b;
+    }
+
+    return false;
+}
+
+// Each tic: the monster fighting another in the player's way (BLOCK_WAIT) -
+// kept while it fights on, on the route within BLOCK_AHEAD; a new one met
+// within CLOSE_REACH, on the route's next WAY_AHEAD - logged as it is met,
+// and as its wait is over.
+static void UpdateBlocker(k_vec2_t me)
+{
+    int found = -1, i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (!monsters[i].infighting)
+        {
+            continue;
+        }
+
+        if (monster_mobjs[i] == blocker_mo && OnRouteAhead(i, me, BLOCK_AHEAD))
+        {
+            found = i;
+            break;
+        }
+
+        if (found < 0 && monster_mobjs[i] != blocker_mo && monsters[i].distance < CLOSE_REACH
+         && OnRouteAhead(i, me, WAY_AHEAD))
+        {
+            found = i;
+        }
+    }
+
+    if (found < 0)
+    {
+        blocker_mo = NULL;
+        return;
+    }
+
+    if (monster_mobjs[found] != blocker_mo)
+    {
+        blocker_mo = monster_mobjs[found];
+        blocker_since = leveltime;
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s, %.0f units off, fights the %s in the way - kept "
+              "off up to %d s, to let it move", monsters[found].name, monsters[found].distance,
+              Kind(blocker_mo->target->type)->name, BLOCK_WAIT / TICRATE);
+    }
+    else if (leveltime - blocker_since == BLOCK_WAIT)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s, %.0f units off, still in the way after %d s - %s",
+              monsters[found].name, monsters[found].distance, BLOCK_WAIT / TICRATE,
+              LeftAlone(found) ? "beyond what the player holds, kept off still"
+                               : "fought, its fight broken off");
+    }
+}
+
 static void ChooseTarget(const player_t *player)
 {
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
@@ -3442,7 +3566,7 @@ static void ChooseTarget(const player_t *player)
         if (!monster->shootable || monster->distance > TARGET_REACH
          || (!monster->awake && monster->distance > ASLEEP_REACH)
          || (!bold && FarAndDodgeable(monster, monster_mobjs[i])) || IgnoredTarget(i)
-         || LeftAlone(i) || monster->infighting || Spared(i))
+         || LeftAlone(i) || (monster->infighting && !BlockerWaited(i, true)) || Spared(i))
         {
             continue;
         }
@@ -3529,7 +3653,9 @@ static void ChooseTarget(const player_t *player)
         {
             K_Log(K_LOG_COMBAT, K_LOG_INFO, "target: the %s at (%.0f,%.0f), %.0f units%s%s",
                   monsters[best].name, monsters[best].at.x, monsters[best].at.y,
-                  monsters[best].distance, monsters[best].awake ? "" : ", asleep",
+                  monsters[best].distance,
+                  monsters[best].infighting ? ", fighting another, but in the way"
+                  : monsters[best].awake ? "" : ", asleep",
                   !FoughtAsAny(best) ? ", cannot come at the player"
                   : OnWay(best) && !Reaches(best) && !monsters[best].hitscan && !comfy
                     && !FoughtFar(monsters[best].type)
@@ -5242,8 +5368,10 @@ static void StartBattle(const player_t *player)
     }
     else if (avoid >= 0)
     {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "keeping off the %s, %.0f units off - beyond what the "
-              "player holds; the route waits", monsters[avoid].name, monsters[avoid].distance);
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "keeping off the %s, %.0f units off - %s; the route waits",
+              monsters[avoid].name, monsters[avoid].distance,
+              monster_mobjs[avoid] == blocker_mo && !LeftAlone(avoid)
+              ? "it fights another in the way" : "beyond what the player holds");
     }
     else
     {
@@ -7645,6 +7773,7 @@ void K_Combat_Reset(void)
     avoid_mo = NULL;
     avoid_tics = 0;
     avoid_seen = 0;
+    blocker_mo = NULL;
     passed_mo = NULL;
     passed_until = 0;
     num_barrels = 0;
@@ -7758,6 +7887,7 @@ void K_Combat_Tick(int driving)
         UpdateOnWay(me);
         UpdateOutmatched(player);
         UpdateReserve(player);
+        UpdateBlocker(me);
         ChooseTarget(player);
         CountMisses(player);
         ChooseWeapon(player);
