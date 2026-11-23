@@ -4645,6 +4645,28 @@ Who controls the player in a fight (the user's model):
     three blockers met (a lost soul on E3M2, a demon and an imp on E3M6), each off the way
     within the wait. The user's run itself cannot be played again; its save starts E4M2 at
     18 health and dies in 2 s.
+  - H. Waiting on a floor that hurts (the user, E4M2: "the bot pressed the button to raise
+    the ledge ... but then it STAYED on the damaging floor, doing 'something'"). Switch 166 is
+    pressed from sector 7, dry, 8 above the nukage ring round it (sector 0, special 5); the
+    goal is done once sector 3, the octagon it raises, stops - 8.3 s - and meanwhile the
+    brain stands still (UpdateTrigger: K_Nav_Clear, no route). A step out of an imp's
+    fireball at 16.2 s took the bot into the ring, and it stood there to 23.0 s, from 111
+    health and armour to 48, no monster's hit among it. Now, waiting for a moved sector to
+    stop, standing on a floor that hurts (its middle over it, at its floor: as the engine
+    hurts), no suit on, the player goes to the nearest dry spot (`k_brain.c` StayDry,
+    DrySpot: out to 256 in rings 32 apart, 16 ways round, the shortest way there), nav
+    driving there, and waits there; looked for again a second after none is found. Logged:
+    "...: waiting for sector N to stop, on a floor that hurts - to dry floor at ...". From
+    the user's two E4M2 saves, 6 salts each, 120 s: it went to dry floor in 4 runs, each
+    the tic the bot's middle came down on the nukage (before, its box still stood on sector
+    7's floor, 8 higher, and the engine hurts no one above a floor); deaths 6 each. Doom II
+    without monsters: never used; as before (MAP12 seemed to part by 6 s in the parallel
+    set, by a tenth at 15 s, before any switch; side by side, the same to the tenth).
+    And the user's E4M1 question - the medikit and 4 shells in the corners outside the start
+    room, never gone for: the alcoves (sectors 14, 79) are 48 above the floor before them,
+    the step the only way up (lines 122, 237), and behind them sealed closets (35, 80) with
+    only monsters-only teleport lines (type 126) between: monster closets, the items out of
+    the player's reach - rightly never routed to.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

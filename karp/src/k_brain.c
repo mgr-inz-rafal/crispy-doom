@@ -73,6 +73,19 @@
 #define MOVE_TICS (15 * TICRATE)
 #define MAX_TRIGGERS 3
 
+// Waiting for it to stop, standing on a floor that hurts, no suit on, the
+// player goes to the nearest dry spot (StayDry): out to DRY_REACH, in rings
+// DRY_RING apart, DRY_WAYS ways round, the one with the shortest way there
+// (the user, E4M2: switch 166 pressed from the dry floor before it, a step
+// out of an imp's fireball took the bot into the nukage of the ring beside
+// it, and it stood there 7 s as the octagon rose, from 111 health and
+// armour to 48 - "it STAYED on the damaging floor, doing something"). Looked
+// for again DRY_LOOK after none was found.
+#define DRY_REACH 256.0
+#define DRY_RING 32.0
+#define DRY_WAYS 16
+#define DRY_LOOK TICRATE
+
 // A lift or a door that goes back by itself (FixPasses), its line just
 // worked (the user, E3M9: lift 147 lowered three times, each time a
 // cacodemon fought or held short of, or a box of rockets gone for, while it
@@ -642,6 +655,8 @@ typedef struct
     boolean moving;
     boolean changed;        // the heights have differed from those since
     int wait;
+    int dry_look;           // moving, on a floor that hurts: when a dry spot
+                            // may be looked for (StayDry)
 
     // GOAL_TRIGGER: the blocked crossing it was pushed for (crossed out of
     // cell from), -1 if none. Once that opens, even if only after a wait
@@ -3261,9 +3276,89 @@ static boolean DoneIfOpen(const goal_t *goal)
     return true;
 }
 
+// The nearest dry spot to go to from a floor that hurts (DRY_REACH): in the
+// first ring with any, the one with the shortest way there.
+static boolean DrySpot(const k_pose_t *player, k_vec2_t *spot)
+{
+    const k_map_t *map = K_Map_Get();
+    k_vec2_t start = { player->x, player->y };
+    double best = 1e30, radius;
+    int i;
+
+    for (radius = DRY_RING; radius <= DRY_REACH && best >= 1e30; radius += DRY_RING)
+    {
+        for (i = 0; i < DRY_WAYS; ++i)
+        {
+            double angle = i * 2.0 * 3.14159265358979323846 / DRY_WAYS;
+            k_vec2_t at = { start.x + cos(angle) * radius, start.y + sin(angle) * radius };
+            int cell = K_Map_CellAt(at.x, at.y);
+
+            if (cell < 0
+             || K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0
+             || K_Graph_Clearance(at, PLAYER_RADIUS + 1.0) <= PLAYER_RADIUS)
+            {
+                continue;
+            }
+
+            K_Path_Find(&probe, start, player->cell, at);
+
+            if (probe.result == K_PATH_FOUND && probe.length <= 2.0 * radius
+             && probe.length < best)
+            {
+                best = probe.length;
+                *spot = at;
+            }
+        }
+    }
+
+    return best < 1e30;
+}
+
+// Waiting for a sector set going to stop (UpdateTrigger), on a floor that
+// hurts, no suit on: to the nearest dry spot (DrySpot), nav driving there;
+// logged as it sets off.
+static void StayDry(goal_t *goal)
+{
+    const k_map_t *map = K_Map_Get();
+    k_pose_t player;
+    k_vec2_t spot;
+    char name[64];
+    int sector;
+
+    if (K_Nav_GetStatus()->state == K_NAV_DRIVING)
+    {
+        K_Nav_Tick();
+        return;
+    }
+
+    if (leveltime < goal->dry_look || K_Map_SuitTics() > 0 || !K_Map_GetPlayer(&player)
+     || player.cell < 0)
+    {
+        return;
+    }
+
+    // Damage comes from the floor under the player's middle, stood on.
+    sector = map->subsectors[map->cells[player.cell].subsector].sector;
+
+    if (K_Map_FloorDamage(sector) <= 0.0 || fabs(K_Map_CellFloor(player.cell) - player.floor) > 1.0)
+    {
+        return;
+    }
+
+    goal->dry_look = leveltime + DRY_LOOK;
+
+    if (DrySpot(&player, &spot) && K_Nav_SetGoal(spot.x, spot.y))
+    {
+        GoalName(goal, name, sizeof(name));
+        K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: waiting for sector %d to stop, on a floor that hurts "
+              "- to dry floor at (%.0f,%.0f)", name, goal->param, spot.x, spot.y);
+    }
+}
+
 // A sector moved by a line: once the line is used, wait for the sector to
-// start moving, then to stop (unless the way opens first: DoneIfOpen).
-// Returns true while it handles the goal.
+// start moving, then to stop (unless the way opens first: DoneIfOpen) - off
+// a floor that hurts meanwhile (StayDry). Returns true while it handles the
+// goal.
 static boolean UpdateTrigger(goal_t *goal)
 {
     double floor, ceiling;
@@ -3339,8 +3434,10 @@ static boolean UpdateTrigger(goal_t *goal)
         M_snprintf(how, sizeof(how), "sector %d moved (floor %.0f, ceiling %.0f)",
                    goal->param, floor, ceiling);
         DoneGoal(how);
+        return true;
     }
 
+    StayDry(goal);
     return true;
 }
 
