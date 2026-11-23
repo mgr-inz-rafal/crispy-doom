@@ -4578,6 +4578,30 @@ Who controls the player in a fight (the user's model):
     Cyberdemon hopeless, four times over) and is run for all the same (SphereRun), the runs
     parting after by two cell charges taken the other way round. Left: the escape - why no
     spot out of the baron's sight was found (next).
+    The escape: with a line logging why (taken out again), 14 runs from the E4M1 save showed
+    the hides that failed - from a hopeless monster, and from a pack - had looked no further
+    than the player's own cell or the next. Their ways out were blocking lines, gaps between
+    pillars, narrow openings, and the one or two open ones not clear: the way and its spots
+    were held RETREAT_CLEAR off every awake monster within some 1150 - 5 to 29 of them, imps
+    behind windows and on ledges that could not come among them - and each crossing judged
+    at its middle, a wide opening by its middle beside the baron, its ends far from it. Now
+    (FindRetreat, for the retreat to open floor too) only those that can come at the player
+    count (Reaches: within reach of their blows too), and a crossing whose middle is not
+    clear is taken at the clear point along it nearest its middle, of 5 kept 32 off its ends
+    (CrossAt; a first try took the clear point nearest the way coming, the way hugged a pit's
+    edge, and a hide from a baron went onto the nukage - 8 of 20 finished against 12). With
+    hides found further off, a pack's is no further than 384 (PACK_HIDE_REACH, as cover's
+    320: the way there is run in their sight - a hide 630 off from four imps, the nearest at
+    50, and the bot died on the way). A hide none is found for is logged once for that
+    monster: "no spot out of the ...'s sight within ...". From the E4M1 save, 20 salts, 240 s:
+    13 finished against 12; from the E4M2 save, 8 salts, 420 s: 1 against 2 (salt 71: a
+    pack hide 377 off as the crow flies, beyond 384 by the way, not taken; the runs parted
+    there) - 14 each in all; MAP05, MAP06, E1M5, E1M6, salts 443, 71, 7, 360 s: 11 of 12
+    each, 8 runs as before to the line. Hides from the hopeless baron seen to work (E4M1 salts 16 and
+    22: four, 72 to 309 off, a miss between). Seen in both builds alike, left for navigation:
+    E4M1 salt 18 stuck for minutes at (888,-136), 100 short of the blue key - the corridor to
+    its alcove (sector 28, 64 wide) entered past the corner at (904,-128), the straight way
+    within 12 of it, replanned the same each time.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

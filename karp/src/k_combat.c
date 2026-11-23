@@ -311,9 +311,12 @@ extern void A_CyberAttack();
 // off, the player shoots it). It retreats to open floor: the middle of a cell
 // with no wall within RETREAT_OPEN, RETREAT_GAIN further from what presses
 // it than the player is, walked to through open crossings within
-// RETREAT_REACH, the way and the spot never nearer to any awake monster than
+// RETREAT_REACH, the way and the spot never nearer to any awake monster that
+// can come at the player (Reaches: within reach of its blows too) than
 // RETREAT_CLEAR (than the player is, if nearer: E3M5, retreating from a
-// demon past three imps, clawed and burned from 84 to 15); the nearest,
+// demon past three imps, clawed and burned from 84 to 15) - each crossing
+// at its middle, or where that is not clear so, at the clear point along it
+// nearest the middle (CrossAt); the nearest,
 // what other monsters would see of it counted (Exposure). The fight goes
 // on, shooting on the way; a step that
 // something flying would hit is left to the fight's own move. Over once
@@ -341,8 +344,18 @@ extern void A_CyberAttack();
 // nearest cell's middle it does not see, within HIDE_REACH through open
 // crossings, the way clear of awake monsters as above, however long getting
 // there takes. Over once there, once out of its sight for RETREAT_CALM, or
-// after RETREAT_MOST.
+// after RETREAT_MOST. With none found, logged once for that monster. (The
+// user, E4M1: kept off a hopeless baron 9 s in its room, then passed at 53
+// and clawed dead - "didn't try to fight, but also didn't try to escape".
+// In 14 runs from that level's start the hides that failed had looked no
+// further than the player's own cell or the next: its ways out, but the
+// blocking lines and the gaps between pillars, were all held clear of every
+// awake monster within 1150, 5 to 29 of them - imps behind windows and on
+// ledges that could not come too - each judged at its middle, a wide
+// opening by its middle beside the baron, its ends far from it.)
 #define HIDE_REACH 1024.0
+#define RETREAT_SAMPLES 5
+#define RETREAT_INSET 32.0
 
 // Open floor is floor with no wall within OPEN_REACH.
 #define OPEN_REACH 64.0
@@ -614,12 +627,16 @@ extern void A_CyberAttack();
 // one of them (FindRetreat, as from a hopeless monster) - and there waits
 // for them, the fight held on PACK_LURK with nothing to shoot, its leash
 // from that spot: they come round the corner one by one. Not again for
-// PACK_AGAIN (they may not come: back out, it is fought in the open).
+// PACK_AGAIN (they may not come: back out, it is fought in the open). No
+// further than PACK_HIDE_REACH: the way there is run in their sight, as to
+// cover (COVER_REACH; E4M1: a hide 630 off from four imps, the nearest at
+// 50, and the bot died on the way).
 #define OUTMATCH_SHARE 0.5
 #define OUTMATCH_LEAVE 0.35
 #define OUTMATCH_LINGER (3 * TICRATE)
 #define PACK_LURK (4 * TICRATE)
 #define PACK_AGAIN (10 * TICRATE)
+#define PACK_HIDE_REACH 384.0
 #define MAX_PACK 8
 
 // Left alone for a telefrag (K_Combat_Telefrag): the monsters a player
@@ -1313,6 +1330,8 @@ static double press;                // by how many KEEP_AWAY inside its distance
 static boolean retreating;
 static boolean retreat_hide;        // out of the sight of a hopeless monster
 static boolean retreat_pack;        // or of the pack, outmatched (PACK_LURK)
+static const mobj_t *hide_none_mo;  // the one no spot out of its sight was
+                                    // found from (logged once)
 static int seen_tics;               // in a standoff, seen by it, in a row
 static k_vec2_t retreat_points[RETREAT_POINTS];
 static int retreat_num_points;
@@ -5501,6 +5520,43 @@ static boolean RetreatClear(k_vec2_t at, const int *near, int num_near)
     return true;
 }
 
+// Where a way crosses a portal: its middle, clear of the monsters near
+// (RetreatClear); or else, of RETREAT_SAMPLES points along it kept
+// RETREAT_INSET off its ends, the clear one nearest the middle - the way
+// kept off the walls and edges beside it as far as it can be (E4M1: taken
+// at the end nearest the way, the way hugged a pit's edge, and a hide from
+// a baron went onto the nukage); false if none is clear.
+static boolean CrossAt(const k_portal_t *portal, const int *near, int num_near, k_vec2_t *at)
+{
+    double length = Distance(portal->a, portal->b);
+    double inset = length > 2.0 * RETREAT_INSET ? RETREAT_INSET / length : 0.5;
+    double best = 1e30;
+    int s;
+
+    at->x = (portal->a.x + portal->b.x) * 0.5;
+    at->y = (portal->a.y + portal->b.y) * 0.5;
+
+    if (RetreatClear(*at, near, num_near))
+    {
+        return true;
+    }
+
+    for (s = 0; s < RETREAT_SAMPLES; ++s)
+    {
+        double t = inset + (1.0 - 2.0 * inset) * s / (RETREAT_SAMPLES - 1);
+        k_vec2_t point = { portal->a.x + (portal->b.x - portal->a.x) * t,
+                           portal->a.y + (portal->b.y - portal->a.y) * t };
+
+        if (fabs(t - 0.5) < best && RetreatClear(point, near, num_near))
+        {
+            best = fabs(t - 0.5);
+            *at = point;
+        }
+    }
+
+    return best < 1e30;
+}
+
 // Whether a spot is out of the sight of the monster (by its place in the
 // list), or with `from_pack` of every one in the pack (MAX_PACK).
 static boolean HiddenAt(int away, boolean from_pack, k_vec2_t at, double floor)
@@ -5524,9 +5580,9 @@ static boolean HiddenAt(int away, boolean from_pack, k_vec2_t at, double floor)
 // Where to retreat to from a monster (by its place in the list): open floor
 // (RETREAT_OPEN), or with `hide` a spot out of its sight (HIDE_REACH) - out
 // of the sight of the whole pack with `from_pack` - the nearest cell's
-// middle, walked to through open crossings (portal middle to portal
-// middle), none on a floor that hurts unless the player stands on one; the
-// way there, the spot last.
+// middle, walked to through open crossings (each at its point clear of the
+// monsters that can come, CrossAt), none on a floor that hurts unless the
+// player stands on one; the way there, the spot last.
 static boolean FindRetreat(const player_t *player, int away, boolean hide, boolean from_pack,
                            k_vec2_t *points, int *num_points)
 {
@@ -5535,7 +5591,7 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, boole
     const k_monster_t *from = &monsters[away];
     k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
     boolean hurts = K_Map_FloorDamage((int) (player->mo->subsector->sector - sectors)) > 0.0;
-    double reach = hide ? HIDE_REACH : RETREAT_REACH;
+    double reach = from_pack ? PACK_HIDE_REACH : hide ? HIDE_REACH : RETREAT_REACH;
     int start = K_Map_CellAt(me.x, me.y);
     int near[MAX_PUSHERS];
     int num_open = 0, num_near = 0, best = -1, cell, k, i;
@@ -5544,7 +5600,7 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, boole
     for (i = 0; i < num_monsters && num_near < MAX_PUSHERS; ++i)
     {
         if (monsters[i].awake && Kind(monsters[i].type)->cost > 0.0
-         && monsters[i].distance < reach + RETREAT_CLEAR)
+         && monsters[i].distance < reach + RETREAT_CLEAR && Reaches(i))
         {
             near[num_near++] = i;
         }
@@ -5618,11 +5674,17 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, boole
             const k_link_t *link = &graph->links[graph->first_link[cell] + k];
             const k_portal_t *portal = &graph->portals[link->portal];
             int next = link->neighbor;
-            k_vec2_t middle = { (portal->a.x + portal->b.x) * 0.5, (portal->a.y + portal->b.y) * 0.5 };
-            double distance = cover_distance[cell] + Distance(cover_entry[cell], middle);
+            k_vec2_t entry;
+            double distance;
 
-            if (distance >= cover_distance[next] || portal->jump >= 0
-             || !RetreatClear(middle, near, num_near)
+            if (portal->jump >= 0 || !CrossAt(portal, near, num_near, &entry))
+            {
+                continue;
+            }
+
+            distance = cover_distance[cell] + Distance(cover_entry[cell], entry);
+
+            if (distance >= cover_distance[next]
              || K_Graph_CanCross(link->portal, cell) != K_CROSS_OPEN
              || (!hurts && K_Map_FloorDamage(map->subsectors[map->cells[next].subsector].sector)
                            > 0.0))
@@ -5636,7 +5698,7 @@ static boolean FindRetreat(const player_t *player, int away, boolean hide, boole
             }
 
             cover_distance[next] = distance;
-            cover_entry[next] = middle;
+            cover_entry[next] = entry;
             cover_from[next] = cell;
         }
     }
@@ -5747,8 +5809,18 @@ static void UpdateRetreat(const player_t *player)
         boolean found = FindRetreat(player, away, hide || from_pack, from_pack, retreat_points,
                                     &retreat_num_points);
 
-        // No spot out of the pack's sight: looked for again in a while; to
-        // open floor meanwhile, if pressed hard.
+        // No spot out of its sight, or the pack's: logged once for that
+        // monster (the pack's: for the target), and looked for again in a
+        // while; to open floor meanwhile, if pressed hard.
+        if (!found && (hide || from_pack) && monster_mobjs[away] != hide_none_mo)
+        {
+            hide_none_mo = monster_mobjs[away];
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "no spot out of the %s's sight within %.0f - %s",
+                  from_pack ? "pack" : monsters[away].name,
+                  from_pack ? PACK_HIDE_REACH : HIDE_REACH,
+                  from_pack ? "fought where the player is" : "kept off where the player is");
+        }
+
         if (!found && from_pack)
         {
             pack_again = leveltime + RETREAT_LOOK;
@@ -7545,6 +7617,7 @@ void K_Combat_Reset(void)
     pack_lurk_until = 0;
     pack_again = 0;
     retreat_pack = false;
+    hide_none_mo = NULL;
 
     for (i = 0; i < MAX_HOPELESS; ++i)
     {
