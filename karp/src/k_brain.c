@@ -403,6 +403,19 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 #define VISITED_SHARE 0.75
 #define FALL_AGAIN (8 * TICRATE)
 
+// Fallen back with health not OK, the player rests there (the user, E4M2:
+// fallen back from the barons and lost souls let out of the NE arm's closet
+// into the corridor behind door 9 at 37 health, the bot set off again at
+// once, the medikits all gone, back out to the sill in the barons' sight -
+// 10 health, fell back again, set off again, and died there): it stands,
+// fighting what comes after it - the fight from safety the fall back was for
+// - and looking for health as ever (items), no longer falling back (the
+// fight is not broken off). On once nothing was fought, came at it or was
+// felt (no health lost over FALL_TICS) for REST_QUIET, or after REST_MOST,
+// or with health OK again, or something to go for first in reach.
+#define REST_QUIET (5 * TICRATE)
+#define REST_MOST (30 * TICRATE)
+
 // A way back (the user, Doom II MAP15: teleported into the tower room, the
 // stairs out are built by a switch beside the landing - better pressed before
 // the fight than in it): brought somewhere by a teleporter, with monsters
@@ -604,6 +617,8 @@ typedef struct
                                 // way (FIX_WORK), pushed in front of it
     boolean fallback;           // GOAL_GOTO: falling back to a safe area out
                                 // of a fight going badly (FALL_LOSS)
+    boolean resting;            // and there, hurt, resting (REST_QUIET): wait
+                                // counts the tics, quiet those in a row quiet
     boolean way_back;           // GOAL_TRIGGER: opening the way back from
                                 // where a teleporter brought the player
                                 // (WAY_BACK_REACH)
@@ -614,7 +629,7 @@ typedef struct
     boolean near;               // GOAL_KILL: no way to a firing spot - the
                                 // boss itself gone for (FIRE_RINGS)
     int quiet;                  // GOAL_KILL: tics at the firing spot out of a
-                                // fight (FIRE_IDLE)
+                                // fight (FIRE_IDLE); GOAL_GOTO: resting
     int plans;                  // times planned since plans_since, within
     int plans_since;            // LOOP_TICS (BreakLoop)
 
@@ -3418,14 +3433,15 @@ static boolean UpdateKill(goal_t *goal)
 }
 
 // The FALL BACK on the stack, -1 if none: only the fixes pushed for it can
-// be above it (ConsiderItems looks for none meanwhile).
+// be above it (ConsiderItems looks for none meanwhile). Not one there,
+// resting (REST_QUIET).
 static int FallingBack(void)
 {
     int i;
 
     for (i = depth - 1; i >= 0; --i)
     {
-        if (goals[i].type == GOAL_GOTO && goals[i].fallback)
+        if (goals[i].type == GOAL_GOTO && goals[i].fallback && !goals[i].resting)
         {
             return i;
         }
@@ -5763,6 +5779,120 @@ static boolean ConsiderFallBack(void)
     return true;
 }
 
+static const k_item_t *FirstInReach(k_vec2_t at);
+
+// Fallen back, and there: with health not OK, and nothing to go for first
+// (FirstInReach), resting (REST_QUIET); else done.
+static void FallenBack(goal_t *goal)
+{
+    k_need_t health = K_Condition_Get()->health;
+    const k_item_t *first;
+    k_pose_t player;
+    k_vec2_t at;
+    char name[64], how[96];
+
+    if (health == K_NEED_OK || !K_Map_GetPlayer(&player))
+    {
+        DoneGoal("arrived");
+        return;
+    }
+
+    at.x = player.x;
+    at.y = player.y;
+
+    if ((first = FirstInReach(at)) != NULL)
+    {
+        M_snprintf(how, sizeof(how), "arrived - the %s to go for first", first->name);
+        DoneGoal(how);
+        return;
+    }
+
+    goal->resting = true;
+    goal->wait = 0;
+    goal->quiet = 0;
+    M_StringCopy(goal->note, "resting, hurt - fighting what comes", sizeof(goal->note));
+    GoalName(goal, name, sizeof(name));
+    K_Log(K_LOG_BRAIN, K_LOG_INFO, "%s: there, health %s (%.0f) - resting, fighting what comes; "
+          "on once nothing has for %d s", name, health == K_NEED_CRITICAL ? "CRITICAL" : "LOW",
+          K_Map_PlayerHealth(), REST_QUIET / TICRATE);
+}
+
+// Something that goes before the others (GoesFirst: health, with health not
+// OK) within its reach as the crow flies, not skipped nor failed lately: one
+// ConsiderItems would weigh, were there a route to weigh it on; NULL if none.
+static const k_item_t *FirstInReach(k_vec2_t at)
+{
+    boolean critical = K_Condition_Get()->health == K_NEED_CRITICAL;
+    int i;
+
+    for (i = 0; i < K_Items_Count(); ++i)
+    {
+        const k_item_t *item = K_Items_Get(i);
+
+        if (item->present && GoesFirst(item, critical)
+         && sqrt((item->at.x - at.x) * (item->at.x - at.x) + (item->at.y - at.y) * (item->at.y - at.y))
+            <= ItemReach(item, false)
+         && !(i < item_skip_size && leveltime < item_skip[i]) && !IsFailed(GOAL_ITEM, i))
+        {
+            return item;
+        }
+    }
+
+    return NULL;
+}
+
+// Each tic while resting after a fall back: nothing to plan; over with
+// health OK, or something to go for first (FirstInReach: ConsiderItems weighs
+// items only on a route, which a rest has none of - E4M2: a soulsphere 800
+// off left 5 s), once quiet for REST_QUIET - no fight, nothing coming at the
+// player (k_threat.h), no health lost over FALL_TICS: not one awake in
+// sight that is not fought, nor comes (E4M2: a cacodemon 500 off, never
+// nearer, held the bot 14 s) - or after REST_MOST.
+static void UpdateRest(goal_t *goal)
+{
+    const k_combatstatus_t *combat = K_Combat_GetStatus();
+    int then = health_ring[(leveltime + 1) % FALL_TICS];
+    const k_item_t *first;
+    k_pose_t player;
+    k_vec2_t at = { 0.0, 0.0 };
+    char how[96];
+
+    goal->planned = true;
+    ++goal->wait;
+    goal->quiet = combat->battle || combat->threats > 0
+               || (then >= 0 && then > (int) K_Map_PlayerHealth()) ? 0 : goal->quiet + 1;
+
+    if (K_Map_GetPlayer(&player))
+    {
+        at.x = player.x;
+        at.y = player.y;
+    }
+
+    if (K_Condition_Get()->health == K_NEED_OK)
+    {
+        M_snprintf(how, sizeof(how), "rested %.1f s - health OK again",
+                   (double) goal->wait / TICRATE);
+        DoneGoal(how);
+    }
+    else if ((first = FirstInReach(at)) != NULL)
+    {
+        M_snprintf(how, sizeof(how), "rested %.1f s - the %s to go for first",
+                   (double) goal->wait / TICRATE, first->name);
+        DoneGoal(how);
+    }
+    else if (goal->quiet >= REST_QUIET)
+    {
+        M_snprintf(how, sizeof(how), "rested %.1f s - no fight, nothing coming, nothing felt "
+                   "for %d s", (double) goal->wait / TICRATE, REST_QUIET / TICRATE);
+        DoneGoal(how);
+    }
+    else if (goal->wait >= REST_MOST)
+    {
+        M_snprintf(how, sizeof(how), "rested %d s, long enough", REST_MOST / TICRATE);
+        DoneGoal(how);
+    }
+}
+
 // Each tic: brought somewhere by a teleporter, the cell stood on before is
 // looked at (ConsiderWayBack).
 static void TrackArrival(void)
@@ -6309,6 +6439,12 @@ void K_Brain_Tick(void)
         return;
     }
 
+    if (goal->resting)
+    {
+        UpdateRest(goal);
+        return;
+    }
+
     if (!goal->planned)
     {
         if (leveltime >= goal->retry_tic && !DropNeedless() && !BreakLoop(goal))
@@ -6384,7 +6520,11 @@ void K_Brain_Tick(void)
     switch (K_Nav_Tick())
     {
         case K_NAV_ARRIVED:
-            if (goal->type == GOAL_GOTO)
+            if (goal->type == GOAL_GOTO && goal->fallback)
+            {
+                FallenBack(goal);
+            }
+            else if (goal->type == GOAL_GOTO)
             {
                 DoneGoal("arrived");
             }

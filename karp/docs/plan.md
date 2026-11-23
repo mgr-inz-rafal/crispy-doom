@@ -3226,7 +3226,9 @@ Who controls the player in a fight (the user's model):
       holding takes over. Only against a crowd (3 or more) or gunmen worth 10 or more: a few
       tough chasers follow anywhere (E1M8: falling back from the two barons, it died 3 s
       later, where it had stood and won before); not while holding (MAP10: holding short of
-      ten monsters, it fell back 1331 units and died on the way); not again for 8 s.
+      ten monsters, it fell back 1331 units and died on the way); not again for 8 s. There
+      with health not OK and nothing to go for first, the player rests (2026-11-23, 7.8: "E4,
+      the user's explorer run").
     - Routes: going into an area costs 20 units a point of the danger of its awake monsters
       (`K_Path_SetEnterCost`), soft: never a route refused, the length the way walked.
     Seen, left for navigation: MAP05 riding a lift up and dropping off it, over and over (the
@@ -4474,6 +4476,27 @@ Who controls the player in a fight (the user's model):
     the way a run - imps, demons, spectres in the route's areas; MAP06's hell knights up on
     their ledge never among them (the try that fought every tough one shooting from where it
     stands died there 3 runs of 3).
+  - C. The death: the closet on the cross's NE arm let out barons and lost souls; the bot
+    fell back to the corridor behind door 9 at 37 health and set off again at once for the blue
+    key (the fall back done on arrival, every medikit gone or blocked), back to the sill in the
+    barons' sight; 10 health, fell back again, set off again, and died waiting on the sill for
+    the jump. Now a fall back that gets there with health not OK, and nothing to go for first
+    in reach (`k_brain.c` FirstInReach: GoesFirst - health when hurt - within its reach as the
+    crow flies, not skipped nor failed lately), rests (FallenBack, UpdateRest): it stands,
+    fighting what comes after it - the fight from safety the fall back was for - no longer
+    falling back (fights not broken off, items looked for). Over with health OK, or something
+    to go for first in reach (ConsiderItems weighs items only on a goal's route, and a rest has
+    none: the first try left a soulsphere 800 off for 5 s), or once quiet for REST_QUIET (5 s:
+    no fight, nothing coming at the player, no health lost over 3 s - the first try counted any
+    awake monster in sight, and a cacodemon 500 off that never came held the bot 14 s), or
+    after REST_MOST (30 s).
+    Rare by design: in 20 runs (E4M2 from the user's save, 11 salts, 99 three times, up to
+    420 s; MAP04 and MAP05, salts 443, 71, 7) 23 fall backs got there; all but 3 with health
+    OK or something to go for first (a super shotgun at the pistol start, shells, medikits, a
+    soulsphere, a berserk), and those 3 rested - E4M2 salt 99 at 4:26 and 4:58, 25 health
+    (with the quiet as it is now: 5 s, then on; the level finished in 373 s, the build before
+    398 - the first finishes with monsters in these runs, both builds). Every other run as
+    before to the line, or parted later by a fight's drift.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
