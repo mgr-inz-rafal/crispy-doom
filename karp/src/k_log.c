@@ -2,15 +2,19 @@
 // DESCRIPTION:
 //	Karp rolling log: ring buffer for the console, mirrored to stdout
 //	and to karp.log in crispy's config directory (the exe folder on
-//	Windows), truncated on every run.
+//	Windows), begun anew on every run - the one before moved to
+//	ARCHIVE_DIR, never overwritten.
 //
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #include "doomstat.h"
+#include "doomtype.h"
 #include "i_timer.h"
 #include "m_config.h"
 #include "m_misc.h"
@@ -18,6 +22,13 @@
 #include "k_log.h"
 
 #define K_LOG_MAX_ENTRIES 2048
+
+// The logs of earlier runs (the user: "add some timestamp to the logs, so we
+// never overwrite"), and the parts a long demo run rolled over (K_Log_Roll):
+// moved to this folder beside karp.log, each named by when it was last
+// written - karp-20261123-184210.log, -2 and on if taken.
+#define ARCHIVE_DIR "karp-logs"
+#define ARCHIVE_TRIES 100
 
 static k_logentry_t entries[K_LOG_MAX_ENTRIES];
 static int first;               // ring index of the oldest entry
@@ -68,6 +79,64 @@ static char *LogPath(const char *name)
     return M_StringJoin(configdir != NULL ? configdir : "", name, NULL);
 }
 
+// karp.log, if there is one, moved to ARCHIVE_DIR under the time it was
+// last written.
+static void ArchiveLog(void)
+{
+    char *path = LogPath("karp.log");
+    char *dir = LogPath(ARCHIVE_DIR);
+    char name[64], stamp[32];
+    struct stat info;
+    struct tm *when;
+    time_t written;
+    int n;
+
+    if (M_stat(path, &info) == 0)
+    {
+        written = info.st_mtime;
+        when = localtime(&written);
+
+        if (when == NULL || strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", when) == 0)
+        {
+            M_StringCopy(stamp, "unknown", sizeof(stamp));
+        }
+
+        M_MakeDirectory(dir);
+
+        for (n = 1; n <= ARCHIVE_TRIES; ++n)
+        {
+            char *target;
+
+            if (n == 1)
+            {
+                M_snprintf(name, sizeof(name), "karp-%s.log", stamp);
+            }
+            else
+            {
+                M_snprintf(name, sizeof(name), "karp-%s-%d.log", stamp, n);
+            }
+
+            target = M_StringJoin(dir, DIR_SEPARATOR_S, name, NULL);
+
+            if (!M_FileExists(target))
+            {
+                if (M_rename(path, target) != 0)
+                {
+                    printf("Karp: could not move %s to %s\n", path, target);
+                }
+
+                free(target);
+                break;
+            }
+
+            free(target);
+        }
+    }
+
+    free(path);
+    free(dir);
+}
+
 static void OpenLogFile(void)
 {
     char *path;
@@ -78,6 +147,7 @@ static void OpenLogFile(void)
         return;
     }
 
+    ArchiveLog();
     path = LogPath("karp.log");
     logfile = M_fopen(path, "w");
 
@@ -223,21 +293,14 @@ void K_Log_FormatTime(int tics, char *buf, int buf_len)
 
 void K_Log_Roll(long most)
 {
-    char *path, *old;
-
     if (logfile == NULL || ftell(logfile) < most)
     {
         return;
     }
 
+    // Opened again, the full one is moved to the archive first.
     fclose(logfile);
     logfile = NULL;
-    path = LogPath("karp.log");
-    old = LogPath("karp.old.log");
-    M_remove(old);
-    M_rename(path, old);
-    free(path);
-    free(old);
     OpenLogFile();
 }
 

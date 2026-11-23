@@ -26,7 +26,7 @@
 //
 //	Nothing waits while the game is paused or a menu is open, and nothing
 //	happens in a netgame. karp.log is rolled over once it grows past
-//	LOG_MOST, keeping the one before.
+//	LOG_MOST, the full one moved to the archive of earlier logs (k_log.h).
 //
 
 #include <string.h>
