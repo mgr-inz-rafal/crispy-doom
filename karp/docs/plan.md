@@ -4598,10 +4598,25 @@ Who controls the player in a fight (the user's model):
     pack hide 377 off as the crow flies, beyond 384 by the way, not taken; the runs parted
     there) - 14 each in all; MAP05, MAP06, E1M5, E1M6, salts 443, 71, 7, 360 s: 11 of 12
     each, 8 runs as before to the line. Hides from the hopeless baron seen to work (E4M1 salts 16 and
-    22: four, 72 to 309 off, a miss between). Seen in both builds alike, left for navigation:
-    E4M1 salt 18 stuck for minutes at (888,-136), 100 short of the blue key - the corridor to
-    its alcove (sector 28, 64 wide) entered past the corner at (904,-128), the straight way
-    within 12 of it, replanned the same each time.
+    22: four, 72 to 309 off, a miss between).
+  - F. The corner snag (the user, watching: "the last, longest running run was stuck"). E4M1
+    salt 18, in both builds alike, stood for minutes at (888,-136), 100 short of the blue key,
+    pushing full forward with no momentum, nothing solid near: the strip before the corridor
+    to the key's alcove is 48 wide (the raised block, sector 30, on one side, wall 315 on the
+    other), and the corridor's mouth was taken from it past its corner at (904,-128) - the
+    box's east face on the wall's end, its top 8 above the corridor's wall, the way to the
+    mouth's middle diagonal. The engine slides a square, the steering (AvoidWalls) a disc,
+    the corner 17.9 from the centre, "clear". Each "stuck" replanned the same way; none
+    stepped aside: every step ChooseUnstick tried - square to the way, back, back aside - had
+    a point within STAND_CLEARANCE (17) of a wall in a strip 48 wide. Now it tries half aside
+    too, 45 off the way: here along the wall, south, and the box clears the corner. Tried and
+    dropped: the steering's push off a wall's end from the box's face (the larger of the x
+    and y offsets) - the snag went, but MAP29 without monsters stood still before a wall's
+    end square to its way, the push cancelling the move outright (no slide left), and failed.
+    Salt 18: stuck once at 2:05.8, "stepping aside first", the key 1.2 s later, finished in
+    140.8 s. The E4M1 save, 20 salts, 240 s: 15 finished against 13 (salt 18, and salt 19
+    parting at a stuck). Doom II without monsters, 29 maps: all finished, as before to the
+    tenth but MAP20 (+0.1 s) and MAP28 (+0.2 s), where a stuck now steps the other way.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

@@ -99,7 +99,14 @@
 // (Karp may not draw the game's random numbers, plan 2.4): steering round a
 // solid thing can cancel out with sliding along a wall beside it, and the
 // route stays good while the player stands still (Doom II MAP02: a barrel
-// close to a wall held the bot 8 s, until its goals gave up).
+// close to a wall held the bot 8 s, until its goals gave up). Half aside too
+// (45 degrees off the way): in a passage less than three players wide
+// (STAND_CLEARANCE off both walls is a strip of 14 in one 48 wide) a step
+// square to the way or back runs into a wall, and the box's corner held on
+// a wall's end - the engine slides a square, the steering a disc - leaves
+// along the wall (E4M1: by the blue key, the corner of the corridor to its
+// alcove taken from the strip before it, 48 wide; stuck there for minutes,
+// "stepping aside" never once, every goal planned the same way again).
 #define UNSTICK_TICS 12
 #define UNSTICK_SPEED 6.0
 #define UNSTICK_LOOK 32.0
@@ -2733,7 +2740,7 @@ static boolean Steppable(k_vec2_t at, double floor, boolean hurts)
 // that is clear; tried in an order the hash picks. Returns false if none is.
 static boolean ChooseUnstick(k_vec2_t at, const k_pose_t *pose)
 {
-    static const double turns[] = { 90.0, -90.0, 135.0, -135.0, 180.0 };
+    static const double turns[] = { 90.0, -90.0, 45.0, -45.0, 135.0, -135.0, 180.0 };
     k_vec2_t to = path.points[SDL_min(status.target, path.num_points - 1)];
     double ahead = atan2(to.y - at.y, to.x - at.x);
     boolean hurts = pose->cell >= 0 && CellHurts(pose->cell);
