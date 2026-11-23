@@ -4662,11 +4662,42 @@ Who controls the player in a fight (the user's model):
     7's floor, 8 higher, and the engine hurts no one above a floor); deaths 6 each. Doom II
     without monsters: never used; as before (MAP12 seemed to part by 6 s in the parallel
     set, by a tenth at 15 s, before any switch; side by side, the same to the tenth).
-    And the user's E4M1 question - the medikit and 4 shells in the corners outside the start
-    room, never gone for: the alcoves (sectors 14, 79) are 48 above the floor before them,
-    the step the only way up (lines 122, 237), and behind them sealed closets (35, 80) with
-    only monsters-only teleport lines (type 126) between: monster closets, the items out of
-    the player's reach - rightly never routed to.
+    And the user's E4M1 question, the alcoves outside the start room never gone for: I.
+  - I. A lift beside a narrow way (the user, E4M1: "there is a teleport in the secret area
+    (accessed through the nukage tunnel) that leads to these alcoves. Is this route not found
+    by the pathfinder, or is it just a brain decision?"). The medikit and 4 shells in each
+    corner outside the start room lie in alcoves (sectors 14, 79) 48 above the floor before
+    them; the monster closets behind them (35, 80) hold player teleport destinations (tags 10,
+    11), whose pads (lines 377 and 385, 378 and 386, special 97) are in the secret room 69,
+    reached by a tunnel off the nukage pit (sector 16: line 111, then the secret door 73,
+    special 117). From the secret room both closets were routed to, about 100 units each. The
+    tunnel's mouth was not: it opens onto a strip of the pit 8 wide between the wall and lift
+    75 (special 123, SR blazing, tag 1; its own sides 105 to 107 are its switch lines, pressed
+    from the pit), whose top, at floor 0, is flush with room 13; only with the lift down, for
+    3 s, is there room to walk in. Every route there was blocked at line 105, and FixFor took
+    the shut secret door 73 further in for its fix - itself behind that strip. The sectors
+    narrowing a crossing (`k_graph.c` NarrowingSectors) were those of every obstacle line in
+    the grid's cells round it, 128 square, not only those near enough to narrow it. Now only
+    lines within CLEARANCE of the crossing count; nothing narrowing line 105 can be opened,
+    so FixFor goes on to the floor the player stands on, lowered (as for Doom II MAP05's
+    lift): the lift, pressed from the pit, the way taken while it is down. The pathfinder,
+    then: the brain never weighed what it had no way to.
+    - Doom II MAP23 then stopped at its barrels: the barrel at (1184,-320) narrows both ways
+      to the spots beyond it, and the only other spots, west of door 31 (special 34, the
+      yellow key), see the chain through that door - got to only because door 31, 110 units
+      off, was among the sectors taken to narrow a gap by the barrel. Now BarrelSpots also
+      takes a spot that sees the barrel only through a shut door, as once it is open
+      (`k_sight.c` K_Sight_ShutDoor, K_Sight_AssumeOpen: the door at its top), and PlanGoal
+      opens that door first, a fix on the way (HasOpenWay: such a spot is no open way, or the
+      fix is dropped at once). MAP23 as before, 91 s; Doom II without monsters 29 of 29.
+    - E4M1 with monsters, 3 salts against HEAD: the rocket launcher in the tunnel gone for at
+      1.0 s in each (7166 units out of the way, worth 41), so the runs part there; salt 71
+      went for both alcove medikits through the secret room and its teleporters, the secret
+      found, and finished; 2 deaths of 3 against 1, all in the fights round the blue key's
+      room. Without monsters the explorer still leaves the secret: 6000 to 6500 units out of
+      the way with 15 to 17 health of nukage, over PLACE_SECRET_REACH, and in the sweep it is
+      looked at only on top of items, where no fix counts, and set aside for PLACE_SKIP -
+      open.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

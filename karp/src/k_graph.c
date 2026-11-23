@@ -274,6 +274,24 @@ static double SegmentDistance(k_vec2_t a, k_vec2_t b, k_vec2_t p)
     return Length(Sub(p, closest));
 }
 
+// Distance between the segments a-b and p-q: 0 where they cross.
+static double SegmentsDistance(k_vec2_t a, k_vec2_t b, k_vec2_t p, k_vec2_t q)
+{
+    k_vec2_t ab = Sub(b, a), pq = Sub(q, p);
+    double side_p = ab.x * (p.y - a.y) - ab.y * (p.x - a.x);
+    double side_q = ab.x * (q.y - a.y) - ab.y * (q.x - a.x);
+    double side_a = pq.x * (a.y - p.y) - pq.y * (a.x - p.x);
+    double side_b = pq.x * (b.y - p.y) - pq.y * (b.x - p.x);
+
+    if (side_p * side_q < 0.0 && side_a * side_b < 0.0)
+    {
+        return 0.0;
+    }
+
+    return SDL_min(SDL_min(SegmentDistance(a, b, p), SegmentDistance(a, b, q)),
+                   SDL_min(SegmentDistance(p, q, a), SegmentDistance(p, q, b)));
+}
+
 // If p-q runs along a-b for at least MIN_OVERLAP, returns true with the
 // shared stretch as distances from a. Only that stretch has to lie on both
 // lines: vanilla nodebuilders round split vertices to whole map units, so
@@ -2862,9 +2880,17 @@ k_vec2_t K_Graph_PortalPoint(int portal_index, int from)
 // The sectors that make the obstacle lines near a stance obstacles: the
 // far side of two-sided lines, too high to step onto or too low to fit
 // under, up to max. Returns how many.
+//
+// Only those within CLEARANCE of the portal, the lines that can make it
+// narrow: NearObstacles hands over every line in the grid's cells round it
+// (E4M1: the secret door 73, 64 units down the tunnel off the nukage pit,
+// taken for what narrowed the strip 8 wide at the tunnel's mouth, between
+// the wall and lift 75 - a door got to only through that strip; the lift,
+// the player on its top, was never lowered).
 static int NarrowingSectors(const stance_t *stance, int *found_sectors, int max)
 {
     const k_map_t *map = K_Map_Get();
+    const k_portal_t *portal = stance->portal;
     int lines_found[MAX_NEAR_LINES];
     int count, found = 0;
     int i, side, j;
@@ -2874,10 +2900,12 @@ static int NarrowingSectors(const stance_t *stance, int *found_sectors, int max)
     for (i = 0; i < count; ++i)
     {
         const line_t *line = &lines[lines_found[i]];
-        int past = StanceSide(stance, &map->lines[lines_found[i]]);
+        const k_line_t *map_line = &map->lines[lines_found[i]];
+        int past = StanceSide(stance, map_line);
         fixed_t floor = stance->floor[past], ceiling = stance->ceiling[past];
 
-        if (line->backsector == NULL)
+        if (line->backsector == NULL
+         || SegmentsDistance(portal->a, portal->b, map_line->v1, map_line->v2) >= CLEARANCE)
         {
             continue;
         }
