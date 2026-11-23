@@ -122,7 +122,10 @@
 //	in time, to the nearest spot it does not see that the player can get to
 //	straight; and in battle each way the player could step counts what the
 //	other monsters that would see it there cost: it fights from where the
-//	fewest can shoot it.
+//	fewest can shoot it. Those bosses are fought from beside cover, a step
+//	out of their sight - and so is any fight while the player is outmatched,
+//	the monsters on it costing more than half of what it has (a pack met as
+//	a boss).
 //
 //	Danger (plan, 7.5): what going to a spot would cost in health - the
 //	monsters that could see the player there, each by what a fight with its
@@ -588,6 +591,25 @@ extern void A_CyberAttack();
 #define HARD_CROWD 80.0
 #define HARD_LINGER (5 * TICRATE)
 
+// Outmatched (the user, E4M2: "staying close to the baron on a narrow ledge
+// is not a good choice... a human player will just run past them, leave
+// them alone or try to kill them from a different spot" - two or three
+// barons, or any strong lot, met as a boss): the awake monsters in sight
+// within HARD_REACH, not fighting another, that can hurt the player from
+// where they are (not one that only bites and cannot come) cost in all more
+// than OUTMATCH_SHARE of what the player has - its health and the armour
+// that would wear down with it (green takes a third of each hit, blue
+// half): two barons at 100 health, one at 50. Then every fight is fought
+// from beside cover, as against the bosses (UpdatePeek), whatever the
+// target (E4M2: a baron, a cacodemon and imps on the bot, 62 against 120 -
+// fought from the doorway of the secret room by door 226, and the level
+// finished; the build before backed off from the baron in the open, a ball
+// for 43, and died 3 s later). Over once they cost less than OUTMATCH_LEAVE
+// of it for OUTMATCH_LINGER: they come and go from sight.
+#define OUTMATCH_SHARE 0.5
+#define OUTMATCH_LEAVE 0.35
+#define OUTMATCH_LINGER (3 * TICRATE)
+
 // Left alone for a telefrag (K_Combat_Telefrag): the monsters a player
 // landing on the spot would overlap (PIT_StompThing), TELEFRAG_SLACK more for
 // one stepping about in its cage.
@@ -1028,8 +1050,10 @@ extern void A_CyberAttack();
 // mastermind in reach": the stream winds up in 20 tics, so cover had to lie
 // within some 110 units): in a fight with a monster whose blows are ducked
 // from (DuckThreat: an arch-vile, an arachnotron, the spider mastermind, a
-// Cyberdemon fought), the player fights from a spot that sees it a step
-// short of cover - along each of MOVE_WAYS rays out to COVER_REACH, every
+// Cyberdemon fought), or with any while outmatched (OUTMATCH_SHARE; a ball
+// coming, the step into cover is one more way out of it), the player
+// fights from a spot that sees it a step short of cover - along each of
+// MOVE_WAYS rays out to COVER_REACH, every
 // COVER_STEP on floor it can step on, the first spot out of the monster's
 // sight, and the spot at most COVER_GAP before it that the gun sees it from;
 // the nearest, spots other monsters see counting further off (DUCK_SEEN).
@@ -1465,6 +1489,10 @@ static k_vec2_t peek_hide;
 static const mobj_t *peek_mo;
 static int peek_tic;
 static const mobj_t *peek_none_mo;
+
+// Outmatched (OUTMATCH_SHARE), and when last at OUTMATCH_LEAVE or more.
+static boolean outmatched;
+static int outmatched_seen;
 
 // What exposes the player (EXPOSE_WEIGHT): this tic's costliest awake
 // monsters in sight, but the target.
@@ -7208,8 +7236,54 @@ static boolean FindPeek(const player_t *player, int index, k_vec2_t *spot, k_vec
     return best < 1e30;
 }
 
+// Each tic: whether the player is outmatched (OUTMATCH_SHARE), logged as it
+// begins and ends.
+static void UpdateOutmatched(const player_t *player)
+{
+    double share = player->armortype >= 2 ? 0.5 : player->armortype == 1 ? 1.0 / 3.0 : 0.0;
+    double means = player->health
+                 + SDL_min(player->armorpoints, player->health * share / (1.0 - share));
+    double cost = 0.0;
+    int count = 0, i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+
+        if (!monster->awake || !monster->visible || monster->infighting
+         || monster->distance > HARD_REACH || Kind(monster->type)->cost <= 0.0
+         || (BitesOnly(monster->type) && !Reaches(i)))
+        {
+            continue;
+        }
+
+        cost += Kind(monster->type)->cost;
+        ++count;
+    }
+
+    if (cost > OUTMATCH_SHARE * means || (outmatched && cost >= OUTMATCH_LEAVE * means))
+    {
+        if (!outmatched)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "outmatched - %d monsters on the player, their fights "
+                  "%.0f of health against %.0f of health and armour: fought from beside cover",
+                  count, cost, means);
+        }
+
+        outmatched = true;
+        outmatched_seen = leveltime;
+    }
+    else if (outmatched && leveltime - outmatched_seen > OUTMATCH_LINGER)
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "no longer outmatched - %d monsters on the player, %.0f "
+              "against %.0f, for %d s", count, cost, means, OUTMATCH_LINGER / TICRATE);
+        outmatched = false;
+    }
+}
+
 // Each tic: the spot fought from, beside cover from the target
-// (COVER_REACH) - a target whose blows are ducked from, not while holding,
+// (COVER_REACH) - a target whose blows are ducked from, or any while
+// outmatched (OUTMATCH_SHARE), not while holding,
 // retreating or chasing it; kept while it still sees the target and the
 // cover is still out of its sight, looked at every COVER_REPLAN; logged as
 // one is found for a target, or none.
@@ -7232,7 +7306,7 @@ static void UpdatePeek(const player_t *player)
     mo = monster_mobjs[status.target];
 
     if ((target->type != MT_VILE && target->type != MT_BABY && target->type != MT_SPIDER
-         && target->type != MT_CYBORG)
+         && target->type != MT_CYBORG && !outmatched)
      || Chased(player, target->type))
     {
         peeking = false;
@@ -7344,6 +7418,7 @@ void K_Combat_Reset(void)
     peek_mo = NULL;
     peek_none_mo = NULL;
     peek_tic = 0;
+    outmatched = false;
 
     for (i = 0; i < MAX_HOPELESS; ++i)
     {
@@ -7482,6 +7557,7 @@ void K_Combat_Tick(int driving)
         UpdateClear();
         UpdateComfy(player);
         UpdateOnWay(me);
+        UpdateOutmatched(player);
         UpdateReserve(player);
         ChooseTarget(player);
         CountMisses(player);

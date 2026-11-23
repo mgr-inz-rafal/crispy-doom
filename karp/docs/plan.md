@@ -4204,7 +4204,8 @@ Who controls the player in a fight (the user's model):
     (32), monsters pressing only within 192 but a Cyberdemon (a baron passed for the boss's
     sake pushed the bot off its way to cover from 382). Logged: "fighting the ... from beside
     cover", "no cover from the ... within 320". Cover 480 off was run for across the open, hit
-    9 times on the way: 512 was too far.
+    9 times on the way: 512 was too far. Any target too while outmatched (2026-11-23, 7.8: "E4,
+    the user's explorer run", D).
   - Firing spots with cover beside them first (`k_brain.c`: `FIRE_COVER`): out of the boss's
     sight within 96, 8 ways every 32, a floor within a step, nothing in the way at the waist;
     the others dropped while any has cover.
@@ -4497,6 +4498,32 @@ Who controls the player in a fight (the user's model):
     (with the quiet as it is now: 5 s, then on; the level finished in 373 s, the build before
     398 - the first finishes with monsters in these runs, both builds). Every other run as
     before to the line, or parted later by a fight's drift.
+  - D. Packs met as bosses (the user, after watching E4M2's deaths: "staying close to the
+    baron on a narrow ledge is not a good choice... not to mention 2 or 3 barons. A human
+    player will just run past them, leave them alone or try to kill them from a different
+    spot"; "maybe even any combination of strong monsters"). Over all the logs the barons and
+    the cacodemons kill most after the two bosses (121 and 111 of 1109 deaths); in the user's
+    runs and the pistol sets the barons first. A first step: outmatched (`k_combat.c`
+    UpdateOutmatched) - the awake monsters in sight within 1024, not fighting another, that
+    can hurt the player from where they are (not one that only bites and cannot come), cost
+    in all (each kind's fight cost: a baron 30, a cacodemon 15, an imp 8) more than half of
+    what the player has, its health and the armour that would wear down with it (green takes
+    a third of each hit, blue half); over once under 35% for 3 s. Then every fight is fought
+    from beside cover (UpdatePeek), as against the four bosses - whatever the target. Logged:
+    "outmatched - N monsters on the player, their fights X of health against Y of health and
+    armour", "no longer outmatched".
+    From the user's E4M2 save, salts 443, 71, 7, 11, 23, 99, 404, 606, 420 s: a finish each
+    (salt 7 now, against 99); 251 kills against 226; hits from barons and cacodemons 38 for
+    693 health against 49 for 918; 1049 s lived in all against 954. Salt 7: a baron, a
+    cacodemon and imps on the bot at 100 - fought from the doorway of the secret room by door
+    226, the level finished; the build before backed off from the baron in the open, a ball
+    for 43, and died at 34 s. MAP05, MAP06, E1M5, E1M6, salts 443, 71, 7, 330 s: 9 finished
+    against 7, 1 dead against 4 (MAP05 3 against 1, MAP06 2 against 1; E1M5's two left at the
+    time limit had all 91 kills, on the way to the exit). Seen: 1 to 13 times outmatched a run
+    on E4M2; no cover within 320 found 10 to 24 times a run there (ledges, sills, the bot then
+    fights where it stands, as before - salt 99's death: a medikit run at LOW health past the
+    baron, no cover, shot down retreating); the spot chosen for each target, so it moves as the
+    target changes. Next: with no cover in reach, contact broken - out of the pack's sight.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats
