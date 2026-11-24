@@ -222,8 +222,7 @@ static void ShutdownKarp(void)
         console_open = false;
     }
 
-    // Before the configuration is saved (registered earlier, so run later):
-    // Doom's messages as they were.
+    // The overlay's textures, while their renderer is still there.
     if (overlay_enabled)
     {
         I_SetOverlayDrawer(NULL);

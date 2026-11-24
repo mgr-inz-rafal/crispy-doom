@@ -10,15 +10,15 @@
 
 struct SDL_Renderer;
 
-// -karpoverlay: Doom's messages off (as they were again at exit: the
-// configuration is saved with the player's own setting).
+// -karpoverlay. Doom's own messages stay (the user: the secret found is
+// news an audience wants; under the logo they do little harm).
 void K_Overlay_Enable(void);
 
 // After I_InitGraphics: reads the logo (karp_logo.png next to the
 // executable) and the font (the IWAD's HUD font).
 void K_Overlay_Open(void);
 
-// At exit, before the configuration is saved: Doom's messages as they were.
+// At exit, before I_ShutdownGraphics: the textures let go.
 void K_Overlay_Close(void);
 
 // Each frame, over the game's picture, before it is shown (H13).

@@ -37,7 +37,7 @@ void K_EnableAttitude(void);
 void K_EnableDemo(void);
 
 // -karpoverlay: the Karp logo and a line saying what the bot is about, over
-// the game (k_overlay.h); Doom's messages off meanwhile.
+// the game (k_overlay.h).
 void K_EnableOverlay(void);
 
 // Right after I_InitGraphics: opens the console, sets the overlay up.

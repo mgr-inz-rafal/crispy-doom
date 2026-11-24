@@ -38,7 +38,6 @@
 #include "i_swap.h"
 #include "i_video.h"
 #include "m_argv.h"
-#include "m_menu.h"
 #include "m_misc.h"
 #include "v_patch.h"
 #include "w_wad.h"
@@ -120,8 +119,6 @@ typedef struct
     int left, top;
 } glyph_t;
 
-static int saved_messages = -1;     // Doom's own setting, while off
-
 static unsigned char *logo;         // RGBA, trimmed
 static int logo_w, logo_h;
 
@@ -145,9 +142,7 @@ static Uint32 fought_at;            // when last in a fight; 0 never
 
 void K_Overlay_Enable(void)
 {
-    saved_messages = showMessages;
-    showMessages = 0;
-    K_Log(K_LOG_SYS, K_LOG_INFO, "overlay enabled - Doom's messages off");
+    K_Log(K_LOG_SYS, K_LOG_INFO, "overlay enabled");
 }
 
 // Reads the logo, trimmed to the box of its pixels that show.
@@ -336,11 +331,6 @@ void K_Overlay_Open(void)
 
 void K_Overlay_Close(void)
 {
-    if (saved_messages >= 0)
-    {
-        showMessages = saved_messages;
-    }
-
     // The renderer is still there (I_ShutdownGraphics comes after).
     if (made_for != NULL)
     {
@@ -440,8 +430,9 @@ static void ItemLine(const k_activity_t *activity, char *buf, int len, int *ente
             }
             break;
 
+        // Spelt as Doom spells it, on screen (the user); "armour" in the code.
         case K_ITEM_ARMOUR:
-            M_StringCopy(buf, "GETTING ARMOUR", len);
+            M_StringCopy(buf, "GETTING ARMOR", len);
             break;
 
         case K_ITEM_AMMO:

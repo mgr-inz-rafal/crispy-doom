@@ -128,9 +128,8 @@ karp/
 | H13 | `src/i_video.c` / `i_video.h` (shared by all games): `I_SetOverlayDrawer(fn)`; `I_FinishUpdate` calls it after the frame is copied and before `SDL_RenderPresent`, and the screenshot code after its copy of the frame (`struct SDL_Renderer;` forward declaration); `src/doom/d_main.c` after the `-karpdemo` block: `//!` doc block + `if (M_CheckParm("-karpoverlay")) K_EnableOverlay();` | Draw the overlay (3.12) over each frame and over screenshots, in the window's own pixels. Only Doom registers a drawer, and only with `-karpoverlay`; otherwise it stays NULL. |
 
 `karp.h` is included only by the five doom files above (`d_main.c`, `p_setup.c`, `d_net.c`,
-`g_game.c`, `wi_stuff.c`). H9 and H13 are generic and do not reference Karp. No hook writes a
-configuration variable for good: `-karpoverlay` turns Doom's messages off (`show_messages`) and
-back to the player's setting at exit, before the configuration is saved.
+`g_game.c`, `wi_stuff.c`). H9 and H13 are generic and do not reference Karp. None of the hooks
+write a configuration variable.
 
 Ordering note: with `-warp`, `G_InitNew` (and so `P_SetupLevel`/H4) runs inside `D_DoomMain`
 (`d_main.c:2481`), **before** `D_DoomLoop` creates any window. Map building must therefore not
@@ -1603,7 +1602,8 @@ the bot is about, coarse enough for an audience. `-karpoverlay` (H13):
   name, "OUTNUMBERED - FIGHTING FROM COVER", "LURING THE MONSTERS OUT" (a hold), runs out of a
   fight ("ESCAPING THE FIGHT TO GET HEALTH") and fall backs. In the sweep before the exit, small
   items and the exit read "COLLECTING LOOT", weapons, power-ups and armour by name, places as
-  places. "LEVEL COMPLETE", "EPISODE COMPLETE", "TRYING AGAIN" (dead, in demo mode). Nothing in a
+  places. Spelt as Doom spells it on screen ("GETTING ARMOR", the user), "armour" in the code
+  and the console. "LEVEL COMPLETE", "EPISODE COMPLETE", "TRYING AGAIN" (dead, in demo mode). Nothing in a
   menu or on the title screen.
 - **Timing**: a new line shows once it has held 0.7 s (an item 1.2 s, so passing pickups never
   show; a fight or a switch 0.5 s), and a line shown stays at least 1.5 s (a switch's 1 s); a run
@@ -1612,8 +1612,9 @@ the bot is about, coarse enough for an audience. `-karpoverlay` (H13):
   saw "OPENING THE WAY" while the bot ran on through corridors for a switch 4400 units off, and
   "FIGHTING MONSTERS" well after the imp died - rather a little shaky and true. E1M1 explorer: 26
   lines in 91.5 s, none on screen under 1.3 s.
-- **Doom's messages are off** meanwhile (`show_messages`, the player's setting back at exit),
-  so nothing prints under the logo - crispy's "A secret is revealed!" with them.
+- **Doom's messages stay**, as the player has them set. First turned off while the overlay was
+  on, so nothing printed under the logo; but crispy's "A secret is revealed!" went with them, and
+  a secret found is news an audience wants (the user: the messages do little harm).
 - Every line shown is logged ("overlay: GETTING THE RED KEY"), to count the changes.
 
 ## 4. Milestones

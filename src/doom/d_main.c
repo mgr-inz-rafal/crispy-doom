@@ -2432,7 +2432,7 @@ void D_DoomMain (void)
     //
     // [Karp] For showing the bot to an audience: the Karp logo at the top of
     // the screen (karp_logo.png next to the executable) and under it a line
-    // saying what the bot is about. Doom's messages are off meanwhile.
+    // saying what the bot is about.
     //
 
     if (M_CheckParm("-karpoverlay"))
