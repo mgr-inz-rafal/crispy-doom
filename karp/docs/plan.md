@@ -1595,7 +1595,10 @@ the bot is about, coarse enough for an audience. `-karpoverlay` (H13):
   each pixel grey by its colour's brightness and drawn in the logo lettering's lime, outlined in
   black, at a whole multiple of its pixels (5 at 1080, less if it would not fit).
 - **What it says**: what the bot is after (`K_Brain_Activity`) - the purpose, not the means:
-  for a switch on the way to the red key, the key; a switch only while it is worked (pressed, or
+  for a switch on the way to the red key, the key; for an item or area less than 768 units off
+  the way, what it is picked up on the way to (the user, E2M1: "exploring the level", then
+  "replenishing ammo" on the last stretch to the blue key - an area 35 off the way and clips 32
+  to 89 off it, by the key; a secret or a run out of a fight always shows); a switch only while it is worked (pressed, or
   its sector moving after: "OPENING A DOOR WITH A SWITCH", "WAITING FOR A LIFT"), barrels while
   shot at. Over that, combat: "FIGHTING MONSTERS" while there is something to fight (a target or
   an awake monster in sight - combat's battle runs on a second past the last kill), a boss by
@@ -1606,8 +1609,12 @@ the bot is about, coarse enough for an audience. `-karpoverlay` (H13):
   and the console. "LEVEL COMPLETE", "EPISODE COMPLETE", "TRYING AGAIN" (dead, in demo mode). Nothing in a
   menu or on the title screen.
 - **Timing**: a new line shows once it has held 0.7 s (an item 1.2 s, so passing pickups never
-  show; a fight or a switch 0.5 s), and a line shown stays at least 1.5 s (a switch's 1 s); a run
-  out of a fight, a fall back, the level's end or a death at once. Lines cross-fade over 0.25 s.
+  show; a fight or a switch 0.5 s), and a line shown stays at least 1.5 s (a switch's 1 s) while
+  it is still true; once what it says is over (the key picked up, the last monster dead, the
+  door open - it is none of the lines true now), the next shows 0.2 s later, whatever the waits
+  (the user, E2M1: the blue key's line stayed a second or two after it was picked up; now
+  0.2 s). A run out of a fight, a fall back, the level's end or a death at once too. Lines
+  cross-fade over 0.25 s.
   First tried cinematic (1.5 s to show, 4 s on screen, a fight held over gaps of 4 s): the user
   saw "OPENING THE WAY" while the bot ran on through corridors for a switch 4400 units off, and
   "FIGHTING MONSTERS" well after the imp died - rather a little shaky and true. E1M1 explorer: 26

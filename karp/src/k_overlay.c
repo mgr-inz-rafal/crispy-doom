@@ -21,8 +21,9 @@
 //	something to fight, runs out of them and falls back over all that. A
 //	new line shows once it has held for a moment (ENTER_MS and the like:
 //	passing pickups never show), and a line shown stays at least SHOW_MS (a
-//	switch's SHOW_FIX_MS); but a run out of a fight, a fall back, the
-//	level's end or the player's death at once. Short, so the line is a
+//	switch's SHOW_FIX_MS) while it is still true; once what it says is
+//	over, the next shows at once (ENTER_OVER_MS), as do a run out of a
+//	fight, a fall back, the level's end or the player's death. Short, so the line is a
 //	second behind the game at most - a little shaky rather than stale (the
 //	user). Lines cross-fade. Each line shown is logged, to count the
 //	changes.
@@ -98,6 +99,12 @@
 #define ENTER_FIGHT_MS 500
 #define ENTER_URGENT_MS 500
 #define ENTER_NOW_MS 200
+
+// Once what the line shown says is over (the key picked up, the fight won,
+// the switch's door open), the next shows as soon as it has held this long
+// - the brain's goals settling over a tic or two, not a flash of one in
+// between - whatever the waits above and the stays below.
+#define ENTER_OVER_MS 200
 
 // How long a line shown stays at least, but for an urgent one (a run out
 // of a fight, a fall back, the level over, the player dead): most, and a
@@ -578,21 +585,37 @@ static void FightLine(const k_activity_t *activity, char *buf, int len)
     }
 }
 
-// The line wanted now: how long it must hold before it shows (enter), how
-// long it stays once shown (stay), and whether it may cut a line shown short
-// (urgent). False for no say - in a menu, or nothing on the bot's list: the
-// line shown stays. "" hides it.
-static boolean Line(char *buf, int len, int *enter, int *stay, boolean *urgent, Uint32 now)
+// Whether a line true now is the one shown.
+static boolean Shown(char *line)
+{
+    M_ForceUppercase(line);
+    return line[0] != '\0' && !strcmp(line, shown);
+}
+
+// The line wanted now - of those true now (a run out of a fight or a fall
+// back, a fight, a hold, a switch or barrels worked, getting unstuck, the
+// purpose), the first: how long it must hold before it shows (enter), how
+// long it stays once shown (stay), whether it may cut a line shown short
+// (urgent), and whether the line shown is still one of them (live; once it
+// is not, what it said is over, and the next shows at once). False for no
+// say - in a menu, or nothing on the bot's list: the line shown stays. ""
+// hides it.
+static boolean Line(char *buf, int len, int *enter, int *stay, boolean *urgent,
+                    boolean *live, Uint32 now)
 {
     const player_t *player = &players[consoleplayer];
     const k_combatstatus_t *combat;
     k_activity_t activity;
     boolean fighting;
+    char run[LINE_LEN] = "", fight[LINE_LEN] = "", hold[LINE_LEN] = "", fix[LINE_LEN] = "";
+    char stuck[LINE_LEN] = "", purpose[LINE_LEN] = "";
+    int purpose_enter = ENTER_MS;
 
     buf[0] = '\0';
     *enter = ENTER_NOW_MS;
     *stay = SHOW_MS;
     *urgent = true;
+    *live = false;
 
     if (gamestate == GS_INTERMISSION)
     {
@@ -638,80 +661,113 @@ static boolean Line(char *buf, int len, int *enter, int *stay, boolean *urgent, 
     }
 
     K_Brain_Activity(&activity);
-    *enter = ENTER_URGENT_MS;
 
+    // Every line true now.
     if (activity.kind == K_ACT_ESCAPE && fought_at != 0 && now - fought_at < FOUGHT_MS)
     {
         if (activity.name != NULL && !strcmp(activity.name, "invulnerability"))
         {
-            M_StringCopy(buf, "RUNNING FOR THE INVULNERABILITY", len);
+            M_StringCopy(run, "RUNNING FOR THE INVULNERABILITY", sizeof(run));
         }
         else
         {
-            M_StringCopy(buf, activity.detail == K_ITEM_HEALTH
+            M_StringCopy(run, activity.detail == K_ITEM_HEALTH
                               ? "ESCAPING THE FIGHT TO GET HEALTH"
-                              : "ESCAPING THE FIGHT TO GET AMMO", len);
+                              : "ESCAPING THE FIGHT TO GET AMMO", sizeof(run));
         }
     }
     else if (activity.kind == K_ACT_FALLBACK)
     {
-        M_StringCopy(buf, "FALLING BACK TO RECOVER", len);
+        M_StringCopy(run, "FALLING BACK TO RECOVER", sizeof(run));
+    }
+
+    if (fighting)
+    {
+        FightLine(&activity, fight, sizeof(fight));
+    }
+
+    if (combat->holding)
+    {
+        M_StringCopy(hold, "LURING THE MONSTERS OUT", sizeof(hold));
+    }
+
+    if (activity.fix == K_ACT_TRIGGER)
+    {
+        TriggerLine(activity.fix_detail, activity.fix_flag, fix, sizeof(fix));
+    }
+    else if (activity.fix == K_ACT_BARREL)
+    {
+        M_StringCopy(fix, "CLEARING BARRELS FROM THE WAY", sizeof(fix));
+    }
+
+    if (K_Nav_Unsticking())
+    {
+        M_StringCopy(stuck, "GETTING UNSTUCK", sizeof(stuck));
+    }
+
+    if (!GoalLine(&activity, purpose, sizeof(purpose), &purpose_enter))
+    {
+        purpose[0] = '\0';
+    }
+
+    *live = Shown(run) | Shown(fight) | Shown(hold) | Shown(fix) | Shown(stuck)
+          | Shown(purpose);
+
+    // The first of them.
+    if (run[0] != '\0')
+    {
+        M_StringCopy(buf, run, len);
+        *enter = ENTER_URGENT_MS;
+        return true;
+    }
+
+    *urgent = false;
+
+    if (fight[0] != '\0')
+    {
+        M_StringCopy(buf, fight, len);
+        *enter = ENTER_FIGHT_MS;
+    }
+    else if (hold[0] != '\0')
+    {
+        M_StringCopy(buf, hold, len);
+        *enter = ENTER_MS;
+    }
+    else if (fix[0] != '\0')
+    {
+        M_StringCopy(buf, fix, len);
+        *enter = ENTER_FIX_MS;
+        *stay = SHOW_FIX_MS;
+    }
+    else if (stuck[0] != '\0')
+    {
+        M_StringCopy(buf, stuck, len);
+        *enter = ENTER_MS;
+    }
+    else if (purpose[0] != '\0')
+    {
+        M_StringCopy(buf, purpose, len);
+        *enter = purpose_enter;
     }
     else
     {
-        *urgent = false;
-
-        if (fighting)
-        {
-            FightLine(&activity, buf, len);
-            *enter = ENTER_FIGHT_MS;
-        }
-        else if (combat->holding)
-        {
-            M_StringCopy(buf, "LURING THE MONSTERS OUT", len);
-            *enter = ENTER_MS;
-        }
-        else if (activity.fix == K_ACT_TRIGGER)
-        {
-            TriggerLine(activity.fix_detail, activity.fix_flag, buf, len);
-            *enter = ENTER_FIX_MS;
-            *stay = SHOW_FIX_MS;
-        }
-        else if (activity.fix == K_ACT_BARREL)
-        {
-            M_StringCopy(buf, "CLEARING BARRELS FROM THE WAY", len);
-            *enter = ENTER_FIX_MS;
-            *stay = SHOW_FIX_MS;
-        }
-        else if (K_Nav_Unsticking())
-        {
-            M_StringCopy(buf, "GETTING UNSTUCK", len);
-            *enter = ENTER_MS;
-        }
-        else
-        {
-            *enter = ENTER_MS;
-
-            if (!GoalLine(&activity, buf, len, enter))
-            {
-                return false;
-            }
-        }
+        return false;
     }
 
-    M_ForceUppercase(buf);
     return true;
 }
 
 // The line shown: a new one once it has held long enough, and the one shown
-// has stayed long enough or is cut short.
+// has stayed long enough or is cut short - or at once, near enough, once
+// what the one shown says is over (the user: the blue key picked up, its
+// line stayed a second or two).
 static void UpdateLine(Uint32 now)
 {
     char line[LINE_LEN];
-    boolean urgent;
+    boolean urgent, live;
     int enter, stay;
 
-    if (!Line(line, sizeof(line), &enter, &stay, &urgent, now) || !strcmp(line, shown))
+    if (!Line(line, sizeof(line), &enter, &stay, &urgent, &live, now) || !strcmp(line, shown))
     {
         pending[0] = '\0';
         return;
@@ -724,8 +780,13 @@ static void UpdateLine(Uint32 now)
         return;
     }
 
+    if (!live)
+    {
+        enter = SDL_min(enter, ENTER_OVER_MS);
+    }
+
     if (now - pending_since < (Uint32) enter
-     || (shown[0] != '\0' && !urgent && now - shown_since < shown_stay))
+     || (shown[0] != '\0' && !urgent && live && now - shown_since < shown_stay))
     {
         return;
     }

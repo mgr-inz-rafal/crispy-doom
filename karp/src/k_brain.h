@@ -100,9 +100,10 @@ typedef enum
 typedef struct
 {
     // The purpose: the goal worked on, but for a switch or barrels in its
-    // way, the one they are for (the exit, if that is all there is) - and a
-    // walk somewhere that is no fall back (a way out of a loop, a click), the
-    // one under it.
+    // way, the one they are for (the exit, if that is all there is) - and
+    // for a walk somewhere that is no fall back (a way out of a loop, a
+    // click) or an item or area a small detour off the way (k_brain.c:
+    // SHOWN_DETOUR), the one under it.
     k_actkind_t kind;
     int detail;
     int flag;

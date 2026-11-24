@@ -636,6 +636,8 @@ typedef struct
                                 // firing spot, combat fighting
     boolean fixable;            // GOAL_ITEM: gone for through a fix in its
                                 // way (FIX_WORK), pushed in front of it
+    double detour;              // GOAL_ITEM, GOAL_PLACE: how far out of the
+                                // way when added (K_Brain_Activity)
     boolean fallback;           // GOAL_GOTO: falling back to a safe area out
                                 // of a fight going badly (FALL_LOSS)
     boolean resting;            // and there, hurt, resting (REST_QUIET): wait
@@ -4653,6 +4655,7 @@ static boolean ConsiderItems(goal_t *goal)
 
     item_goal = Push(GOAL_ITEM, best);
     item_goal->fixable = best_fixed;
+    item_goal->detour = best_detour;
     GoalName(item_goal, name, sizeof(name));
     chosen = K_Items_Get(best);
 
@@ -5149,6 +5152,7 @@ static boolean ConsiderPlaces(goal_t *goal)
 
     place_goal = Push(GOAL_PLACE, best);
     place_goal->fixable = best_fixed;
+    place_goal->detour = best_detour;
     GoalName(place_goal, name, sizeof(name));
 
     if (best_risk >= 0.5)
@@ -6921,6 +6925,20 @@ static boolean FixWorked(const goal_t *goal)
             || nav->action == K_ACTION_USE || nav->action == K_ACTION_SHOOT);
 }
 
+// A detour of less than SHOWN_DETOUR (about a second's run; not a secret,
+// nor a run out of a fight) is no purpose of its own: the goal under it is
+// what the player is after (the user, E2M1: "exploring the level", then
+// "replenishing ammo" on the last stretch to the blue key - an area 35 off
+// the way, and clips 32 to 89 off it, by the key).
+#define SHOWN_DETOUR 768.0
+
+static boolean SmallDetour(const goal_t *goal)
+{
+    return goal->detour < SHOWN_DETOUR
+        && ((goal->type == GOAL_ITEM && !K_Items_Get(goal->param)->escape)
+            || (goal->type == GOAL_PLACE && places[goal->param].sector < 0));
+}
+
 void K_Brain_Activity(k_activity_t *activity)
 {
     int i, top = -1;
@@ -6934,7 +6952,7 @@ void K_Brain_Activity(k_activity_t *activity)
     {
         const goal_t *goal = &goals[i];
 
-        if (goal->type == GOAL_GOTO && !goal->fallback)
+        if ((goal->type == GOAL_GOTO && !goal->fallback) || (i > 0 && SmallDetour(goal)))
         {
             continue;
         }
