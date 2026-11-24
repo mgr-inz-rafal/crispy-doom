@@ -526,7 +526,13 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // are looked at by route every PLACE_CHECK_TICS, one too far for now not
 // again for ITEM_SKIP_TICS. One with no way there, or that did not work out
 // (the user: decoys, secrets a map's bugs put out of reach), is set aside
-// for PLACE_SKIP, and dropped for the level after PLACE_TRIES such. No more
+// for PLACE_SKIP, and dropped for the level after PLACE_TRIES such - but not
+// one looked at on top of an item, where no fix counts: not again for
+// ITEM_SKIP_TICS only (E4M1: the secret room, past lift 75 lowered, looked at
+// in the sweep while health bonuses were gone for, set aside for 60 s, and
+// the level left). A secret's reach is wide (the user: "E4M1 is a very
+// compact map, so the bot should be willing to go anywhere" - the secret
+// room 6000 to 6500 out of the way, through the fix and the nukage). No more
 // places after EXPLORE_MOST spent on them in a level. None within EXIT_CLEAR
 // of a walk-over exit line: passed on the way out anyway, and gone to, the
 // player may run on over it (E3M5: an area 44 off the exit line, the level
@@ -555,7 +561,7 @@ static const double fire_rings[] = { 512.0, 576.0, 640.0 };
 // move erratically); a secret is found only by going in.
 #define PLACE_AREA_REACH 2048.0
 #define PLACE_SEEN_REACH 1024.0
-#define PLACE_SECRET_REACH 4096.0
+#define PLACE_SECRET_REACH 32768.0
 #define PLACE_SWEEP_REACH ANY_REACH
 #define PLACE_AREA_MIN 4096.0
 #define PLACE_ROUTES 2
@@ -5034,7 +5040,15 @@ static boolean ConsiderPlaces(goal_t *goal)
                         !stacking, sweep_since > 0 ? PLACE_WAIT_MOST : ITEM_WAIT_MOST, &detour,
                         &way, &damage, &fixed, &risk, NULL))
         {
-            SetPlaceAside(order[k]);
+            if (stacking)
+            {
+                place->skip = leveltime + ITEM_SKIP_TICS;
+            }
+            else
+            {
+                SetPlaceAside(order[k]);
+            }
+
             continue;
         }
 
