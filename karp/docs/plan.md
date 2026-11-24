@@ -4733,6 +4733,35 @@ Who controls the player in a fight (the user's model):
     the rocket nor the sight check that judges its path; bars built of sectors stop both
     (RocketClear near the player, BallClear the whole way, each along both of the
     rocket's edges).
+  - L. Rockets and the BFG at groups of weak monsters (the user, E4M1: imps and shotgun
+    guys behind a grate shot one by one from afar - "as a human player I would definitely
+    use my rockets, one rocket can clear a couple of enemies"; then "any group of weak
+    monsters - zombieman, shotgun guy, chaingunner, imp and SS, or a combination - of 3+
+    deserves a rocket attempt", and 5+ for the BFG). The rockets and cells kept for the
+    tough monsters and for the levels ahead had been kept from every weak monster, and a
+    weapon was rated by its shot on the target alone. Now (`k_combat.c` GroupOf,
+    GroupShot, GroupRating, Kept): a rocket, 10 or more held, at one of a pack of 3 or
+    more of those kinds, each within BUNCHED 96 of another (BLAST 128 with the launcher
+    up); a BFG ball, 200 cells or more, at one of 5 or more in sight in the cone of its
+    tracers. Such a shot is rated for all of them (the blast less the distance from the
+    target, or two tracers' worth on each), is not kept from them, and is brought up even
+    while the next shot of the gun in hand would kill the target. Only within GROUP_REACH
+    640, with no monster of another kind awake within GROUP_CLEAR 384, and never with
+    the ammo short for the level's boss. Logged as "bringing up the rocket launcher for
+    the imp, 432 units off - a group shot, 3 of them".
+    - The first version counted those within 96 of the target alone, at any distance:
+      E4M1, the launcher brought up 11 times in 3 runs and fired twice - groups up to 957
+      off on the way, gone from sight during the switch; one held 526 off while a spectre
+      closed from 266 to 76; and the imps behind the grate, the target another every few
+      tics, up for one and away for the next. Hence the pack, the reach and the clear.
+    - E4M1, 6 salts: finished 4 against HEAD's 3, the launcher up for groups 11 times, few
+      fired - its groups behind the grate and among the pillars are in sight for a second
+      at a time. Doom II MAP10 and MAP15 from a pistol start, 3 salts: as HEAD to the tic
+      (never 10 rockets nor 200 cells held). The user's E1M5 save (32 rockets), 3 salts:
+      all finished in both builds (182 to 250 s against 182 to 218, the difference in the
+      sweep for items); 6 group rockets fired, each killing 2 to 4 imps at once. E3M3 save
+      (10 rockets): one fired, 3 imps killed. The BFG part is not run yet: no save holds
+      it with 200 cells.
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

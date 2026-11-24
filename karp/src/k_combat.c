@@ -733,6 +733,38 @@ extern void A_CyberAttack();
 #define CARRY_SPARE 2
 #define CARRY_CROWD 40.0
 
+// A group of the weak ones that shoot - zombiemen, shotgun guys,
+// chaingunners, imps and SS, any mix - is worth a rocket or a BFG ball,
+// whatever is kept (RESERVE_SHARE, CARRY_DAMAGE; the user, E4M1: imps and
+// shotgun guys behind a grate shot one by one from afar - "one rocket can
+// clear a couple of enemies, being a large ammo saver"; "any group of 3+
+// deserves a rocket attempt", "5+ for the BFG"): a rocket, GROUP_ROCKETS_HELD
+// or more held, at one of a pack of GROUP_ROCKETS or more, each within
+// BUNCHED of another (BLAST with the launcher up, so a pack spreading a
+// little keeps it), the same pack whichever of it is the target (GroupOf); a
+// BFG ball, GROUP_CELLS or more held, at one of GROUP_BFG or more in sight
+// within BFG_CONE of the way to the target and BFG_REACH, where its tracers
+// go (A_BFGSpray). Such a shot rates what it does to all of them
+// (GroupRating: on each of the others, a rocket's blast less its distance
+// from the target if it sees the burst there, P_RadiusAttack; or two
+// tracers' worth, BFG_SPRAY; no more than kills each and a half), and is
+// brought up even while the next shot of the gun in hand would kill the
+// target. Only at a group within GROUP_REACH, with no monster of another
+// kind awake within GROUP_CLEAR of the player, which would soon be the
+// target (E4M1: brought up 11 times in 3 runs, fired twice - at groups up to
+// 957 off on the way, gone from sight during the switch; held for one 526
+// off while a spectre closed from 266 to 76; and up for one imp of a pack
+// behind a grate and away for the next, the target another every few
+// tics). Never with the ammo short for the level's boss (ForBoss).
+#define GROUP_ROCKETS 3
+#define GROUP_ROCKETS_HELD 10
+#define GROUP_BFG 5
+#define GROUP_CELLS 200
+#define GROUP_REACH 640.0
+#define GROUP_CLEAR 384.0
+#define BFG_SPRAY 135.0
+#define MAX_GROUP 32
+
 // Hopeless (plan 7.3 point 3, fight or avoid; the user, E3M9: the shells
 // spent on the cyberdemon with the shotgun, then the bullets with the
 // pistol, and the red key's room of hitscanners gone into with rockets
@@ -1296,6 +1328,7 @@ static int lost_tic;
 static k_vec2_t target_last;        // where it was then
 static k_vec2_t target_velocity;    // smoothed, units per tic
 static int wanted = -1;             // the weapon wanted, -1 if none
+static int wanted_group;            // how many share in its shot (GroupShot)
 static boolean can_hurt;            // some weapon in hand can hurt the target
                                     // (one not weak: from where a fight keeps
                                     // it, it being no hopeless one)
@@ -3909,6 +3942,156 @@ static boolean KeptFrom(const player_t *player, const k_monster_t *monster)
                 && !UnderPressure() && SpareGun(player)));
 }
 
+// Whether the kind makes a group worth a rocket or a BFG ball (GROUP_ROCKETS).
+static boolean GroupKind(int type)
+{
+    return type == MT_POSSESSED || type == MT_SHOTGUY || type == MT_CHAINGUY
+        || type == MT_TROOP || type == MT_WOLFSS;
+}
+
+// The group the target is one of (GROUP_ROCKETS), by their places in the
+// list, the target first, up to max: of a group kind; for a rocket, the
+// pack - within BUNCHED (BLAST with the launcher up) of the target or of
+// another of it, so it is the same pack whichever of it is the target (E4M1:
+// imps behind a grate, the target another every few tics, the launcher up
+// for one and away for the next); for the BFG, in sight within BFG_REACH and
+// the cone of its tracers. Returns how many, 0 if the target is of no group
+// kind.
+static int GroupOf(const player_t *player, const weapon_t *weapon,
+                   const k_monster_t *target, boolean in_hand, int *members, int max)
+{
+    double x = ToMap(player->mo->x), y = ToMap(player->mo->y);
+    double way = atan2(target->at.y - y, target->at.x - x);
+    double reach = in_hand ? BLAST : BUNCHED;
+    int count = 1, i, j, k;
+
+    if (!GroupKind(target->type))
+    {
+        return 0;
+    }
+
+    members[0] = (int) (target - monsters);
+
+    for (k = 0; k < count; ++k)
+    {
+        const k_monster_t *member = &monsters[members[k]];
+
+        for (i = 0; i < num_monsters && count < max; ++i)
+        {
+            const k_monster_t *monster = &monsters[i];
+
+            if (!GroupKind(monster->type)
+             || (weapon->weapon == wp_missile
+                 ? AxisDistance(monster->at, member->at) >= reach
+                 : k > 0 || !monster->visible || monster->distance > BFG_REACH
+                   || fabs(Wrap(atan2(monster->at.y - y, monster->at.x - x) - way)) > BFG_CONE))
+            {
+                continue;
+            }
+
+            for (j = 0; j < count && members[j] != i; ++j)
+            {
+            }
+
+            if (j == count)
+            {
+                members[count++] = i;
+            }
+        }
+    }
+
+    return count;
+}
+
+// How many there are in the group the target is one of (GroupOf), if a shot
+// of the weapon at it is a group shot (GROUP_ROCKETS, GROUP_BFG): the target
+// within GROUP_REACH, no monster of another kind awake within GROUP_CLEAR,
+// the rocket launcher or the BFG with the ammo held, none of it short for
+// the level's boss; else 0.
+static int GroupShot(const player_t *player, const weapon_t *weapon,
+                     const k_monster_t *target, boolean in_hand)
+{
+    int members[MAX_GROUP];
+    int count, i;
+
+    if (weapon == NULL || !GroupKind(target->type) || target->distance > GROUP_REACH
+     || ForBoss(target)
+     || !(weapon->weapon == wp_missile ? player->ammo[am_misl] >= GROUP_ROCKETS_HELD
+          : weapon->weapon == wp_bfg && player->ammo[am_cell] >= GROUP_CELLS))
+    {
+        return 0;
+    }
+
+    count = GroupOf(player, weapon, target, in_hand, members, MAX_GROUP);
+
+    if (count < (weapon->weapon == wp_missile ? GROUP_ROCKETS : GROUP_BFG))
+    {
+        return 0;
+    }
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+
+        if (!GroupKind(monster->type) && monster->awake && !monster->infighting
+         && Kind(monster->type)->cost > 0.0 && monster->distance < GROUP_CLEAR)
+        {
+            return 0;
+        }
+    }
+
+    return count;
+}
+
+// What a group shot does a tic (Rating for all of them): the shot on the
+// target, and on each other one of the group a rocket's blast less its
+// distance from the target, if it would see the burst there
+// (P_RadiusAttack), as often as the rocket lands (ShotDamage); or BFG_SPRAY
+// of the tracers, whether the ball lands or not; no more than kills each and
+// a half.
+static double GroupRating(const player_t *player, const weapon_t *weapon,
+                          const k_monster_t *target, boolean in_hand)
+{
+    double direct = ShotDamage(player, weapon, target->distance, target->radius, target);
+    double total = SDL_min(direct, target->health * 1.5);
+    int members[MAX_GROUP];
+    int count = GroupOf(player, weapon, target, in_hand, members, MAX_GROUP);
+    int k;
+
+    for (k = 1; k < count; ++k)
+    {
+        const k_monster_t *monster = &monsters[members[k]];
+        double share = BFG_SPRAY;
+
+        if (weapon->weapon == wp_missile)
+        {
+            share = 0.0;
+
+            if (K_Sight_Check(target->at.x, target->at.y, target->z + target->height * 0.5,
+                              monster->at.x, monster->at.y, monster->z,
+                              monster->z + monster->height))
+            {
+                share = direct / weapon->damage
+                      * SDL_max(0.0, BLAST - SDL_max(0.0, AxisDistance(monster->at, target->at)
+                                                          - monster->radius));
+            }
+        }
+
+        total += SDL_min(share, monster->health * 1.5);
+    }
+
+    return total / weapon->tics;
+}
+
+// Whether the rockets or cells the weapon fires are kept from the monster
+// (KeptFrom), but for a group shot at it (GroupShot).
+static boolean Kept(const player_t *player, const weapon_t *weapon,
+                    const k_monster_t *monster, boolean in_hand)
+{
+    return Reserved(weapon) && KeptFrom(player, monster)
+        && GroupShot(player, weapon, monster, in_hand) == 0;
+}
+
 // Whether the pistol is right for the target: far off with little health
 // left, not closing in, the area clear a while; or nothing better can hurt
 // it - rockets and cells kept from it aside.
@@ -3931,7 +4114,7 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
 
         if (weapon->weapon != wp_pistol
          && !(weapon->weapon == wp_fist && !player->powers[pw_strength])
-         && Selectable(player, weapon) && !(Reserved(weapon) && KeptFrom(player, monster))
+         && Selectable(player, weapon) && !Kept(player, weapon, monster, false)
          && ShotDamage(player, weapon, monster->distance, monster->radius, monster) > 0.0)
         {
             return false;
@@ -4142,14 +4325,21 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
 // time (InTime: E2M8, the pistol brought up whenever the cyberdemon came too
 // near for rockets, and put away as the player backed off - a switch each
 // way, the fight going on without either), nor for a gun against one sawn
-// (Sawn); more for the chainsaw against what it is for.
+// (Sawn); more for the chainsaw against what it is for, and for a group shot
+// what it does to all of them (GroupRating), whatever is kept.
 static double Preference(const player_t *player, const weapon_t *weapon,
                          const k_monster_t *monster, boolean pistol_right, boolean in_hand)
 {
     double rating = Rating(player, weapon, monster);
+    boolean group = rating > 0.0 && GroupShot(player, weapon, monster, in_hand) > 0;
+
+    if (group)
+    {
+        rating = GroupRating(player, weapon, monster, in_hand);
+    }
 
     if (rating > 0.0
-     && ((Reserved(weapon) && KeptFrom(player, monster))
+     && ((Reserved(weapon) && KeptFrom(player, monster) && !group)
          || (weapon->reach <= 0.0 && Sawn(player, monster))
          || (weapon->reach <= 0.0 && SpawnHealth(monster->type) > WEAK_HEALTH
              && !InTime(weapon, monster))))
@@ -4186,7 +4376,7 @@ static double Preference(const player_t *player, const weapon_t *weapon,
         rating = 0.0;
     }
     else if (weapon->weapon == wp_missile && monster->health <= ROCKET_HEALTH
-          && !Bunched(monster))
+          && !Bunched(monster) && !group)
     {
         rating *= in_hand || !OtherGun(player, true) ? ROCKET_SHARE : 0.0;
     }
@@ -4251,7 +4441,8 @@ static void ChooseWeapon(const player_t *player)
     // moment: the player backs off to fire them (ChooseMove), not put them
     // away - unless it comes within KEEP_AWAY, or they are kept from it.
     if (battle && current != NULL && current->weapon == wp_missile && CanFire(player, current)
-     && RocketsFor(monster) && monster->distance >= KEEP_AWAY && !KeptFrom(player, monster))
+     && RocketsFor(monster) && monster->distance >= KEEP_AWAY
+     && !Kept(player, current, monster, true))
     {
         best = current;
     }
@@ -4264,8 +4455,10 @@ static void ChooseWeapon(const player_t *player)
     }
 
     if (best != NULL && best != current
-     && !(current != NULL && current_rating > 0.0
-          && ShotDamage(player, current, monster->distance, monster->radius, monster) >= monster->health)
+     && (GroupShot(player, best, monster, false) > 0
+         || !(current != NULL && current_rating > 0.0
+              && ShotDamage(player, current, monster->distance, monster->radius, monster)
+                 >= monster->health))
      && ((current_rating <= 0.0 && leveltime - last_switch >= SWITCH_TICS)
          || (best_rating > current_rating * SWITCH_GAIN
              && leveltime - last_switch
@@ -4279,6 +4472,7 @@ static void ChooseWeapon(const player_t *player)
     if (current != NULL)
     {
         wanted = current->weapon;
+        wanted_group = GroupShot(player, current, monster, current->weapon == player->readyweapon);
         status.weapon = current->name;
     }
 }
@@ -8467,8 +8661,17 @@ void K_Combat_Fire(int tic, k_command_t *command)
             command->change = 1;
             command->weapon = WeaponOf(wanted)->slot;
             last_switch = leveltime;
-            K_Log(K_LOG_COMBAT, K_LOG_INFO, "bringing up the %s for the %s, %.0f units off",
-                  WeaponOf(wanted)->name, monster->name, monster->distance);
+            if (wanted_group > 0)
+            {
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "bringing up the %s for the %s, %.0f units off - "
+                      "a group shot, %d of them", WeaponOf(wanted)->name, monster->name,
+                      monster->distance, wanted_group);
+            }
+            else
+            {
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "bringing up the %s for the %s, %.0f units off",
+                      WeaponOf(wanted)->name, monster->name, monster->distance);
+            }
         }
 
         return;
