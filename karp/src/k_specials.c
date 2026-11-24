@@ -497,6 +497,19 @@ static boolean StairHeight(int line, int target, fixed_t *height)
     return false;
 }
 
+int K_Specials_Lift(int special)
+{
+    switch (special)
+    {
+        case 10: case 21: case 62: case 88: case 120: case 121: case 122: case 123:
+        case 53: case 87:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 int K_Specials_MoverTarget(int line, int sector, double *floor, double *ceiling)
 {
     sector_t *s = &sectors[sector];

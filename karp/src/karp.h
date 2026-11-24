@@ -36,7 +36,11 @@ void K_EnableAttitude(void);
 // -autoplay and salt, starts a game at once, overrides -quitonexit.
 void K_EnableDemo(void);
 
-// Right after I_InitGraphics: opens the console.
+// -karpoverlay: the Karp logo and a line saying what the bot is about, over
+// the game (k_overlay.h); Doom's messages off meanwhile.
+void K_EnableOverlay(void);
+
+// Right after I_InitGraphics: opens the console, sets the overlay up.
 void K_PostVideoInit(void);
 
 // Once per rendered frame: redraws the console (rate-limited).

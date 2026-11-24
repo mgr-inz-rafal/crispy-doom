@@ -3979,6 +3979,11 @@ int K_Nav_Waiting(void)
         && action.phase != PHASE_APPROACH && jump_phase == JUMP_NONE;
 }
 
+int K_Nav_Unsticking(void)
+{
+    return wiggling || escaping;
+}
+
 void K_Nav_Pause(int pause)
 {
     k_pose_t pose;

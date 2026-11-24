@@ -8883,6 +8883,11 @@ int K_Combat_Chasing(void)
     return players[consoleplayer].powers[pw_invulnerability] >= CHASE_LEFT;
 }
 
+int K_Combat_Outmatched(void)
+{
+    return outmatched;
+}
+
 int K_Combat_OnSpot(double x, double y)
 {
     int best = -1, i;

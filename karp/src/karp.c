@@ -1,8 +1,8 @@
 //
 // DESCRIPTION:
 //	Karp glue: the -autoplay / -karpconsole / -quitonexit / -karpsalt /
-//	-karpexit / -karpattitude / -karpdemo switches, lifecycle and the SDL
-//	event filter that gives the console its own events.
+//	-karpexit / -karpattitude / -karpdemo / -karpoverlay switches, lifecycle
+//	and the SDL event filter that gives the console its own events.
 //
 
 #include <stdlib.h>
@@ -30,6 +30,7 @@
 #include "k_log.h"
 #include "k_map.h"
 #include "k_nav.h"
+#include "k_overlay.h"
 #include "k_salt.h"
 #include "k_settings.h"
 #include "k_sight.h"
@@ -42,6 +43,7 @@
 static boolean autoplay_enabled;
 static boolean console_enabled;
 static boolean console_open;
+static boolean overlay_enabled;
 static boolean quit_on_exit;
 static boolean level_completed;     // reported for this level
 static int world_tic = -1;          // leveltime Karp last looked at the level
@@ -170,6 +172,13 @@ void K_EnableDemo(void)
     K_Demo_Enable();
 }
 
+void K_EnableOverlay(void)
+{
+    InitKarp();
+    overlay_enabled = true;
+    K_Overlay_Enable();
+}
+
 boolean K_AutoplayEnabled(void)
 {
     return autoplay_enabled;
@@ -213,12 +222,20 @@ static void ShutdownKarp(void)
         console_open = false;
     }
 
+    // Before the configuration is saved (registered earlier, so run later):
+    // Doom's messages as they were.
+    if (overlay_enabled)
+    {
+        I_SetOverlayDrawer(NULL);
+        K_Overlay_Close();
+    }
+
     K_Settings_SaveIfDirty();
 }
 
 void K_PostVideoInit(void)
 {
-    if (!autoplay_enabled && !console_enabled)
+    if (!autoplay_enabled && !console_enabled && !overlay_enabled)
     {
         return;
     }
@@ -231,6 +248,12 @@ void K_PostVideoInit(void)
         {
             I_SetEventFilter(EventFilter);
         }
+    }
+
+    if (overlay_enabled)
+    {
+        K_Overlay_Open();
+        I_SetOverlayDrawer(K_Overlay_Draw);
     }
 
     // Registered after I_InitGraphics, so it runs before I_ShutdownGraphics

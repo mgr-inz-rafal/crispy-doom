@@ -87,6 +87,10 @@ int K_Specials_DoorCloses(int special);
 // the highest neighbouring floor); 0 for any other special.
 int K_Specials_MoverMoves(int special);
 
+// Lifts: down, then back up after a while (EV_DoPlat downWaitUpStay, and
+// the perpetual ones).
+int K_Specials_Lift(int special);
+
 // A line's live special: one-shot lines lose theirs once used.
 int K_Specials_LineSpecial(int line);
 

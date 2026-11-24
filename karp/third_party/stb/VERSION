@@ -1,0 +1,16 @@
+stb_image v2.31
+https://github.com/nothings/stb
+commit 48fb1c9709f973041a7e6992d720ac625266cdd3 (2026-11-09, "update version numbers")
+sha256 fc644f6b893f5225d59670ebb3e5384771a58cfbfa5e5ca27fd85cd8da220056
+License: MIT or public domain, the reader's choice (the end of stb_image.h)
+
+Vendored unmodified, the one file only: stb_image.h.
+
+What for: decoding the overlay's logo (karp/assets/karp_logo.png, k_overlay.c),
+PNG only (STBI_ONLY_PNG), its functions static (STB_IMAGE_STATIC). SDL2 reads
+nothing but BMP by itself, and crispy-doom does not link SDL2_image. The only
+image it reads is our own, never one from elsewhere (see the security note at
+the top of stb_image.h).
+
+To update: copy stb_image.h from a newer commit over this one and update this
+file.

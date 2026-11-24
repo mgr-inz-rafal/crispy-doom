@@ -2427,6 +2427,19 @@ void D_DoomMain (void)
         K_EnableDemo(); // [Karp]
     }
 
+    //!
+    // @category game
+    //
+    // [Karp] For showing the bot to an audience: the Karp logo at the top of
+    // the screen (karp_logo.png next to the executable) and under it a line
+    // saying what the bot is about. Doom's messages are off meanwhile.
+    //
+
+    if (M_CheckParm("-karpoverlay"))
+    {
+        K_EnableOverlay(); // [Karp]
+    }
+
     // Undocumented:
     // Invoked by setup to test the controls.
 

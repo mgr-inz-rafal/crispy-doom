@@ -213,6 +213,11 @@ static grabmouse_callback_t grabmouse_callback = NULL;
 
 static sdl_event_filter_t sdl_event_filter = NULL;
 
+// [Karp] Draws over each frame, and over a screenshot, before it is shown or
+// read (the Karp overlay).
+
+static overlay_drawer_t overlay_drawer = NULL;
+
 // Does the window currently have focus?
 
 static boolean window_focused = true;
@@ -291,6 +296,12 @@ void I_SetEventFilter(sdl_event_filter_t func)
 SDL_Window *I_GetWindow(void)
 {
     return screen;
+}
+
+// [Karp]
+void I_SetOverlayDrawer(overlay_drawer_t func)
+{
+    overlay_drawer = func;
 }
 
 // Set the variable controlling FPS dots.
@@ -940,6 +951,12 @@ void I_FinishUpdate (void)
 	SDL_RenderCopy(renderer, curpane, NULL, NULL);
     }
 #endif
+
+    // [Karp] the overlay, over the game's picture and its borders
+    if (overlay_drawer != NULL)
+    {
+        overlay_drawer(renderer);
+    }
 
     // Draw!
 
@@ -2099,6 +2116,12 @@ void I_RenderReadPixels(byte **data, int *w, int *h, int *p)
 	// Refresh backbuffer with previous texture to ensure it is valid for reading the pixels
 	// See https://github.com/fabiangreffrath/crispy-doom/issues/1304
 	SDL_RenderCopy(renderer, smooth_pixel_scaling ? texture_upscaled : texture, NULL, NULL);
+
+	// [Karp] a screenshot shows the overlay too, as the screen does
+	if (overlay_drawer != NULL)
+	{
+	    overlay_drawer(renderer);
+	}
 
 	// [crispy] allocate memory for screenshot image
 	pixels = malloc(rect.h * temp);

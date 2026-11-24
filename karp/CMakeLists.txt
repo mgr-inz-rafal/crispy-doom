@@ -9,6 +9,7 @@
 
 set(KARP_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(IMGUI_DIR "${KARP_DIR}/third_party/imgui")
+set(STB_DIR "${KARP_DIR}/third_party/stb")
 
 set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/karp.c"            "${KARP_DIR}/src/karp.h"
@@ -24,6 +25,7 @@ set(KARP_SOURCE_FILES
     "${KARP_DIR}/src/k_log.c"           "${KARP_DIR}/src/k_log.h"
     "${KARP_DIR}/src/k_map.c"           "${KARP_DIR}/src/k_map.h"
     "${KARP_DIR}/src/k_nav.c"           "${KARP_DIR}/src/k_nav.h"
+    "${KARP_DIR}/src/k_overlay.c"       "${KARP_DIR}/src/k_overlay.h"
     "${KARP_DIR}/src/k_path.c"          "${KARP_DIR}/src/k_path.h"
     "${KARP_DIR}/src/k_salt.c"          "${KARP_DIR}/src/k_salt.h"
     "${KARP_DIR}/src/k_settings.c"      "${KARP_DIR}/src/k_settings.h"
@@ -50,10 +52,30 @@ target_include_directories("${PROGRAM_PREFIX}doom" PRIVATE
                            "${KARP_DIR}/src"
                            "${IMGUI_DIR}"
                            "${IMGUI_DIR}/backends"
+                           "${STB_DIR}"
                            "${PROJECT_SOURCE_DIR}/src"
                            "${PROJECT_SOURCE_DIR}/src/doom")
 
 target_compile_features("${PROGRAM_PREFIX}doom" PRIVATE cxx_std_17)
+
+# The overlay's logo (-karpoverlay), copied next to the executable. Not a
+# POST_BUILD step (the executable is defined in another directory), nor
+# $<TARGET_FILE_DIR> (under this project's old policies, CMP0112, that would
+# make the copy depend on the executable, and the executable on it): its
+# folder is the target's build directory, per configuration where there are
+# several.
+get_target_property(KARP_EXE_DIR "${PROGRAM_PREFIX}doom" BINARY_DIR)
+get_property(KARP_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(KARP_MULTI_CONFIG)
+    set(KARP_EXE_DIR "${KARP_EXE_DIR}/$<CONFIG>")
+endif()
+
+add_custom_target(karp_assets
+                  COMMAND "${CMAKE_COMMAND}" -E make_directory "${KARP_EXE_DIR}"
+                  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                          "${KARP_DIR}/assets/karp_logo.png" "${KARP_EXE_DIR}"
+                  COMMENT "Karp: the overlay's logo next to the executable")
+add_dependencies("${PROGRAM_PREFIX}doom" karp_assets)
 
 # The engine hooks in the doom library include karp.h.
 target_include_directories(doom PRIVATE "${KARP_DIR}/src")

@@ -6822,6 +6822,155 @@ void K_Brain_LevelCompleted(int secret)
     exit_wanted = false;
 }
 
+// What a trigger goal's line does for the way, and how it is worked: by its
+// special at level load (a one-shot line loses its own once used, and with
+// it what K_Specials_MoverTarget could tell).
+static void TriggerKind(const goal_t *goal, int *opens, int *worked)
+{
+    const k_map_t *map = K_Map_Get();
+    int line = goal->planned ? goal->chosen.line : -1;
+    int special = line >= 0 ? map->lines[line].special : 0;
+    int moves = K_Specials_MoverMoves(special);
+
+    *opens = goal->way_back ? K_OPENS_WAY_BACK
+           : K_Specials_ManualDoor(special) || (moves & (K_MOVE_CEILING_UP | K_MOVE_DOOR))
+           ? K_OPENS_DOOR
+           : K_Specials_Lift(special) ? K_OPENS_LIFT
+           : (moves & K_MOVE_FLOOR_UP) ? K_OPENS_FLOOR_UP
+           : (moves & K_MOVE_FLOOR_DOWN) ? K_OPENS_FLOOR_DOWN
+           : K_OPENS_WAY;
+    *worked = line < 0 || K_Specials_ManualDoor(special) ? K_WORKED_WALK
+            : goal->chosen.kind == K_GOAL_USE_LINE ? K_WORKED_PRESS
+            : goal->chosen.kind == K_GOAL_SHOOT_LINE ? K_WORKED_SHOOT
+            : K_WORKED_WALK;
+}
+
+// A goal as a purpose: the exit in the sweep before it as the sweep, an item
+// fetched in it flagged so; an item run for out of a fight, an escape. A
+// switch or barrels alone on the list, as themselves.
+static void Purpose(const goal_t *goal, k_activity_t *activity)
+{
+    const k_item_t *item;
+
+    switch (goal->type)
+    {
+        case GOAL_GOTO:
+            activity->kind = goal->fallback ? K_ACT_FALLBACK : K_ACT_NONE;
+            break;
+
+        case GOAL_EXIT:
+            activity->kind = sweep_since > 0 ? K_ACT_LOOT : K_ACT_EXIT;
+            activity->detail = exit_kind == 1 ? 1 : exit_kind == 0 ? 0 : -1;
+            break;
+
+        case GOAL_ITEM:
+            item = K_Items_Get(goal->param);
+            activity->kind = item->escape ? K_ACT_ESCAPE : K_ACT_ITEM;
+            activity->detail = item->kind;
+            activity->flag = sweep_since > 0;
+            activity->name = item->name;
+            break;
+
+        case GOAL_PLACE:
+            activity->kind = places[goal->param].sector >= 0 ? K_ACT_SECRET : K_ACT_EXPLORE;
+            break;
+
+        case GOAL_KEY:
+            activity->kind = K_ACT_KEY;
+            activity->detail = goal->param;
+            break;
+
+        case GOAL_TRIGGER:
+            activity->kind = K_ACT_TRIGGER;
+            TriggerKind(goal, &activity->detail, &activity->flag);
+            break;
+
+        case GOAL_BARREL:
+            activity->kind = K_ACT_BARREL;
+            break;
+
+        case GOAL_KILL:
+            activity->kind = K_ACT_BOSS;
+            activity->detail = goal->param;
+            activity->flag = goal->chase;
+            activity->name = K_Combat_KindName(goal->param);
+            break;
+
+        case GOAL_TELEFRAG:
+            activity->kind = K_ACT_TELEFRAG;
+            activity->detail = goal->victim;
+            activity->name = K_Combat_KindName(goal->victim);
+            break;
+    }
+}
+
+// Whether a fix goal on top is worked now: a switch pressed or shot there,
+// or a line's sector moving after it was worked; barrels shot at from the
+// spot.
+static boolean FixWorked(const goal_t *goal)
+{
+    const k_navstatus_t *nav = K_Nav_GetStatus();
+
+    if (goal->type == GOAL_BARREL)
+    {
+        return goal->shooting;
+    }
+
+    return goal->type == GOAL_TRIGGER
+        && (goal->used || goal->moving
+            || nav->action == K_ACTION_USE || nav->action == K_ACTION_SHOOT);
+}
+
+void K_Brain_Activity(k_activity_t *activity)
+{
+    int i, top = -1;
+
+    memset(activity, 0, sizeof(*activity));
+    activity->kind = K_ACT_NONE;
+    activity->detail = -1;
+    activity->fix = K_ACT_NONE;
+
+    for (i = depth - 1; i >= 0; --i)
+    {
+        const goal_t *goal = &goals[i];
+
+        if (goal->type == GOAL_GOTO && !goal->fallback)
+        {
+            continue;
+        }
+
+        // The fix on top, if worked now; the purpose is under it.
+        if (goal->type == GOAL_TRIGGER || goal->type == GOAL_BARREL)
+        {
+            if (top < 0)
+            {
+                top = i;
+
+                if (FixWorked(goal))
+                {
+                    activity->fix = goal->type == GOAL_TRIGGER ? K_ACT_TRIGGER : K_ACT_BARREL;
+
+                    if (goal->type == GOAL_TRIGGER)
+                    {
+                        TriggerKind(goal, &activity->fix_detail, &activity->fix_flag);
+                    }
+                }
+            }
+
+            continue;
+        }
+
+        Purpose(goal, activity);
+        return;
+    }
+
+    // Only fixes: the one on top is the purpose.
+    if (top >= 0)
+    {
+        Purpose(&goals[top], activity);
+    }
+}
+
 int K_Brain_GoalCount(void)
 {
     return depth;

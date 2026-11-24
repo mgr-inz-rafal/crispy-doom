@@ -168,6 +168,11 @@ int K_Combat_Boss(void);
 // again, before it wears off.
 int K_Combat_Chasing(void);
 
+// Whether the awake monsters in sight are too many for the player
+// (OUTMATCH_SHARE of its health and armour): fought from cover, or hidden
+// from.
+int K_Combat_Outmatched(void);
+
 // The kind (a mobjtype_t) of the toughest monster - of the tough tier: a
 // mancubus, an arch-vile, a baron, the spider mastermind, the Cyberdemon -
 // that a player teleported to (x, y) would kill there (PIT_StompThing: their

@@ -55,6 +55,11 @@ union SDL_Event;
 struct SDL_Window;
 typedef boolean (*sdl_event_filter_t)(union SDL_Event *event);
 
+// [Karp] Draws over each frame just before it is shown, in the window's own
+// pixels (the Karp overlay).
+struct SDL_Renderer;
+typedef void (*overlay_drawer_t)(struct SDL_Renderer *renderer);
+
 // Called by D_DoomMain,
 // determines the hardware configuration
 // and sets up the video mode
@@ -91,6 +96,7 @@ void I_CheckIsScreensaver(void);
 void I_SetGrabMouseCallback(grabmouse_callback_t func);
 void I_SetEventFilter(sdl_event_filter_t func); // [Karp]
 struct SDL_Window *I_GetWindow(void); // [Karp]
+void I_SetOverlayDrawer(overlay_drawer_t func); // [Karp]
 
 void I_DisplayFPSDots(boolean dots_on);
 void I_BindVideoVariables(void);

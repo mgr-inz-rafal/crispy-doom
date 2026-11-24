@@ -100,10 +100,13 @@ karp/
                                  (switches, walk-over lines), keys lying in the level
     k_trace.h / k_trace.c     player trace: what a human driving does, in the log
     k_demo.h / k_demo.c       demo mode (-karpdemo): plays on for ever, level saves, retries
+    k_overlay.h / k_overlay.c  the overlay (-karpoverlay): logo and a line on what the bot does
     k_console.h / k_console.cpp  Karp Console (SDL window, ImGui, map canvas, tabs, log pane)
+  assets/karp_logo.png        the overlay's logo, copied next to the executable by the build
   third_party/imgui/          Dear ImGui v1.93.0 (latest release at plan time): core files,
                               backends/imgui_impl_sdl2.*, backends/imgui_impl_sdlrenderer2.*,
                               LICENSE.txt, VERSION
+  third_party/stb/            stb_image.h v2.31 (PNG only, for the logo), VERSION
 ```
 
 ### 2.2 Engine hooks (complete list)
@@ -122,10 +125,12 @@ karp/
 | H11 | `src/doom/g_game.c` end of `G_DoLoadGame` | `K_GameLoaded();` | Rebuild Karp's copy of the level from the world a savegame restored: H4 ran inside `G_InitNew`, before every thing and mover was replaced |
 | H12 | `src/doom/wi_stuff.c` `WI_drawStats`, crispy's early exit from the tally after ExM8 | `&& !K_HoldsTally()` | In demo mode that tally waits for fire like any other intermission (3.11), not leaving the moment it is counted |
 | H9 | `src/i_video.c` / `i_video.h` (shared by all games) | `I_SetEventFilter(fn)`; call `if (event_filter && event_filter(&sdlevent)) continue;` at the top of the `SDL_PollEvent` loop in `I_GetEvent` (:474); `I_GetWindow()` accessor (`struct SDL_Window;` forward declaration, since i_video.h does not include SDL.h) | Route console events to Karp. Only Doom registers a filter, and only with `-karpconsole`; otherwise it stays NULL. |
+| H13 | `src/i_video.c` / `i_video.h` (shared by all games): `I_SetOverlayDrawer(fn)`; `I_FinishUpdate` calls it after the frame is copied and before `SDL_RenderPresent`, and the screenshot code after its copy of the frame (`struct SDL_Renderer;` forward declaration); `src/doom/d_main.c` after the `-karpdemo` block: `//!` doc block + `if (M_CheckParm("-karpoverlay")) K_EnableOverlay();` | Draw the overlay (3.12) over each frame and over screenshots, in the window's own pixels. Only Doom registers a drawer, and only with `-karpoverlay`; otherwise it stays NULL. |
 
 `karp.h` is included only by the five doom files above (`d_main.c`, `p_setup.c`, `d_net.c`,
-`g_game.c`, `wi_stuff.c`). H9 is generic and does not reference Karp. None of the hooks write a configuration
-variable.
+`g_game.c`, `wi_stuff.c`). H9 and H13 are generic and do not reference Karp. No hook writes a
+configuration variable for good: `-karpoverlay` turns Doom's messages off (`show_messages`) and
+back to the player's setting at exit, before the configuration is saved.
 
 Ordering note: with `-warp`, `G_InitNew` (and so `P_SetupLevel`/H4) runs inside `D_DoomMain`
 (`d_main.c:2481`), **before** `D_DoomLoop` creates any window. Map building must therefore not
@@ -1573,6 +1578,43 @@ unless `-karpsalt` gives one), starts the game at once and overrides `-quitonexi
 
 Loading a savegame needed Karp's copy of the level rebuilt (H11): `G_DoLoadGame` sets the level up
 (H4) and only then restores the saved world, every monster, item and mover replaced.
+
+### 3.12 `k_overlay.c` - the overlay
+
+The user, 2026-11-24: for the exhibition PC, one click and no broadcast program (OBS was the first
+thought) - the Karp logo over the game, centred on its top edge, and under it a line saying what
+the bot is about, coarse enough for an audience. `-karpoverlay` (H13):
+- **Drawn over each frame** just before it is shown, in the window's own pixels (the renderer's
+  logical size set aside meanwhile, then put back): neither Doom's palette, its low resolution
+  nor its screen flashes touch it, and it stays over intermissions, menus and screenshots. Placed
+  on the game's picture (the 4:3 or widescreen area, not the borders).
+- **The logo**: `karp_logo.png` next to the executable (the build copies
+  `karp/assets/karp_logo.png` there, so it can be swapped without a rebuild), read with
+  stb_image, trimmed to its pixels that show (2138x520 of 2172x724), 40% of the picture's width,
+  shrunk to that size once (averaged by alpha, no dark fringe) and again when the window changes.
+- **The line**: in Doom's own HUD font from the IWAD (`STCFN033` to `STCFN095`, capitals),
+  each pixel grey by its colour's brightness and drawn in the logo lettering's lime, outlined in
+  black, at a whole multiple of its pixels (5 at 1080, less if it would not fit).
+- **What it says**: what the bot is after (`K_Brain_Activity`) - the purpose, not the means:
+  for a switch on the way to the red key, the key; a switch only while it is worked (pressed, or
+  its sector moving after: "OPENING A DOOR WITH A SWITCH", "WAITING FOR A LIFT"), barrels while
+  shot at. Over that, combat: "FIGHTING MONSTERS" while there is something to fight (a target or
+  an awake monster in sight - combat's battle runs on a second past the last kill), a boss by
+  name, "OUTNUMBERED - FIGHTING FROM COVER", "LURING THE MONSTERS OUT" (a hold), runs out of a
+  fight ("ESCAPING THE FIGHT TO GET HEALTH") and fall backs. In the sweep before the exit, small
+  items and the exit read "COLLECTING LOOT", weapons, power-ups and armour by name, places as
+  places. "LEVEL COMPLETE", "EPISODE COMPLETE", "TRYING AGAIN" (dead, in demo mode). Nothing in a
+  menu or on the title screen.
+- **Timing**: a new line shows once it has held 0.7 s (an item 1.2 s, so passing pickups never
+  show; a fight or a switch 0.5 s), and a line shown stays at least 1.5 s (a switch's 1 s); a run
+  out of a fight, a fall back, the level's end or a death at once. Lines cross-fade over 0.25 s.
+  First tried cinematic (1.5 s to show, 4 s on screen, a fight held over gaps of 4 s): the user
+  saw "OPENING THE WAY" while the bot ran on through corridors for a switch 4400 units off, and
+  "FIGHTING MONSTERS" well after the imp died - rather a little shaky and true. E1M1 explorer: 26
+  lines in 91.5 s, none on screen under 1.3 s.
+- **Doom's messages are off** meanwhile (`show_messages`, the player's setting back at exit),
+  so nothing prints under the logo - crispy's "A secret is revealed!" with them.
+- Every line shown is logged ("overlay: GETTING THE RED KEY"), to count the changes.
 
 ## 4. Milestones
 
