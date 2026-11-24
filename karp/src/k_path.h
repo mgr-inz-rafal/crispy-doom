@@ -132,6 +132,11 @@ typedef int (*k_keepoff_t)(int line);
 
 void K_Path_SetKeepOff(k_keepoff_t lines);
 
+// A crossing the player got stuck at (k_nav.c): crossing the portal out of
+// from_cell costs more for the next `tics` tics of this level, so routes go
+// another way if there is one - and through it still if there is not.
+void K_Path_Avoid(int portal, int from_cell, int tics);
+
 // The radiation suit the searches assume: one worn from the start for that
 // many tics (k_brain.c: the way on from a suit once picked up), or with -1
 // (the default) the player's own, for as long as it has left. While worn,

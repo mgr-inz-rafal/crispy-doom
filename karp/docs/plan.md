@@ -4762,6 +4762,47 @@ Who controls the player in a fight (the user's model):
       sweep for items); 6 group rockets fired, each killing 2 to 4 imps at once. E3M3 save
       (10 rockets): one fired, 3 imps killed. The BFG part is not run yet: no save holds
       it with 200 cells.
+  - M. Stuck for good (the user, E1M1 demo run, explorer, secret exit: "the bot got stuck
+    ... there were quite some of these already, so I think we need a better solution than
+    a targeted fix ... move randomly to a random nearby but safe spot"). At 1:36 the bot
+    stood at (281,-3147), on the edge of the 64 square box (sector 36, floor 40) the tall
+    techno column stands on by the stairs, its middle over the floor below (-8); every
+    route from there pushed the same way, and the step aside (ChooseUnstick) judged every
+    way unsafe on the map - another floor, an edge, the column - so none was taken. Three
+    stucks, the goal failed, the next goal from the same spot the same, four goals, then
+    "GO TO EXIT: no way for now" for good. The map's view and the engine's part there (the
+    player hanging over an edge, a box's corner on a wall's end), so a remedy judged on the
+    map fails where it is needed. Now (`k_nav.c` StuckLevel, StartWiggle, UpdateWiggle,
+    StartEscape, EscapeSpot; `k_path.c` K_Path_Avoid), stuck at the same spot again
+    (within 64, within 60 s, whatever the goal), each time a step further:
+    - a step aside judged clear on the map, as before; with none judged clear, at once:
+    - a wiggle: each of 8 ways, in an order a hash picks, run at full speed for 6 tics and
+      judged by how far the engine took the player; the first that takes it 16 off is kept
+      on 6 tics more, and the route planned again from there. Ways onto a floor that hurts
+      last (the user: "if nukage is the only way out ... accept some floor damage if we
+      have no other choice"), at health CRITICAL only once stuck there 3 s. None moving it:
+    - a spot 128 to 384 off gone to first, the cheapest by its way, the health its floors
+      take and the monsters about it (100 units of way a point), a hash's few units more
+      for each so another is picked each time; the crossing the route was making costs
+      2048 more for 30 s (avoided if there is another way, crossed all the same if not).
+      There, or after 4 s and the way's running time, the route to the goal again.
+    Then a wiggle again, and so on; the goal still fails after three stucks, so the brain
+    can go for another. The stuck line now tells a floor stood on that is not the one under
+    the player's middle ("standing at 40 over the floor at -8").
+    - Each step checked with stucks faked every 3 s from 40 to 60 s (E1M1, no monsters,
+      explorer, 3 salts): wiggles moved the player 25 to 55 units, the spots were got to,
+      all three finished (92 to 98 s). In two of them the real trap came up at 1:00 - the
+      north box at (287,-3148), as in the user's run, and the south one at (281,-3315) -
+      "standing at 40 over the floor at -8"; the wiggle had the player off within 1.4 and
+      1.6 s. The user's salt itself did not repeat it (the run parted at 58 s).
+    - Doom II without monsters: 29 of 29, the times as before but MAP23 (the one stuck,
+      at 29.8 s, wiggled off rather than planned again: 91.9 s against 91.3).
+    - E1M1 to E1M3 with monsters, explorer, secret exit, 3 salts against HEAD: two of the
+      three E1M1 runs on HEAD fell into the same trap - the south box from 1:02 to 5:21
+      (72 stucks, 18 goals failed, the level ended at 366.8 s) and the north one from 1:42
+      to 3:20 (36 stucks, 9 goals failed, 245.4 s); with the ladder, one stuck each, the
+      wiggle had the player off at once, finished in 93.8 and 118.5 s. E1M2 and E1M3 as
+      HEAD to the tic, but one E1M2 run with a wiggle (255.2 s against 250.4).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

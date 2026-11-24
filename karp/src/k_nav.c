@@ -57,6 +57,7 @@
 #include "m_misc.h"
 #include "r_state.h"
 
+#include "k_combat.h"
 #include "k_jump.h"
 #include "k_log.h"
 #include "k_nav.h"
@@ -110,6 +111,54 @@
 #define UNSTICK_TICS 12
 #define UNSTICK_SPEED 6.0
 #define UNSTICK_LOOK 32.0
+
+// Stuck at the same spot again - within STUCK_SPOT of where it last got
+// stuck, within STUCK_MEMORY, on the way to this goal or another - the
+// player does more each time (the user, E1M1: on the edge of the box the
+// tall techno column stands on, its middle over the floor below, every way
+// aside judged unsafe on the map - another floor, an edge, the column - so
+// none was stepped; the route planned the same again and again, four goals
+// failed there, and the bot stood there for good: "we need a better
+// solution than a targeted fix"). In turn:
+// - a step aside or back judged clear on the map (ChooseUnstick); with none
+//   judged clear, at once:
+// - a wiggle: each of WIGGLE_WAYS ways, in an order a hash picks, run at
+//   full speed for WIGGLE_TICS and judged by what the engine does, not the
+//   map, which can be wrong where the player stands (hanging over an edge, a
+//   box's corner on a wall's end, a thing beside it). The first that takes
+//   it WIGGLE_MOVED off is kept on WIGGLE_ON more, and the route planned
+//   again from there. Ways onto a floor that hurts are tried last, if the
+//   player is not on one already (the user: "if nukage is the only way out,
+//   accept some floor damage"); at health CRITICAL (below CRITICAL_HEALTH,
+//   as k_condition.c has it) only once it has been stuck there WET_WAIT (a
+//   door, a lift or a monster may change things).
+//   None taking it off:
+// - a spot ESCAPE_NEAR to ESCAPE_FAR off is gone to first, then the route
+//   planned again from there (or after ESCAPE_TICS and its way's running
+//   time): the cheapest by its way, the health its floors take and the
+//   monsters about it (each as HEALTH_WAY units of way), and up to
+//   ESCAPE_JITTER more the hash adds, so another is picked each time. And the
+//   crossing the route was making is avoided for AVOID_TICS (K_Path_Avoid).
+// Then a wiggle again, and so on. The goal still fails after MAX_STUCK, so
+// the brain can go for another. The stuck line logs a floor stood on that
+// is not the one under the player's middle (hanging over an edge).
+#define STUCK_SPOT 64.0
+#define STUCK_MEMORY (60 * TICRATE)
+#define WIGGLE_WAYS 8
+#define WIGGLE_TICS 6
+#define WIGGLE_MOVED 16.0
+#define WIGGLE_ON 6
+#define WET_WAIT (3 * TICRATE)
+#define CRITICAL_HEALTH 25.0
+#define ESCAPE_NEAR 128.0
+#define ESCAPE_FAR 384.0
+#define ESCAPE_RING 128.0
+#define ESCAPE_WAYS 12
+#define ESCAPE_TICS (4 * TICRATE)
+#define ESCAPE_ARRIVE 32.0
+#define ESCAPE_JITTER 96.0
+#define HEALTH_WAY 100.0
+#define AVOID_TICS (30 * TICRATE)
 
 // Corners slow the player down: full speed through a straight line, down
 // to this fraction of it through a right angle or sharper.
@@ -417,6 +466,39 @@ static int history_next;
 static double stuck_remaining;     // the way left where it last got stuck
 static int unstick_tics;    // stepping aside, UNSTICK_TICS
 static k_vec2_t unstick_dir;
+
+// Getting stuck at one spot again (STUCK_SPOT): where, when last and when
+// first (leveltime), and what was done there last: 1 a step aside, 2 a
+// wiggle, 3 a spot gone to first; 0 none yet this level.
+static k_vec2_t stuck_spot;
+static int stuck_last;
+static int stuck_first;
+static int stuck_level;
+
+// Wiggling (WIGGLE_WAYS): whether; the way ahead it began from (radians),
+// the hash's first way; the pass (0 off floors that hurt, 1 onto them), the
+// way tried and its direction, tics into it, from where; tics left keeping
+// on the way that worked, and how far it took the player; standing still
+// until (leveltime, WET_WAIT); whether it began on a floor that hurts.
+static boolean wiggling;
+static double wiggle_ahead;
+static unsigned int wiggle_first;
+static int wiggle_pass;
+static int wiggle_index;
+static k_vec2_t wiggle_dir;
+static int wiggle_tics;
+static k_vec2_t wiggle_from;
+static int wiggle_on;
+static double wiggle_moved;
+static int wiggle_hold;
+static boolean wiggle_on_wet;
+
+// Going to a spot first (ESCAPE_NEAR): whether, where, since when and for
+// how long at most (status.tics).
+static boolean escaping;
+static k_vec2_t escape_to;
+static int escape_since;
+static int escape_tics;
 static int stray_teleports; // on the way to this goal (STRAY_TELEPORTS)
 static k_vec2_t last_at;    // after the previous tic
 static double last_floor;   // the floor stood on then
@@ -1191,6 +1273,17 @@ static void SteerAlongRoute(const body_t *body, k_command_t *command)
     if (jump_phase == JUMP_SETTLE)
     {
         Steer(body, 0.0, 0.0, aim, false, command);
+        return;
+    }
+
+    // Wiggling: the way tried at full speed, walls and all - it is the
+    // engine's answer that counts (WIGGLE_WAYS); still while held.
+    if (wiggling)
+    {
+        double wiggle_speed = leveltime < wiggle_hold ? 0.0 : tuning.max_speed;
+
+        Steer(body, wiggle_dir.x * wiggle_speed, wiggle_dir.y * wiggle_speed, aim, false,
+              command);
         return;
     }
 
@@ -2461,6 +2554,8 @@ static void StartRoute(void)
     jump_brakes = 0;
     crusher_run = -1;
     unstick_tics = 0;
+    wiggling = false;
+    escaping = false;
     status.target = 1;
     status.route_cell = 0;
     status.remaining = path.length;
@@ -2972,12 +3067,303 @@ static void UpdateJumpHold(k_vec2_t at)
     }
 }
 
+// What to do for getting stuck at `at` (STUCK_SPOT): the first time there a
+// step aside (1), each time after one step on from the last - a wiggle (2),
+// a spot gone to first (3), a wiggle again.
+static int StuckLevel(k_vec2_t at)
+{
+    if (stuck_level > 0 && leveltime - stuck_last <= STUCK_MEMORY
+     && Distance(at, stuck_spot) < STUCK_SPOT)
+    {
+        stuck_level = stuck_level >= 3 ? 2 : stuck_level + 1;
+    }
+    else
+    {
+        stuck_level = 1;
+        stuck_first = leveltime;
+    }
+
+    stuck_spot = at;
+    stuck_last = leveltime;
+    return stuck_level;
+}
+
+// The way of a wiggle's try: WIGGLE_WAYS round from the way ahead, in the
+// order the hash picks.
+static k_vec2_t WiggleDir(int index)
+{
+    double angle = wiggle_ahead
+                 + ((wiggle_first + (unsigned int) index) % WIGGLE_WAYS) * 2.0 * K_PI / WIGGLE_WAYS;
+    k_vec2_t dir = { cos(angle), sin(angle) };
+
+    return dir;
+}
+
+// The next way for this pass of the wiggle, from wiggle_index on: in the
+// first one off floors that hurt, in the second one onto them (all in the
+// first, begun on such a floor). Returns false when the pass has none left.
+static boolean NextWiggle(k_vec2_t at)
+{
+    for (; wiggle_index < WIGGLE_WAYS; ++wiggle_index)
+    {
+        k_vec2_t dir = WiggleDir(wiggle_index);
+        int cell = K_Map_CellAt(at.x + dir.x * UNSTICK_LOOK, at.y + dir.y * UNSTICK_LOOK);
+        boolean wet = !wiggle_on_wet && cell >= 0 && CellHurts(cell);
+
+        if (wet == (wiggle_pass == 1))
+        {
+            wiggle_dir = dir;
+            wiggle_from = at;
+            wiggle_tics = 0;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static boolean ClearOfBlocks(double x, double y);
+
+// A spot to go to first (ESCAPE_NEAR to ESCAPE_FAR off, ESCAPE_WAYS round in
+// rings ESCAPE_RING apart): one the player fits at clear of solid things,
+// with a route there no more than twice as long as the crow flies; the
+// cheapest by that way, the health its floors take and the monsters about
+// it (HEALTH_WAY each), and what the hash adds (ESCAPE_JITTER). Returns false
+// if there is none.
+static boolean EscapeSpot(k_vec2_t at, const k_pose_t *pose, k_vec2_t *spot)
+{
+    static k_path_t probe;
+    unsigned int seed = Hash(K_Salt_Mix((unsigned int) leveltime * 13u + 7u));
+    double best = 1e30, radius, boss;
+    int i, n = 0;
+
+    for (radius = ESCAPE_NEAR; radius <= ESCAPE_FAR; radius += ESCAPE_RING)
+    {
+        for (i = 0; i < ESCAPE_WAYS; ++i, ++n)
+        {
+            double angle = (i + (seed % 64) / 64.0) * 2.0 * K_PI / ESCAPE_WAYS;
+            k_vec2_t to = { at.x + cos(angle) * radius, at.y + sin(angle) * radius };
+            int cell = K_Map_CellAt(to.x, to.y);
+            double cost;
+
+            if (cell < 0 || K_Graph_Clearance(to, STAND_CLEARANCE) < STAND_CLEARANCE
+             || !ClearOfBlocks(to.x, to.y))
+            {
+                continue;
+            }
+
+            K_Path_Find(&probe, at, pose->cell, to);
+
+            if (probe.result != K_PATH_FOUND || probe.length > 2.0 * radius)
+            {
+                continue;
+            }
+
+            cost = probe.length
+                 + (probe.damage + K_Combat_Danger(to.x, to.y, CellFloor(cell), &boss)) * HEALTH_WAY
+                 + (Hash(seed + (unsigned int) n) % 1024) / 1024.0 * ESCAPE_JITTER;
+
+            if (cost < best)
+            {
+                best = cost;
+                *spot = to;
+            }
+        }
+    }
+
+    return best < 1e30;
+}
+
+// No wiggle took the player off, or it got stuck there again: the crossing
+// the route was making avoided a while (AVOID_TICS), and a spot gone to
+// first (EscapeSpot) - or the route planned again round that crossing, with
+// none. `why` is the stuck line.
+static void StartEscape(k_vec2_t at, const k_pose_t *pose, const char *why)
+{
+    char text[K_LOG_LINE_LEN], avoided[96] = "";
+    int r = status.route_cell;
+    k_vec2_t spot;
+
+    wiggling = false;
+
+    if (r >= 0 && r < path.num_cells - 1)
+    {
+        int line = K_Graph_Get()->portals[path.portals[r]].line;
+
+        K_Path_Avoid(path.portals[r], path.cells[r], AVOID_TICS);
+
+        if (line >= 0)
+        {
+            M_snprintf(avoided, sizeof(avoided), "; the crossing at line %d avoided for %d s",
+                       line, AVOID_TICS / TICRATE);
+        }
+        else
+        {
+            M_snprintf(avoided, sizeof(avoided), "; the crossing out of cell %d avoided for %d s",
+                       path.cells[r], AVOID_TICS / TICRATE);
+        }
+    }
+
+    if (!EscapeSpot(at, pose, &spot))
+    {
+        M_snprintf(text, sizeof(text), "%s - no spot to go to first%s", why, avoided);
+
+        if (Replan(at, text))
+        {
+            stuck_remaining = Remaining(at);
+        }
+
+        return;
+    }
+
+    K_Path_Find(&path, at, pose->cell, spot);
+    K_Path_Describe(&path, text, sizeof(text));
+    K_Log(K_LOG_NAV, K_LOG_INFO, "%s - off to (%.0f,%.0f), %.0f units away, first%s: %s", why,
+          spot.x, spot.y, Distance(at, spot), avoided, text);
+    ++status.replans;
+    StartRoute();
+    escaping = true;
+    escape_to = spot;
+    escape_since = status.tics;
+    escape_tics = ESCAPE_TICS + (int) (path.length / tuning.max_speed);
+    stuck_remaining = Remaining(at);
+}
+
+// Stuck, with no step aside judged clear, or stuck there again: the wiggle
+// begins (WIGGLE_WAYS). `why` is the stuck line.
+static void StartWiggle(k_vec2_t at, const k_pose_t *pose, const char *why)
+{
+    k_vec2_t to = path.points[SDL_min(status.target, path.num_points - 1)];
+
+    EndAction();
+    wiggle_ahead = atan2(to.y - at.y, to.x - at.x);
+    wiggle_first = Hash(K_Salt_Mix((unsigned int) leveltime * 31u + 11u));
+    wiggle_on_wet = pose->cell >= 0 && CellHurts(pose->cell);
+    wiggle_pass = 0;
+    wiggle_index = 0;
+    wiggle_on = 0;
+    wiggle_hold = 0;
+    history_count = 0;
+    history_next = 0;
+
+    if (!NextWiggle(at))
+    {
+        wiggle_pass = 1;
+        wiggle_index = 0;
+
+        if (!NextWiggle(at))
+        {
+            StartEscape(at, pose, why);
+            return;
+        }
+    }
+
+    wiggling = true;
+    K_Log(K_LOG_NAV, K_LOG_INFO, "%s - trying each way in turn to see which moves it", why);
+}
+
+// Each tic of a wiggle: the way tried for WIGGLE_TICS, then the next; one
+// that took the player WIGGLE_MOVED off kept on WIGGLE_ON, then the route
+// planned again. The dry ways done, those onto floors that hurt (at health
+// CRITICAL once stuck there WET_WAIT); none left, a spot first.
+static void UpdateWiggle(k_vec2_t at, const k_pose_t *pose)
+{
+    char text[K_LOG_LINE_LEN];
+
+    if (wiggle_on > 0)
+    {
+        if (--wiggle_on > 0)
+        {
+            return;
+        }
+
+        M_snprintf(text, sizeof(text), "going %.0f degrees off the way moved it %.0f units - on "
+                   "from (%.0f,%.0f)",
+                   ((wiggle_first + (unsigned int) wiggle_index) % WIGGLE_WAYS) * 360.0
+                   / WIGGLE_WAYS, wiggle_moved, at.x, at.y);
+        wiggling = false;
+
+        if (Replan(at, text))
+        {
+            stuck_remaining = Remaining(at);
+        }
+
+        return;
+    }
+
+    if (leveltime < wiggle_hold)
+    {
+        wiggle_from = at;
+        return;
+    }
+
+    if (++wiggle_tics < WIGGLE_TICS)
+    {
+        return;
+    }
+
+    if (Distance(at, wiggle_from) >= WIGGLE_MOVED)
+    {
+        wiggle_moved = Distance(at, wiggle_from);
+        wiggle_on = WIGGLE_ON;
+        return;
+    }
+
+    ++wiggle_index;
+
+    if (NextWiggle(at))
+    {
+        return;
+    }
+
+    if (wiggle_pass == 0)
+    {
+        wiggle_pass = 1;
+        wiggle_index = 0;
+
+        if (NextWiggle(at))
+        {
+            if (K_Map_PlayerHealth() < CRITICAL_HEALTH && leveltime < stuck_first + WET_WAIT)
+            {
+                wiggle_hold = stuck_first + WET_WAIT;
+                K_Log(K_LOG_NAV, K_LOG_INFO, "no way off floors that hurt moved it - onto them "
+                      "in %.1f s, health CRITICAL", (double) (wiggle_hold - leveltime) / TICRATE);
+            }
+            else
+            {
+                K_Log(K_LOG_NAV, K_LOG_INFO, "no way off floors that hurt moved it - trying "
+                      "those onto them");
+            }
+
+            return;
+        }
+    }
+
+    M_snprintf(text, sizeof(text), "no way moved it from (%.0f,%.0f)", at.x, at.y);
+    StartEscape(at, pose, text);
+}
+
+// For the stuck line: the floor the player stands on, when it is not the one
+// under its middle (hanging over an edge).
+static void StandingText(k_vec2_t at, const k_pose_t *pose, char *buf, int buf_len)
+{
+    int cell = K_Map_CellAt(at.x, at.y);
+
+    buf[0] = '\0';
+
+    if (cell >= 0 && fabs(pose->floor - CellFloor(cell)) > 1.0)
+    {
+        M_snprintf(buf, buf_len, ", standing at %.0f over the floor at %.0f", pose->floor,
+                   CellFloor(cell));
+    }
+}
+
 k_navstate_t K_Nav_Tick(void)
 {
     k_pose_t pose;
     k_vec2_t at;
     boolean teleported;
-    char text[96];
+    char text[160];
 
     if (status.state != K_NAV_DRIVING || !K_Map_GetPlayer(&pose))
     {
@@ -3037,6 +3423,32 @@ k_navstate_t K_Nav_Tick(void)
 
     TrackJump(&pose, at);
 
+    // Wiggling off a spot it got stuck at: nothing else meanwhile.
+    if (wiggling)
+    {
+        UpdateWiggle(at, &pose);
+        status.remaining = Remaining(at);
+        return status.state;
+    }
+
+    // At the spot gone to first, or long enough on the way there: the route
+    // to the goal again.
+    if (escaping && (Distance(at, escape_to) < ESCAPE_ARRIVE
+                     || status.tics - escape_since > escape_tics))
+    {
+        M_snprintf(text, sizeof(text), "%s the spot gone to first, at (%.0f,%.0f)",
+                   Distance(at, escape_to) < ESCAPE_ARRIVE ? "at" : "on the way to", at.x,
+                   at.y);
+        escaping = false;
+
+        if (!Replan(at, text))
+        {
+            return status.state;
+        }
+
+        stuck_remaining = Remaining(at);
+    }
+
     if (status.target == path.num_points - 1 && Distance(at, goal) < ARRIVE_RADIUS
      && status.speed < ARRIVE_SPEED && action.kind == K_ACTION_NONE && !ShortOfLine(at))
     {
@@ -3065,7 +3477,8 @@ k_navstate_t K_Nav_Tick(void)
         }
     }
 
-    if (status.stuck > 0 && status.remaining < stuck_remaining - UNSTUCK_DISTANCE)
+    // Not on the way to a spot gone to first: that is no way along the route.
+    if (status.stuck > 0 && !escaping && status.remaining < stuck_remaining - UNSTUCK_DISTANCE)
     {
         status.stuck = 0;
     }
@@ -3081,7 +3494,9 @@ k_navstate_t K_Nav_Tick(void)
     }
     else if (Stuck(at))
     {
+        char standing[64];
         boolean step;
+        int level;
 
         // Held off the spot in front of the line, but near it: good enough,
         // as after APPROACH_TICS.
@@ -3116,23 +3531,45 @@ k_navstate_t K_Nav_Tick(void)
 
         if (++status.stuck > MAX_STUCK)
         {
+            // The next goal stuck here goes on from what was done last.
+            if (stuck_level > 0 && Distance(at, stuck_spot) < STUCK_SPOT)
+            {
+                stuck_last = leveltime;
+            }
+
             M_snprintf(text, sizeof(text), "stuck at (%.0f,%.0f)", at.x, at.y);
             EndAction();
             Fail(text);
             return status.state;
         }
 
-        step = ChooseUnstick(at, &pose);
-        M_snprintf(text, sizeof(text), "stuck at (%.0f,%.0f) for %d tics (%d/%d)%s",
-                   at.x, at.y, STUCK_TICS, status.stuck, MAX_STUCK,
+        level = StuckLevel(at);
+        step = level == 1 && ChooseUnstick(at, &pose);
+        StandingText(at, &pose, standing, sizeof(standing));
+        M_snprintf(text, sizeof(text), "stuck at (%.0f,%.0f) for %d tics (%d/%d)%s%s",
+                   at.x, at.y, STUCK_TICS, status.stuck, MAX_STUCK, standing,
                    step ? ", stepping aside first" : "");
+
+        if (level == 3)
+        {
+            StartEscape(at, &pose, text);
+            return status.state;
+        }
+
+        // No step aside judged clear: a wiggle at once.
+        if (!step)
+        {
+            stuck_level = 2;
+            StartWiggle(at, &pose, text);
+            return status.state;
+        }
 
         if (!Replan(at, text))
         {
             return status.state;
         }
 
-        unstick_tics = step ? UNSTICK_TICS : 0;
+        unstick_tics = UNSTICK_TICS;
         stuck_remaining = Remaining(at);
     }
 
@@ -3175,6 +3612,9 @@ void K_Nav_Reset(void)
     jump_hold = -1;
     crusher_run = -1;
     unstick_tics = 0;
+    wiggling = false;
+    escaping = false;
+    stuck_level = 0;
     stray_teleports = 0;
     paused = false;
     memset(&status, 0, sizeof(status));
@@ -3496,6 +3936,8 @@ void K_Nav_Clear(void)
     jump_hold = -1;
     crusher_run = -1;
     unstick_tics = 0;
+    wiggling = false;
+    escaping = false;
     stray_teleports = 0;
     memset(&status, 0, sizeof(status));
     status.state = K_NAV_IDLE;

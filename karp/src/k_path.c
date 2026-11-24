@@ -32,7 +32,8 @@
 //	A walk-over line that would shut a door or bars the route goes through
 //	further on costs SHUT_PENALTY to cross, and the route is planned again.
 //	One the brain keeps routes off (K_Path_SetKeepOff: an exit not wanted)
-//	is not crossed at all.
+//	is not crossed at all. One nav got stuck at costs AVOID_COST for a while
+//	(K_Path_Avoid).
 //
 
 #include <math.h>
@@ -42,6 +43,7 @@
 #include "SDL.h"
 
 #include "doomtype.h"
+#include "doomstat.h"
 #include "m_misc.h"
 
 #include "k_path.h"
@@ -67,6 +69,13 @@
 // route whose goal lies within KEEP_OFF_GOAL of it: the one going over it on
 // purpose (k_nav.c: a walk-over line's goal point is up to 40 past it).
 #define KEEP_OFF_GOAL 48.0
+
+// A crossing nav got stuck at, out of the cell it was crossed from
+// (K_Path_Avoid), costs AVOID_COST more for a while: a way round up to that
+// much longer wins, and with none the route goes through it all the same.
+// MAX_AVOIDED at once, the oldest given up for a new one.
+#define AVOID_COST 2048.0
+#define MAX_AVOIDED 8
 
 // A door or lift costs the distance the player could run (16.7 units a
 // tic) while waiting for it.
@@ -153,6 +162,18 @@ static int heap_capacity;
 static unsigned int *shut_marks;
 static int shut_capacity;
 static unsigned int shut_mark;
+
+// The crossings avoided (K_Path_Avoid): the portal, the cell it is crossed
+// from, until when (leveltime), on which graph.
+typedef struct
+{
+    int portal;
+    int from;
+    int until;
+    int generation;
+} avoided_t;
+
+static avoided_t avoided[MAX_AVOIDED];
 
 static k_blockcost_t block_cost;
 static k_pinchcost_t pinch_cost;
@@ -435,6 +456,24 @@ static boolean KeptOff(int portal)
         && SegmentDistance(map->lines[line].v1, map->lines[line].v2, goal_point) > KEEP_OFF_GOAL;
 }
 
+// What crossing the portal out of the cell costs more: AVOID_COST while
+// avoided (K_Path_Avoid).
+static double AvoidCost(int portal, int from)
+{
+    int i;
+
+    for (i = 0; i < MAX_AVOIDED; ++i)
+    {
+        if (avoided[i].portal == portal && avoided[i].from == from
+         && avoided[i].generation == graph->generation && leveltime < avoided[i].until)
+        {
+            return AVOID_COST;
+        }
+    }
+
+    return 0.0;
+}
+
 // The health walking `distance` across a cell and waiting `wait` tics in it
 // takes, `at` tics into the way: under a radiation suit, only the part after
 // it runs out (suit_left) at the full rate.
@@ -614,6 +653,8 @@ static boolean Search(k_path_t *path)
                     step += PinchCost(cell, pinch);
                 }
 
+                step += AvoidCost(link->portal, cell);
+
                 Relax(2 * link->portal + 1, node, step, Damage(cell, walk, wait, elapsed[node]),
                       (walk + Distance(portal->a, portal->b)) / RUN_SPEED + wait, wait);
                 continue;
@@ -650,6 +691,8 @@ static boolean Search(k_path_t *path)
             {
                 step += SHUT_PENALTY;
             }
+
+            step += AvoidCost(link->portal, cell);
 
             // The way through the cell, from where the node came in.
             if (K_Graph_Pinched(cell, entry_a, entry_b, portal->a, portal->b, &pinch))
@@ -1238,6 +1281,30 @@ double K_Path_LeastWay(k_vec2_t from, k_vec2_t to)
 void K_Path_SetBlockCost(k_blockcost_t cost)
 {
     block_cost = cost;
+}
+
+void K_Path_Avoid(int portal, int from_cell, int tics)
+{
+    int oldest = 0, i;
+
+    for (i = 0; i < MAX_AVOIDED; ++i)
+    {
+        if (avoided[i].portal == portal && avoided[i].from == from_cell)
+        {
+            oldest = i;
+            break;
+        }
+
+        if (avoided[i].until < avoided[oldest].until)
+        {
+            oldest = i;
+        }
+    }
+
+    avoided[oldest].portal = portal;
+    avoided[oldest].from = from_cell;
+    avoided[oldest].until = leveltime + tics;
+    avoided[oldest].generation = K_Graph_Get()->generation;
 }
 
 void K_Path_SetEnterCost(k_entercost_t cost)
