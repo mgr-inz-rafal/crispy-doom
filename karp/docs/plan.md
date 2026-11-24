@@ -4697,7 +4697,42 @@ Who controls the player in a fight (the user's model):
       room. Without monsters the explorer still leaves the secret: 6000 to 6500 units out of
       the way with 15 to 17 health of nukage, over PLACE_SECRET_REACH, and in the sweep it is
       looked at only on top of items, where no fix counts, and set aside for PLACE_SKIP -
-      open.
+      open (J).
+  - J. An explorer's secrets far off (the user: "E4M1 is a very compact map, one of the
+    smallest in vanilla, so the bot should be willing to go anywhere"; "limited, but 8x").
+    PLACE_SECRET_REACH 4096 to 32768. And a place looked at on top of an item, where no fix
+    counts, is no longer set aside for PLACE_SKIP and a try when it has no way there, but
+    looked past for ITEM_SKIP_TICS (`k_brain.c` ConsiderPlaces). The detour still prices
+    the nukage on the way at 15 to 17 health, of which the runs took about none - left.
+    E4M1 without monsters, 3 salts: the secret
+    room gone to at 8 s in each (6506 units out of the way, through lift 75), left by its
+    teleporter; secrets 1 of 2 against 0, 16 of 18 areas against 15, finished in 53.1 to
+    53.6 s against 49.3.
+  - K. Rockets nearer (the user: "if a bot is relatively healthy, like 80%+ and has 50%+
+    armor, it can accept some slight damage from own rocket when hitting a hard enemy",
+    then "50%+ health and 30%+ armor"). Two parts, in `k_combat.c`:
+    - The flight a rocket needs before it bursts ROCKET_SAFE off the player, as the blast
+      measures it (the larger of the x and y distances), was taken on the diagonal whatever
+      the way - 271 for the 192 on an axis - wherever the launcher was rated, brought up, or
+      the player backed off for it (ShotDamage, RocketRoom, ChooseMove, the BlastCouldKill
+      margin; the trigger's RocketClear always judged the way fired). Now along the way to
+      the monster (RocketMin, RocketMinTo).
+    - Sturdy - health STURDY_HEALTH 50 and armour STURDY_ARMOUR 30 at least - against a
+      monster that is not weak, a burst STURDY_SAFE (120) off is enough: up to SELF_BLAST 24
+      of the blast where it bursts (16 health and 8 armour under green), more only as the
+      player moves toward it (SafeBurst). With so little health that one blast could kill,
+      the ROCKET_ROOM margin beyond it stays (E2M8).
+    E4M1 with monsters, 6 salts against HEAD: the launcher brought up 16 times against 7, for
+    barons at 224 to 354 against 374 to 418, and never hurt by its own blast against one hit
+    for 42; finished 2 against 1, the deaths as before in the fights round the blue key's
+    room (imps, spectres). Where rockets were fired (6 salts, a log at the press): at barons
+    348 to 523 off - the fight keeps a baron 384 off where the room allows - and three at a
+    bunched imp about 400 off; none in the band the sturdy rule opens (bursts 120 to 192
+    off): nearer, at health about 60 under blue armour, a blast could kill, and the
+    ROCKET_ROOM margin held them. Grates: a mid-texture or a blocking line stops neither
+    the rocket nor the sight check that judges its path; bars built of sectors stop both
+    (RocketClear near the player, BallClear the whole way, each along both of the
+    rocket's edges).
 - **Runs are not exactly repeatable** (found 2026-11-10): the same source and configs gave
   different outcomes in different sessions (E3M9 salt 71: finished, then dead at 204.9 s;
   MAP05 salt 71 finished in 255 s, then 216 s), though one exe run twice in a row repeats

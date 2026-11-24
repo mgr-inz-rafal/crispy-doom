@@ -516,9 +516,16 @@ extern void A_CyberAttack();
 // target closing in during the flight (ROCKET_SPEED a tic), or at any other
 // monster in its path, its radius counted; with its path clear of walls by
 // its radius either side as far as a burst would hurt (a corner the
-// centre misses). The weapon is wanted only where that holds whichever way
-// the player faces (the diagonal: ROCKET_MIN of flight to the target's
-// front). Never at a lost soul, nor with one within SOUL_CLEAR: they charge
+// centre misses). The weapon is wanted only where that holds as the player
+// faces the target (RocketMin: ROCKET_SAFE of flight to its front along an
+// axis, 1.41 times that on the diagonal - it was the diagonal whichever way
+// the player faced, E4M1: barons fought 95 to 320 off in its rooms, the
+// rockets brought up once, at 374). Sturdy - health STURDY_HEALTH and
+// armour STURDY_ARMOUR at least - against a monster that is not weak, the
+// burst may come STURDY_SAFE off: up to SELF_BLAST of its own blast where
+// it bursts, more only as the player moves toward it (the user: trade a
+// little health for the ammo a baron in a small room takes). Never at a
+// lost soul, nor with one within SOUL_CLEAR: they charge
 // at the player and meet the rocket halfway. All of it unless invulnerable
 // for INVULN_LEFT tics more at least. And rockets are dear: against a
 // monster with no more than ROCKET_HEALTH left and alone (no other within
@@ -547,13 +554,16 @@ extern void A_CyberAttack();
 // off for the soulsphere, the route ran the player at its burst, 42). With
 // so little health one blast could kill (the armour's share counted), none
 // on the way, nor at what is nearer than rockets are brought up for
-// (ROCKET_MIN and ROCKET_ROOM beyond its front; E2M8: at 51 health, no
+// (RocketMin and ROCKET_ROOM beyond its front; E2M8: at 51 health, no
 // armour, shot on the way to the soulsphere, killed by its own blast).
 #define ROCKET_RADIUS 11.0
 #define ROCKET_SPEED 20.0
 #define MISSILE_SPAWN 32.0
 #define ROCKET_SAFE (BLAST + PLAYER_RADIUS + 48.0)
-#define ROCKET_MIN (ROCKET_SAFE * 1.4142)
+#define SELF_BLAST 24.0
+#define STURDY_SAFE (BLAST + PLAYER_RADIUS - SELF_BLAST)
+#define STURDY_HEALTH 50
+#define STURDY_ARMOUR 30
 #define SOUL_CLEAR 384.0
 #define INVULN_LEFT 70
 #define ROCKET_HEALTH 100
@@ -2299,6 +2309,44 @@ static double RateGain(const player_t *player, double ux, double uy)
     return battle ? 1.0 : RocketGain(player, ux, uy);
 }
 
+static int SpawnHealth(int type);
+
+// How far off the player a rocket must burst, as the blast measures it (the
+// larger of the x and y distances): ROCKET_SAFE; sturdy, at a monster that
+// is not weak, STURDY_SAFE.
+static double SafeBurst(const player_t *player, const k_monster_t *monster)
+{
+    return monster != NULL && SpawnHealth(monster->type) > WEAK_HEALTH
+        && player->health >= STURDY_HEALTH && player->armorpoints >= STURDY_ARMOUR
+           ? STURDY_SAFE : ROCKET_SAFE;
+}
+
+// How far a rocket flies along the unit way (ux, uy) before it is SafeBurst
+// off: further on a slant, 1.41 times as far on the diagonal.
+static double RocketMin(const player_t *player, const k_monster_t *monster, double ux, double uy)
+{
+    return SafeBurst(player, monster) / SDL_max(SDL_max(fabs(ux), fabs(uy)), 0.7071);
+}
+
+// RocketMin toward the monster from where the player is; the diagonal for
+// none.
+static double RocketMinTo(const player_t *player, const k_monster_t *monster)
+{
+    double dx, dy, length;
+
+    if (monster == NULL)
+    {
+        return RocketMin(player, NULL, 0.7071, 0.7071);
+    }
+
+    dx = monster->at.x - ToMap(player->mo->x);
+    dy = monster->at.y - ToMap(player->mo->y);
+    length = sqrt(dx * dx + dy * dy);
+
+    return length > 1e-6 ? RocketMin(player, monster, dx / length, dy / length)
+                         : RocketMin(player, monster, 0.7071, 0.7071);
+}
+
 // The share of a bullet's or a pellet's damage that lands on a thing of the
 // radius at the distance: as the spread allows (none when tapped far off),
 // less and less beyond the weapon's range.
@@ -2324,13 +2372,15 @@ static double HitShare(const weapon_t *weapon, double distance, double radius)
 }
 
 // The damage a shot of the weapon would do, on average, to a thing of the
-// radius at the distance (at `at`, if not NULL): 0 if it cannot fire, the
-// thing is out of a melee weapon's reach, a barrel is beside the player (a
-// blow could set it off), or a rocket could hurt the player too (ROCKET_MIN,
-// the player's run toward the thing counted - RocketGain; SOUL_CLEAR).
+// radius at the distance (the monster, if not NULL): 0 if it cannot fire,
+// the thing is out of a melee weapon's reach, a barrel is beside the player
+// (a blow could set it off), or a rocket could hurt the player too
+// (RocketMinTo, the player's run toward the thing counted - RocketGain;
+// SOUL_CLEAR).
 static double ShotDamage(const player_t *player, const weapon_t *weapon, double distance,
-                         double radius, const k_vec2_t *at)
+                         double radius, const k_monster_t *monster)
 {
+    const k_vec2_t *at = monster != NULL ? &monster->at : NULL;
     double damage = weapon->damage, hit = 1.0, gain = 1.0;
 
     if (!CanFire(player, weapon))
@@ -2359,7 +2409,8 @@ static double ShotDamage(const player_t *player, const weapon_t *weapon, double 
         }
 
         if (weapon->weapon == wp_missile && player->powers[pw_invulnerability] < INVULN_LEFT
-         && (distance - radius - ROCKET_RADIUS < ROCKET_MIN / gain || SoulNear()))
+         && (distance - radius - ROCKET_RADIUS < RocketMinTo(player, monster) / gain
+             || SoulNear()))
         {
             return 0.0;
         }
@@ -2378,7 +2429,7 @@ static double ShotDamage(const player_t *player, const weapon_t *weapon, double 
 // it counting (and a half: not all hits land as hoped).
 static double Rating(const player_t *player, const weapon_t *weapon, const k_monster_t *monster)
 {
-    return SDL_min(ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at),
+    return SDL_min(ShotDamage(player, weapon, monster->distance, monster->radius, monster),
                    monster->health * 1.5) / weapon->tics;
 }
 
@@ -3881,7 +3932,7 @@ static boolean PistolRight(const player_t *player, const k_monster_t *monster)
         if (weapon->weapon != wp_pistol
          && !(weapon->weapon == wp_fist && !player->powers[pw_strength])
          && Selectable(player, weapon) && !(Reserved(weapon) && KeptFrom(player, monster))
-         && ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at) > 0.0)
+         && ShotDamage(player, weapon, monster->distance, monster->radius, monster) > 0.0)
         {
             return false;
         }
@@ -3968,7 +4019,7 @@ static boolean MeleeLast(const player_t *player, const k_monster_t *monster)
     for (i = 0; i < arrlen(weapons); ++i)
     {
         if (weapons[i].reach <= 0.0 && Selectable(player, &weapons[i])
-         && ShotDamage(player, &weapons[i], monster->distance, monster->radius, &monster->at) > 0.0)
+         && ShotDamage(player, &weapons[i], monster->distance, monster->radius, monster) > 0.0)
         {
             return false;
         }
@@ -4059,7 +4110,8 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
                         (target->at.y - ToMap(player->mo->y)) / target->distance);
     }
 
-    if (target->distance - target->radius - ROCKET_RADIUS < ROCKET_MIN / gain + ROCKET_ROOM)
+    if (target->distance - target->radius - ROCKET_RADIUS
+        < RocketMinTo(player, target) / gain + ROCKET_ROOM)
     {
         return false;
     }
@@ -4069,7 +4121,8 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
         const k_monster_t *monster = &monsters[i];
 
         if (monster != target && monster->awake && Kind(monster->type)->cost > 0.0
-         && monster->distance - monster->radius - ROCKET_RADIUS < ROCKET_MIN + ROCKET_ROOM
+         && monster->distance - monster->radius - ROCKET_RADIUS
+            < RocketMinTo(player, monster) + ROCKET_ROOM
          && Reaches(i))
         {
             return false;
@@ -4212,7 +4265,7 @@ static void ChooseWeapon(const player_t *player)
 
     if (best != NULL && best != current
      && !(current != NULL && current_rating > 0.0
-          && ShotDamage(player, current, monster->distance, monster->radius, &monster->at) >= monster->health)
+          && ShotDamage(player, current, monster->distance, monster->radius, monster) >= monster->health)
      && ((current_rating <= 0.0 && leveltime - last_switch >= SWITCH_TICS)
          || (best_rating > current_rating * SWITCH_GAIN
              && leveltime - last_switch
@@ -4407,7 +4460,7 @@ static double ShotWorth(const player_t *player)
 
     monster = &monsters[status.target];
     return Kind(monster->type)->cost
-         * SDL_min(1.0, ShotDamage(player, weapon, monster->distance, monster->radius, &monster->at)
+         * SDL_min(1.0, ShotDamage(player, weapon, monster->distance, monster->radius, monster)
                         / SDL_max(monster->health, 1));
 }
 
@@ -5042,7 +5095,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
 
         if (i == round && rockets)
         {
-            keep = SDL_max(keep, ROCKET_MIN + monster->radius + ROCKET_RADIUS + ROCKET_ROOM);
+            keep = SDL_max(keep, RocketMinTo(player, monster) + monster->radius + ROCKET_RADIUS
+                                 + ROCKET_ROOM);
         }
 
         if (monster->distance >= keep)
@@ -8108,7 +8162,7 @@ static boolean BallClear(const player_t *player, k_vec2_t from, double facing,
 
 // Whether a rocket fired along the facing at what lies `distance` off (of
 // the radius, its middle at height `middle`; the target, or NULL) would
-// burst ROCKET_SAFE off the player as the blast measures it (the larger of
+// burst SafeBurst off the player as the blast measures it (the larger of
 // the x and y distances): `burst` along, or at another monster it would meet
 // first; with no wall within its radius either side of its path, as far as
 // a burst there would still be too near - each nearer by the player's own
@@ -8126,8 +8180,9 @@ static boolean RocketClear(const player_t *player, k_vec2_t from, double facing,
     double gun = GunHeight(player->mo);
     double spawn = ToMap(player->mo->z) + MISSILE_SPAWN;
     double gain = RocketGain(player, ux, uy);
+    double safe = SafeBurst(player, target);
     double reach = SDL_min(SDL_max(distance - radius, distance * 0.5),
-                           ROCKET_SAFE / (axis * gain) + ROCKET_RADIUS);
+                           safe / (axis * gain) + ROCKET_RADIUS);
     int i, side;
 
     burst *= gain;
@@ -8145,7 +8200,7 @@ static boolean RocketClear(const player_t *player, k_vec2_t from, double facing,
         }
     }
 
-    if (burst * axis < ROCKET_SAFE)
+    if (burst * axis < safe)
     {
         return false;
     }
@@ -8475,7 +8530,9 @@ void K_Combat_Fire(int tic, k_command_t *command)
                             Distance(leaves, leaves_at))
              || ducking || duck_soon || retreating || dodging || escape
              || (BlastCouldKill(player)
-                 && (!battle || distance - monster->radius < ROCKET_MIN + ROCKET_ROOM))))
+                 && (!battle || distance - monster->radius
+                                < RocketMin(player, monster, cos(facing), sin(facing))
+                                  + ROCKET_ROOM))))
      || BarrelAtRisk(player, from, facing, weapon, at, accurate)
      || BarrelAtRisk(player, leaves, leaves_facing, weapon, leaves_at, accurate)
      || (weapon->taps && distance > TAP_DISTANCE && !WeaponReady(player))
