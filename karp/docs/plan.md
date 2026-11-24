@@ -3907,6 +3907,21 @@ Who controls the player in a fight (the user's model):
   sidesteps out of projectiles' way and the steps away from blows, out of a fight too, now
   cross no trip either (before, only fight steps were held: a sidestep over a teleport line's
   front would have sent the player away) - but a step away from a barrel about to go off.
+  **Back again, 2026-11-24** (my overlay replay of E2M1 the user watched, salt 3094939109: three
+  cacodemon balls seen coming and taken on the same pad, 54 health, "foreseen, every way cost
+  more"; then dropped the plasma rifle for health and never went back). Not the trips: the
+  E4M3 fix of 2026-11-22 (`TeleportsAt`, k_graph.c) keeps a live teleport line off like a wall
+  for a point in front of it, in `K_Graph_Clearance` too - and that is the fight's `Steppable`
+  (sidesteps, steps away from blows, `MovePath` for fight moves). The pad's lines face out, so
+  every point just off it read 6 to 10 units from a wall (needs 17): the bot could shuffle 16
+  units on the pad and no more. Done: `K_Graph_StepClearance(at, reach, from)` - a teleport line
+  the player stands just behind (within `TELEPORT_BEHIND`, 64: anywhere on a 64-wide pad) is no
+  wall to its steps; crossing back from the front stays `Trips`'. Routes keep the band
+  (`K_Graph_Clearance`, nav's `AvoidWalls` unchanged). E2M1 explorer, 3 salts against HEAD:
+  projectile damage 40, 48, 69 against 4, 0, 49, no hit left on a pad, the plasma rifle taken in
+  3 runs against 2, finished 168, 158, 168 s against 187, 213, 172 (one run left a secret,
+  judged not worth it in the sweep, its run parted at the first pad fight). E4M3 (whose fix
+  this was) the same to the tic on both, 3 salts.
 - **Goals going round in a loop** (Doom II MAP15 salt 7, 2026-11-16: the log filled with
   4842 pairs of lines in 13 minutes). Fallen back through a teleporter at 10 health, the bot
   had USE TRIGGER for sector 85 (switch 594) under GET MEDIKIT. Planned, the switch's route was

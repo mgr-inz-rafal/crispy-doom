@@ -245,6 +245,13 @@ int K_Graph_LinesNear(k_vec2_t min, k_vec2_t max, int *found, int max_found);
 // sets it off as the centre crosses its line, at any height.
 double K_Graph_Clearance(k_vec2_t at, double reach);
 
+// K_Graph_Clearance for a step of a player standing at `from`: a teleport
+// line it stands just behind is no wall to it - crossed from behind, a
+// teleporter does nothing (EV_Teleport), and that is the way off a pad. A
+// step back over one from its front is the caller's to keep off (k_combat.c:
+// Trips).
+double K_Graph_StepClearance(k_vec2_t at, double reach, k_vec2_t from);
+
 // Where the player can stand to pick up a thing of radius 20 lying at `at`
 // (an item, a key): there, if it can stand there, else the nearest spot
 // that still touches it, clear of walls and solid things. A key can lie on

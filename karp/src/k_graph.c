@@ -1110,15 +1110,32 @@ static boolean IsTeleportLine(int special)
 // over the end of pad line 338 as the centre crossed its line, the bot was
 // sent back across the map, over and over. E1M5: past the pentagram's
 // points).
-static boolean TeleportsAt(int index, k_vec2_t at, int keep)
+//
+// But not for a step of a player standing at `from` (if not NULL) just
+// behind it, within TELEPORT_BEHIND: crossed from behind, it does nothing,
+// and that is the way off a pad (the user, E2M1: landed on the plasma
+// rifle's pad, walls on two sides and teleport lines facing out on the
+// other two, the bot stood on it under a cacodemon's balls, every step off
+// it judged into a wall - in front of a teleport line).
+#define TELEPORT_BEHIND 64.0
+
+static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab);
+
+static boolean TeleportsAt(int index, k_vec2_t at, int keep, const k_vec2_t *from)
 {
     const k_line_t *line = &K_Map_Get()->lines[index];
     int teleport = index < line_teleports_count ? line_teleports[index] : -1;
+    k_vec2_t ab = Sub(line->v2, line->v1);
+
+    if (from != NULL && ab.y * (from->x - line->v1.x) - ab.x * (from->y - line->v1.y) <= 0.0
+     && BoxDistance(*from, line->v1, ab) < TELEPORT_BEHIND)
+    {
+        return false;
+    }
 
     return teleport >= 0 && teleport != keep && graph.teleports[teleport].cell >= 0
         && IsTeleportLine(lines[index].special) && line->back_sector >= 0
-        && (line->v2.y - line->v1.y) * (at.x - line->v1.x)
-         - (line->v2.x - line->v1.x) * (at.y - line->v1.y) > 0.0;
+        && ab.y * (at.x - line->v1.x) - ab.x * (at.y - line->v1.y) > 0.0;
 }
 
 // Where crossing a teleport line with this tag sends the player, as
@@ -2803,7 +2820,7 @@ static int NearTeleports(const k_portal_t *portal, int keep, double reach, int *
                 {
                 }
 
-                if (line >= 0 && i == count && TeleportsAt(line, middle, keep))
+                if (line >= 0 && i == count && TeleportsAt(line, middle, keep, NULL))
                 {
                     found[count++] = line;
                 }
@@ -3325,10 +3342,11 @@ static double BoxDistance(k_vec2_t at, k_vec2_t a, k_vec2_t ab)
 
 // K_Graph_ObstaclesNear for a player standing in the given cell - on `on`
 // if that is higher than the cell's floor - and the standing blocks too if
-// asked; doors as standing_t takes door_reach; teleport lines but keep's
-// (TeleportsAt).
+// asked; doors as standing_t takes door_reach; teleport lines but keep's,
+// and those a step from `from` (if not NULL) is behind (TeleportsAt).
 static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *found,
-                           int max, boolean with_blocks, double door_reach, double on, int keep)
+                           int max, boolean with_blocks, double door_reach, double on, int keep,
+                           const k_vec2_t *from)
 {
     const k_map_t *map = K_Map_Get();
     k_vec2_t min = { at.x - reach, at.y - reach };
@@ -3398,7 +3416,8 @@ static int ObstaclesAround(k_vec2_t at, int cell, double reach, k_nearline_t *fo
                 distance = BoxDistance(at, a, ab);
 
                 if (distance >= reach
-                 || (!Obstacle(line, floor, ceiling, &standing) && !TeleportsAt(line, at, keep)))
+                 || (!Obstacle(line, floor, ceiling, &standing)
+                     && !TeleportsAt(line, at, keep, from)))
                 {
                     continue;
                 }
@@ -3470,7 +3489,7 @@ int K_Graph_ObstaclesNear(k_vec2_t at, double floor, double reach, k_nearline_t 
     // MAP03: on the stairs to the blue key, the next riser judged from the
     // floor below, 32 high, held the creeping player off it for 20 s).
     return ObstaclesAround(at, K_Map_StandingCell(at.x, at.y, floor), reach, found, max,
-                           false, PLAYER_RADIUS, floor, keep);
+                           false, PLAYER_RADIUS, floor, keep, NULL);
 }
 
 double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
@@ -3533,11 +3552,13 @@ double K_Graph_DropDistance(k_vec2_t at, double floor, double reach)
     return nearest;
 }
 
-double K_Graph_Clearance(k_vec2_t at, double reach)
+// K_Graph_Clearance, K_Graph_StepClearance.
+static double Clearance(k_vec2_t at, double reach, const k_vec2_t *from)
 {
     k_nearline_t found[MAX_NEAR_LINES];
     int cell = K_Map_CellAt(at.x, at.y);
-    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0, -1.0e6, -1);
+    int count = ObstaclesAround(at, cell, reach, found, MAX_NEAR_LINES, true, 0.0, -1.0e6, -1,
+                                from);
     double clearance = reach;
     int i;
 
@@ -3552,6 +3573,16 @@ double K_Graph_Clearance(k_vec2_t at, double reach)
     }
 
     return clearance;
+}
+
+double K_Graph_Clearance(k_vec2_t at, double reach)
+{
+    return Clearance(at, reach, NULL);
+}
+
+double K_Graph_StepClearance(k_vec2_t at, double reach, k_vec2_t from)
+{
+    return Clearance(at, reach, &from);
 }
 
 int K_Graph_PickupSpot(k_vec2_t at, k_vec2_t *spot)

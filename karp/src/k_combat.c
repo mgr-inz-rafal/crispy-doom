@@ -1595,6 +1595,9 @@ static int cover_capacity;
 static boolean peeking;
 static k_vec2_t peek_spot;
 static k_vec2_t peek_hide;
+
+// Where the player stands this tic: steps are from there (Steppable).
+static k_vec2_t standing_at;
 static const mobj_t *peek_mo;
 static int peek_tic;
 static const mobj_t *peek_none_mo;
@@ -4935,7 +4938,9 @@ static unsigned int Hash(unsigned int x)
 // Whether the player can step to a point: floor it can walk onto from the
 // floor it stands on, clear of walls, solid things and monsters, not within
 // `edge` of an edge it could slip off, and not a floor that hurts unless it
-// stands on one already.
+// stands on one already. Clear of the teleport lines too, but those it
+// stands just behind (K_Graph_StepClearance: off a pad; stepping back over
+// one from its front is Trips').
 static boolean Steppable(k_vec2_t at, double floor, boolean hurts, double edge)
 {
     const k_map_t *map = K_Map_Get();
@@ -4951,7 +4956,7 @@ static boolean Steppable(k_vec2_t at, double floor, boolean hurts, double edge)
     cell_floor = K_Map_CellFloor(cell);
 
     if (cell_floor > floor + MAX_CLIMB || cell_floor < floor - MAX_CLIMB
-     || K_Graph_Clearance(at, PLAYER_RADIUS + 1.0) < PLAYER_RADIUS + 1.0
+     || K_Graph_StepClearance(at, PLAYER_RADIUS + 1.0, standing_at) < PLAYER_RADIUS + 1.0
      || K_Graph_DropDistance(at, cell_floor, edge) < edge
      || (!hurts && K_Map_FloorDamage(map->subsectors[map->cells[cell].subsector].sector) > 0.0))
     {
@@ -8070,6 +8075,8 @@ void K_Combat_Tick(int driving)
         return;
     }
 
+    standing_at.x = ToMap(player->mo->x);
+    standing_at.y = ToMap(player->mo->y);
     Collect(player);
     LogHits(player);
     status.kills = player->killcount;
