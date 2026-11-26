@@ -2508,6 +2508,7 @@ static void DropTarget(void)
     wanted = -1;
     can_hurt = false;
     status.weapon = NULL;
+    status.sawing = false;
     sighted = 0;
     misses = 0;
 }
@@ -4398,6 +4399,7 @@ static void ChooseWeapon(const player_t *player)
     wanted = -1;
     can_hurt = false;
     status.weapon = NULL;
+    status.sawing = false;
 
     if (status.target < 0)
     {
@@ -4478,6 +4480,11 @@ static void ChooseWeapon(const player_t *player)
         wanted_group = GroupShot(player, current, monster, current->weapon == player->readyweapon);
         status.weapon = current->name;
     }
+
+    // The chainsaw chosen for the target, not left in hand for want of a
+    // switch yet (the user: not the one the game brought up at its pickup,
+    // nor carried on after the sweep).
+    status.sawing = current != NULL && current == best && current->weapon == wp_chainsaw;
 }
 
 // The damage a shot of the weapon would do to a barrel: pistol and chaingun
@@ -8126,6 +8133,7 @@ void K_Combat_Tick(int driving)
         target_mo = NULL;
         wanted = -1;
         status.weapon = NULL;
+        status.sawing = false;
         DropBarrel();
         status.barrel = false;
         M_StringCopy(status.text, "dead", sizeof(status.text));

@@ -1623,6 +1623,26 @@ the bot is about, coarse enough for an audience. `-karpoverlay` (H13):
   on, so nothing printed under the logo; but crispy's "A secret is revealed!" went with them, and
   a secret found is news an audience wants (the user: the messages do little harm).
 - Every line shown is logged ("overlay: GETTING THE RED KEY"), to count the changes.
+- **The chainsaw's lines** (the user, 2026-11-26: the bot is very good with it - an easter egg):
+  in place of the fight's line, one of 11 ("RIP AND TEAR", "CHAINSAW DIPLOMACY", "HERE'S JOHNNY!",
+  "LOOK MOM, I'M A LUMBERJACK!" - 65% of the picture's width at full size, the longest of them),
+  while the chainsaw is the weapon combat chose for the target (`sawing`: brought up for it, or
+  kept up for it - even if no fight starts after all), and on through the fight while it stays in
+  hand, between the monsters of a pack. Never for a chainsaw merely in hand: brought up by the
+  game at its pickup, or carried on after the sweep with no target it was chosen for. Drawn at
+  random, each once before any again, never the same twice running; another fight with it within
+  5 s of the last keeps the same line, so a pack sawn through reads as one.
+- **Later - two levels** (the user, 2026-11-26, after watching Episode 2; no design yet, nothing
+  done):
+  - What was wrong with one line: a couple of lines dominate it ("FIGHTING MONSTERS",
+    "COLLECTING LOOT"); "COLLECTING LOOT" shows sometimes while the bot is already going to the
+    exit after the sweep; some lines hardly ever show (the waits for a floor or a lift).
+  - The idea: a **dominant goal**, steady - getting a key, going to the exit, collecting loot,
+    exploring, escaping a fight - and under it a **subgoal**, changing much faster - fighting a
+    cacodemon, getting the shotgun, replenishing ammo.
+  - **"IDLE"** while a boss whose death ends the level dies (E2M8's cyberdemon, E3M8's and E4M8's
+    spider masterminds, MAP30's Icon of Sin): the bot only waits for the exit then, not "GOING
+    TO THE EXIT".
 
 ## 4. Milestones
 

@@ -57,6 +57,9 @@ typedef struct
 {
     int target;             // index into the monsters, -1 if none
     const char *weapon;     // the weapon wanted, NULL if none
+    int sawing;             // it is the chainsaw, chosen for the target -
+                            // brought up or kept up for it, not one merely
+                            // in hand (k_overlay.c's chainsaw lines)
     int alive;              // monsters alive in the level
     int visible;            // of those, seen by the player
     int awake;              // of those seen, awake

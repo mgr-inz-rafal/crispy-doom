@@ -18,7 +18,8 @@
 //	k_activity_t) - the key, the shotgun, the exit - not the switch or the
 //	doors on the way there; a switch only while it is worked ("opening a
 //	door with a switch"), barrels while shot at; fights while there is
-//	something to fight, runs out of them and falls back over all that. A
+//	something to fight - with the chainsaw chosen for it, one of its own
+//	lines (an easter egg) - runs out of them and falls back over all that. A
 //	new line shows once it has held for a moment (ENTER_MS and the like:
 //	passing pickups never show), and a line shown stays at least SHOW_MS (a
 //	switch's SHOW_FIX_MS) while it is still true; once what it says is
@@ -32,6 +33,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "SDL.h"
 
@@ -117,6 +119,27 @@
 #define FADE_MS 250
 #define FOUGHT_MS 3000
 
+// The chainsaw's lines, for a fight with it (the user, 2026-11-26: the bot
+// is very good with it - an easter egg), in place of "fighting monsters":
+// one at random, kept for another fight with it within SAW_SAME_MS of the
+// last, so a pack sawn through reads as one.
+#define SAW_SAME_MS 5000
+
+static const char *saw_lines[] =
+{
+    "Rip and tear",
+    "Meat processing initiated",
+    "Going full Doomguy",
+    "Chainsaw diplomacy",
+    "Applying melee solution",
+    "Organ redistribution",
+    "Preparing monster mince",
+    "Chunk generation",
+    "Here's Johnny!",
+    "Texas-style landscaping",
+    "Look mom, I'm a lumberjack!",
+};
+
 #define LINE_LEN 64
 
 // A glyph in the font's strip: where, its size, and its patch offsets.
@@ -146,6 +169,13 @@ static char fading[LINE_LEN];       // the one before, fading out
 static char pending[LINE_LEN];      // the one that would follow, since when
 static Uint32 pending_since;
 static Uint32 fought_at;            // when last in a fight; 0 never
+
+static int saw_order[arrlen(saw_lines)];    // the chainsaw lines to come
+static int saw_left;
+static unsigned int saw_seed;
+static int saw_line = -1;           // the one for the fight, -1 none yet
+static Uint32 saw_at;               // when a chainsaw line was last true
+static boolean saw_fight;           // a fight the chainsaw was chosen in, on
 
 void K_Overlay_Enable(void)
 {
@@ -585,6 +615,84 @@ static void FightLine(const k_activity_t *activity, char *buf, int len)
     }
 }
 
+// The next chainsaw line: all of them in a random order, each once before
+// any again, never the same twice running (a new order's first is not the
+// old one's last). Its own random numbers, not the game's (m_random.c): the
+// overlay touches nothing of the game.
+static int NextSawLine(void)
+{
+    int n = (int) arrlen(saw_lines), i, j, swap;
+
+    if (saw_left == 0)
+    {
+        if (saw_seed == 0)
+        {
+            saw_seed = (unsigned int) time(NULL) ^ SDL_GetTicks();
+        }
+
+        for (i = 0; i < n; ++i)
+        {
+            saw_order[i] = i;
+        }
+
+        for (i = n - 1; i > 0; --i)
+        {
+            saw_seed = saw_seed * 1103515245u + 12345u;
+            j = (int) ((saw_seed >> 16) % (unsigned int) (i + 1));
+            swap = saw_order[i];
+            saw_order[i] = saw_order[j];
+            saw_order[j] = swap;
+        }
+
+        // Drawn from the end.
+        if (saw_order[n - 1] == saw_line)
+        {
+            saw_order[n - 1] = saw_order[0];
+            saw_order[0] = saw_line;
+        }
+
+        saw_left = n;
+    }
+
+    return saw_order[--saw_left];
+}
+
+// A chainsaw line while the chainsaw is chosen for the target (k_combat.h:
+// sawing - brought up for it, if no fight starts too), and on through the
+// fight while it stays in hand, between the monsters of a pack; not for a
+// chainsaw merely in hand (the user: not when the game brought it up at its
+// pickup, nor carried on after the sweep). False for none.
+static boolean SawLine(const player_t *player, const k_combatstatus_t *combat,
+                       boolean fighting, char *buf, int len, Uint32 now)
+{
+    boolean in_hand = player->readyweapon == wp_chainsaw
+                   && (player->pendingweapon == wp_nochange
+                       || player->pendingweapon == wp_chainsaw);
+
+    if (combat->sawing)
+    {
+        saw_fight = true;
+    }
+    else if (!fighting || !in_hand)
+    {
+        saw_fight = false;
+    }
+
+    if (!saw_fight)
+    {
+        return false;
+    }
+
+    if (saw_line < 0 || now - saw_at > SAW_SAME_MS)
+    {
+        saw_line = NextSawLine();
+    }
+
+    saw_at = now;
+    M_StringCopy(buf, saw_lines[saw_line], len);
+    return true;
+}
+
 // Whether a line true now is the one shown.
 static boolean Shown(char *line)
 {
@@ -593,13 +701,13 @@ static boolean Shown(char *line)
 }
 
 // The line wanted now - of those true now (a run out of a fight or a fall
-// back, a fight, a hold, a switch or barrels worked, getting unstuck, the
-// purpose), the first: how long it must hold before it shows (enter), how
-// long it stays once shown (stay), whether it may cut a line shown short
-// (urgent), and whether the line shown is still one of them (live; once it
-// is not, what it said is over, and the next shows at once). False for no
-// say - in a menu, or nothing on the bot's list: the line shown stays. ""
-// hides it.
+// back, a fight or the chainsaw, a hold, a switch or barrels worked,
+// getting unstuck, the purpose), the first: how long it must hold before it
+// shows (enter), how long it stays once shown (stay), whether it may cut a
+// line shown short (urgent), and whether the line shown is still one of
+// them (live; once it is not, what it said is over, and the next shows at
+// once). False for no say - in a menu, or nothing on the bot's list: the
+// line shown stays. "" hides it.
 static boolean Line(char *buf, int len, int *enter, int *stay, boolean *urgent,
                     boolean *live, Uint32 now)
 {
@@ -681,7 +789,7 @@ static boolean Line(char *buf, int len, int *enter, int *stay, boolean *urgent,
         M_StringCopy(run, "FALLING BACK TO RECOVER", sizeof(run));
     }
 
-    if (fighting)
+    if (!SawLine(player, combat, fighting, fight, sizeof(fight), now) && fighting)
     {
         FightLine(&activity, fight, sizeof(fight));
     }
