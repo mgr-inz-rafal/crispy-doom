@@ -4938,6 +4938,28 @@ Who controls the player in a fight (the user's model):
     the build before the creep change): 4:06.5 to 4:15.3, a demon targeted at 503 units,
     nothing else logged. The same run held the full 20 s creeping into area 12 at (1728,1696)
     (3:04-3:24), probably the corner cut fixed since.
+- **Rockets and cells, for later** (the user, 2026-11-26, after an Episode 2 explorer run; to be
+  designed together with more rocket use, nothing done; log copy scratchpad `user-e2c`):
+  - **Cells spent on lone cacodemons.** The plasma rifle went at single cacodemons and a few
+    imps down to 20-30 cells, and E2M9's barons were met short of cells. The rules at play:
+    rockets and cells are one pool of damage (a cell 18, a rocket 96, a rocket only once the
+    launcher is held); the carry for the levels ahead (`CARRY_DAMAGE` 2000) is only 111 cells or
+    21 rockets, and above it a monster between the tiers gets them freely. E2M4: no launcher
+    yet, 334 cells at the start, everything above 111 spent on 7 single cacodemons and a baron.
+    E2M9: 98 cells kept for the 4 barons as meant, until the launcher came with about 25
+    rockets (720 of damage to 3120: "for anything again") and the last 40 cells went into
+    cacodemons. E2M6-E2M7: 20-55 cells, but 31-57 rockets kept the pool at 3300-6200, so the
+    plasma went at cacodemons 11 times, while the rockets, held back by the room they need
+    (`RocketRoom`), went from 31 to 57 almost unused. The user: 100 cells and 30 rockets are
+    better than the other way round. The weak-monster rule held (imps and zombiemen got the
+    chaingun; demons the plasma only in a pack of 8 - pressure). Directions: cells judged on
+    their own; a higher cell carry; a lone monster between the tiers fought like the weak ones
+    unless pressed; rockets before cells at cacodemons when there is room.
+  - **Rockets at distant packs.** The user saw good chances to fire rockets into packs of
+    monsters far off, the chaingun chosen instead. The idea: with rockets to spare and a pack far
+    away, weak or tough, a few rockets sent their way. (Today's group shot, `GroupShot`, is for
+    3+ weak shooters within 96 of each other, `GROUP_REACH` 640 at most, nothing of another kind
+    awake within 384, 10 or more rockets held.)
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
