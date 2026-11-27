@@ -687,14 +687,17 @@ extern void A_CyberAttack();
 
 // Rockets and cells are kept for the tough monsters (the user: with tough
 // monsters alive, keep plasma cells in reserve for them; the low tier
-// monsters are cleared with low tier weapons): while what the rocket
-// launcher, the plasma rifle and the BFG held could do with the rounds there
-// are for them (FLIES_HIT of their damage a round) is no more than the health
-// of the tough monsters alive in the level - nor than RESERVE_SHARE of what
-// they could do with as many as the player can carry - those weapons rate
-// nothing against a weak monster while another gun can fire, the pistol
-// too, nor against one between while another gun but the pistol can.
-// Above that, they are for anything, as before.
+// monsters are cleared with low tier weapons), each on its own (the user,
+// 2026-11-27: plasma and rockets "serve a different purpose"; judged as one,
+// E2M9's 40 cells went to any use once 25 rockets came with the launcher):
+// while what the guns held that fire them - the rocket launcher; the plasma
+// rifle or the BFG, the better - could do with the rounds there are
+// (FLIES_HIT of their damage a round) is no more than the health of the
+// tough monsters alive in the level - nor than RESERVE_SHARE of what they
+// could do with as many as the player can carry - those guns rate nothing
+// against a weak monster while another gun can fire, the pistol too, nor
+// against one between while another gun but the pistol can. Above that,
+// they are for anything, as before.
 #define RESERVE_SHARE 0.5
 
 // The rockets and cells kept are for the fight at hand too while the player
@@ -717,25 +720,29 @@ extern void A_CyberAttack();
 // barons and cacodemons met with none - "keep a reserve even if no boss on
 // the map; the shotgun and the chaingun for easier enemies, unless under
 // pressure"): while the arsenal goes on to a next level
-// (K_Condition_ArsenalGoesOn), up to CARRY_DAMAGE of their damage in hand
-// (two barons' health, FLIES_HIT of their damage a round; no more than
-// RESERVE_SHARE of what they could do with as many as the player can carry),
-// they rate nothing against a monster that is not tough while a gun but the
-// pistol has CARRY_SPARE times its ammo's low mark (k_condition.c) - but for
-// a fight the player is pressed in (UnderPressure): beset (BESET_COST),
-// monsters but the tough costing CARRY_CROWD in all on it, weak ones too
-// (BESET_LINGER after), or health CRITICAL. A weak monster gets none of them
+// (K_Condition_ArsenalGoesOn), up to CARRY_ROCKETS rockets and CARRY_CELLS
+// cells in hand, each on its own (the user, 2026-11-27: "a good reserve is
+// about 12 rockets and 120 plasma" - about one baron's health and two,
+// FLIES_HIT of their damage a round; as one pool of 2000 of damage, E2M6 and
+// E2M7: 31-57 rockets held, mostly unused for want of room, the plasma rifle
+// brought up for lone cacodemons down to 20 cells), they rate nothing
+// against a monster that is not tough while a gun but the pistol has
+// CARRY_SPARE times its ammo's low mark (k_condition.c) - but for a fight
+// the player is pressed in (UnderPressure): beset (BESET_COST), monsters but
+// the tough costing CARRY_CROWD in all on it, weak ones too (BESET_LINGER
+// after), or health CRITICAL. A weak monster gets none of them
 // while the arsenal goes on, however many there are (the user, E3M3: 120
 // cells, 2706 of damage, the plasma rifle brought up for a demon and kept on
-// for the imps after, down to the 2000 kept). On the last level of an
-// episode they are spent as before.
-#define CARRY_DAMAGE 2000.0
+// for the imps after, down to the 2000 of damage then kept). On the last
+// level of an episode they are spent as before.
+#define CARRY_ROCKETS 12
+#define CARRY_CELLS 120
 #define CARRY_SPARE 2
 #define CARRY_CROWD 40.0
 
 // A group of the weak ones that shoot - zombiemen, shotgun guys,
 // chaingunners, imps and SS, any mix - is worth a rocket or a BFG ball,
-// whatever is kept (RESERVE_SHARE, CARRY_DAMAGE; the user, E4M1: imps and
+// whatever is kept (RESERVE_SHARE, CARRY_ROCKETS; the user, E4M1: imps and
 // shotgun guys behind a grate shot one by one from afar - "one rocket can
 // clear a couple of enemies, being a large ammo saver"; "any group of 3+
 // deserves a rocket attempt", "5+ for the BFG"): a rocket, GROUP_ROCKETS_HELD
@@ -1415,10 +1422,11 @@ static int ahead_area = -1;
 static boolean escape;
 static char escape_why[96];
 
-// Rockets and cells kept for the tough monsters (RESERVE_SHARE), and for the
-// levels ahead (CARRY_DAMAGE).
-static boolean reserve;
-static boolean carry;
+// Rockets, and cells, kept for the tough monsters (RESERVE_SHARE), and for
+// the levels ahead (CARRY_ROCKETS, CARRY_CELLS); by ammo type, as logged
+// (KeptFrom judges the carry by what the weapon's next shot would leave).
+static boolean reserve[NUMAMMO];
+static boolean carry[NUMAMMO];
 
 // Hopeless monsters (HOPELESS_SHARE): this tic, by place in the list, and per
 // weapon whether it would kill one awake in time (K_Combat_Beats); those
@@ -3172,6 +3180,24 @@ static boolean UnderPressure(void)
         || K_Condition_Get()->health == K_NEED_CRITICAL;
 }
 
+// The rounds of the ammo kept for the levels ahead (CARRY_ROCKETS,
+// CARRY_CELLS); 0 for the others.
+static int CarryOf(int ammo)
+{
+    return ammo == am_misl ? CARRY_ROCKETS : ammo == am_cell ? CARRY_CELLS : 0;
+}
+
+// What of the rockets and cells is kept (by ammo type: reserve, carry), but
+// what is in `but` (NULL for nothing): "rockets", "cells", "rockets and
+// cells"; NULL for none.
+static const char *KeptNames(const boolean *kept, const boolean *but)
+{
+    boolean rockets = kept[am_misl] && (but == NULL || !but[am_misl]);
+    boolean cells = kept[am_cell] && (but == NULL || !but[am_cell]);
+
+    return rockets && cells ? "rockets and cells" : rockets ? "rockets" : cells ? "cells" : NULL;
+}
+
 // Each tic: whether a hard fight is on (HARD_ONE, HARD_CROWD), whether the
 // player is beset (BESET_COST) or pressed (CARRY_CROWD) - logged as it
 // begins with rockets and cells kept - and whether it is invulnerable enough
@@ -3180,6 +3206,7 @@ static void UpdateHard(const player_t *player)
 {
     double crowd = 0.0, beset = 0.0, pressing = 0.0;
     boolean one = false, was = Beset(), was_pressed = UnderPressure();
+    const char *kept = KeptNames(reserve, NULL), *carried = KeptNames(carry, reserve);
     int i;
 
     bold = player->powers[pw_invulnerability] >= INVULN_BOLD;
@@ -3221,16 +3248,17 @@ static void UpdateHard(const player_t *player)
         crowd_seen = leveltime;
     }
 
-    if (!was && Beset() && reserve)
+    if (!was && Beset() && kept != NULL)
     {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells for this fight - %.0f health's worth "
-              "of monsters between the tiers on the player", beset);
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s for this fight - %.0f health's worth of monsters "
+              "between the tiers on the player", kept, beset);
     }
-    else if (!was_pressed && UnderPressure() && carry && !reserve)
+
+    if (!was_pressed && UnderPressure() && carried != NULL)
     {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells kept for the levels ahead for this "
-              "fight - %s", Beset() || pressing >= CARRY_CROWD
-                            ? "monsters crowding on the player" : "health CRITICAL");
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s kept for the levels ahead for this fight - %s",
+              carried, Beset() || pressing >= CARRY_CROWD
+                       ? "monsters crowding on the player" : "health CRITICAL");
     }
 }
 
@@ -3379,13 +3407,12 @@ static void UpdateHopeless(const player_t *player)
     }
 }
 
-// Each tic: whether rockets and cells are kept for the tough monsters left
-// (RESERVE_SHARE), and for the levels ahead (CARRY_DAMAGE); logged as it
-// changes.
+// Each tic: whether rockets, and cells, are kept for the tough monsters left
+// (RESERVE_SHARE), and for the levels ahead (CARRY_ROCKETS, CARRY_CELLS);
+// logged as it changes.
 static void UpdateReserve(const player_t *player)
 {
-    double best[NUMAMMO] = { 0.0 }, need = 0.0, can = 0.0, most = 0.0;
-    boolean held, carried;
+    double best[NUMAMMO] = { 0.0 }, need = 0.0;
     int i, a;
 
     for (i = 0; i < num_monsters; ++i)
@@ -3409,41 +3436,50 @@ static void UpdateReserve(const player_t *player)
 
     for (a = 0; a < NUMAMMO; ++a)
     {
-        can += player->ammo[a] * best[a];
-        most += player->maxammo[a] * best[a];
-    }
+        const char *name = a == am_misl ? "rockets" : "cells";
+        int keep = CarryOf(a);
+        int count = player->ammo[a];
+        double can = count * best[a];
+        boolean held, carried;
 
-    held = need > 0.0 && can > 0.0 && can <= SDL_min(need, most * RESERVE_SHARE);
-    carried = K_Condition_ArsenalGoesOn() && can > 0.0
-           && can <= SDL_min(CARRY_DAMAGE, most * RESERVE_SHARE);
+        if (a != am_misl && a != am_cell)
+        {
+            continue;
+        }
 
-    if (held && !reserve)
-    {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells kept for the tough monsters left - "
-              "%.0f of their damage in hand, %.0f of their health", can, need);
-    }
-    else if (!held && reserve && can > 0.0)
-    {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells %s - %.0f of their damage in hand, "
-              "%.0f of the tough monsters' health",
-              carried ? "kept for the levels ahead only" : "for anything again", can, need);
-    }
+        held = need > 0.0 && can > 0.0
+            && can <= SDL_min(need, player->maxammo[a] * best[a] * RESERVE_SHARE);
+        carried = K_Condition_ArsenalGoesOn() && can > 0.0 && count <= keep;
 
-    if (carried && !carry && (held || !reserve))
-    {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells kept for the levels ahead - %.0f of "
-              "their damage in hand, up to %.0f", can, CARRY_DAMAGE);
-    }
-    else if (!carried && carry && can > 0.0 && !held)
-    {
-        K_Log(K_LOG_COMBAT, K_LOG_INFO, "rockets and cells for %s again - %.0f of their "
-              "damage in hand, more than the %.0f kept for the levels ahead",
-              K_Condition_ArsenalGoesOn() ? "all but the weak monsters" : "anything", can,
-              CARRY_DAMAGE);
-    }
+        if (held && !reserve[a])
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s kept for the tough monsters left - %d in hand, "
+                  "%.0f of their damage, %.0f of their health", name, count, can, need);
+        }
+        else if (!held && reserve[a] && can > 0.0)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s %s - %d in hand, %.0f of their damage, %.0f of "
+                  "the tough monsters' health", name,
+                  carried ? "kept for the levels ahead only" : "for anything again", count, can,
+                  need);
+        }
 
-    reserve = held;
-    carry = carried;
+        if (carried && !carry[a] && (held || !reserve[a]))
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s kept for the levels ahead - %d in hand, up to %d",
+                  name, count, keep);
+        }
+        else if (!carried && carry[a] && can > 0.0 && !held)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s for %s again - %d in hand, more than the %d kept "
+                  "for the levels ahead", name,
+                  K_Condition_ArsenalGoesOn() ? "all but the weak monsters" : "anything", count,
+                  keep);
+        }
+
+        reserve[a] = held;
+        carry[a] = carried;
+    }
 }
 
 // Whether the monster (by its place in this tic's list) is the one fighting
@@ -3929,21 +3965,27 @@ static boolean SpareGun(const player_t *player)
     return false;
 }
 
-// Whether the rockets and cells kept are kept from this one: not tough, or
-// not the level's boss (ForBoss), and those for the tough monsters
+// Whether the rockets or cells the weapon fires are kept from this one: not
+// tough, or not the level's boss (ForBoss), and those for the tough monsters
 // (RESERVE_SHARE) while another gun can fire - the pistol too against a weak
 // one - but for a fight the player is beset in (Beset); those for the levels
-// ahead (CARRY_DAMAGE; from a weak one, all of them) while a gun but the
-// pistol has ammo to spare (SpareGun), but for a fight the player is pressed
-// in (UnderPressure).
-static boolean KeptFrom(const player_t *player, const k_monster_t *monster)
+// ahead (CarryOf; from a weak one, all of them) while a gun but the pistol
+// has ammo to spare (SpareGun), but for a fight the player is pressed in
+// (UnderPressure). The carry counts what the next shot would leave: a BFG
+// ball's 40 cells took 134 down to 94 (E3M3, at a lone cacodemon), so the
+// BFG is kept below 160.
+static boolean KeptFrom(const player_t *player, const weapon_t *weapon,
+                        const k_monster_t *monster)
 {
+    ammotype_t ammo = weaponinfo[weapon->weapon].ammo;
     int spawn = SpawnHealth(monster->type);
+    boolean carried = K_Condition_ArsenalGoesOn()
+                   && (player->ammo[ammo] - weapon->shot < CarryOf(ammo)
+                       || spawn <= WEAK_HEALTH);
 
-    return (spawn < TOUGH_HEALTH || ForBoss(monster))
-        && ((reserve && !Beset() && LowGun(player, spawn <= WEAK_HEALTH))
-            || ((carry || (spawn <= WEAK_HEALTH && K_Condition_ArsenalGoesOn()))
-                && !UnderPressure() && SpareGun(player)));
+    return Reserved(weapon) && (spawn < TOUGH_HEALTH || ForBoss(monster))
+        && ((reserve[ammo] && !Beset() && LowGun(player, spawn <= WEAK_HEALTH))
+            || (carried && !UnderPressure() && SpareGun(player)));
 }
 
 // Whether the kind makes a group worth a rocket or a BFG ball (GROUP_ROCKETS).
@@ -4092,8 +4134,7 @@ static double GroupRating(const player_t *player, const weapon_t *weapon,
 static boolean Kept(const player_t *player, const weapon_t *weapon,
                     const k_monster_t *monster, boolean in_hand)
 {
-    return Reserved(weapon) && KeptFrom(player, monster)
-        && GroupShot(player, weapon, monster, in_hand) == 0;
+    return KeptFrom(player, weapon, monster) && GroupShot(player, weapon, monster, in_hand) == 0;
 }
 
 // Whether the pistol is right for the target: far off with little health
@@ -4343,7 +4384,7 @@ static double Preference(const player_t *player, const weapon_t *weapon,
     }
 
     if (rating > 0.0
-     && ((Reserved(weapon) && KeptFrom(player, monster) && !group)
+     && ((KeptFrom(player, weapon, monster) && !group)
          || (weapon->reach <= 0.0 && Sawn(player, monster))
          || (weapon->reach <= 0.0 && SpawnHealth(monster->type) > WEAK_HEALTH
              && !InTime(weapon, monster))))
@@ -5241,7 +5282,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
     boolean rockets = !standoff && !chase
                    && (wanted == wp_missile
                        || (RocketsFor(target) && CanFire(player, WeaponOf(wp_missile))
-                           && !OtherGun(player, false) && !KeptFrom(player, target)
+                           && !OtherGun(player, false)
+                           && !KeptFrom(player, WeaponOf(wp_missile), target)
                            && !Sawn(player, target)));
     boolean melee = !standoff && MeleeFor(player, target)
                  && target->distance > WeaponOf(wanted)->reach - MELEE_IN;
@@ -7988,8 +8030,8 @@ void K_Combat_Reset(void)
     num_trips = 0;
     ahead_area = -1;
     escape = false;
-    reserve = false;
-    carry = false;
+    memset(reserve, 0, sizeof(reserve));
+    memset(carry, 0, sizeof(carry));
     memset(beats, 0, sizeof(beats));
     needed = -1;
     fight_needed = false;

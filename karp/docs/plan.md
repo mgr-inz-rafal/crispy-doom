@@ -3628,7 +3628,8 @@ Who controls the player in a fight (the user's model):
     carry could do, those weapons rate nothing against a weak monster while another gun can
     fire, the pistol too, nor against one between while another gun but the pistol can.
     Logged: "rockets and cells kept for the tough monsters left - ...", "... for anything
-    again".
+    again". Since 2026-11-27 rockets and cells are judged each on their own ("cells kept for
+    the tough monsters left - ...").
   - Hopeless (7.3 point 3, fight or avoid): a monster that is not weak the guns held cannot
     kill - the rounds there are would not take half the health it has left (a quarter for
     the target of a fight on), or none would kill it within 60 s of firing on - each round
@@ -4148,7 +4149,8 @@ Who controls the player in a fight (the user's model):
     CRITICAL. E2M2 on from a pistol start, salts 11 and 22: cells at E2M3's end 111 and 94
     (head 8 and 0). From the weak ones (spawn health 150 or less) all of them are kept, however
     many (2026-11-20, the user's E3M3: 120 cells, the plasma rifle brought up for a demon and
-    kept on for the imps, spent down to the 2000).
+    kept on for the imps, spent down to the 2000). Since 2026-11-27 12 rockets and 120 cells,
+    each on its own (`CARRY_ROCKETS`, `CARRY_CELLS`; 7.8, "Rockets and cells, for later").
   - The Cyberdemon: no hold short of an area with a boss inside, nor creeping toward it
     (`BossInside`, in `UnsafeAhead`) - so no "fought for, not run for" there either, the run
     for health goes on; the miss counter allows for shots still in the air (`InFlight`: plasma
@@ -4955,6 +4957,25 @@ Who controls the player in a fight (the user's model):
     chaingun; demons the plasma only in a pack of 8 - pressure). Directions: cells judged on
     their own; a higher cell carry; a lone monster between the tiers fought like the weak ones
     unless pressed; rockets before cells at cacodemons when there is room.
+    Done (2026-11-27, the user's design: "plasma and rockets, while both powerful, serve a
+    different purpose"; `k_combat.c`: `CARRY_ROCKETS`, `CARRY_CELLS`, `CarryOf`,
+    `UpdateReserve`, `KeptFrom`): rockets and cells are kept each on its own - for the levels
+    ahead 12 rockets and 120 cells (about one baron's health and two), and for the tough
+    monsters left each while its own damage is no more than their health. The carry counts
+    what the next shot would leave, so the BFG (40 cells a ball) is kept below 160 (E3M3: balls
+    at lone cacodemons took 134 to 94, 140 to 100). Logged by ammo: "cells kept for the levels
+    ahead - 98 in hand, up to 120", "rockets kept for the tough monsters left - 7 in hand,
+    ...". The user kept the rest as is: above 120 cells the plasma rifle goes at a lone
+    cacodemon freely ("if we have plenty of cells, let the bot use them"), and the group rocket
+    shot still needs 10 held, below the 12 kept. Demo mode, explorer, salts 443, 71 and 7:
+    E2M1 on, 15 min, all to E2M4 - below 120 cells the plasma rifle came up only crowded or
+    with the shotgun short of shells, above it at cacodemons and demons, 216-298 cells at
+    E2M4's start; E3M1 on, 15 min - "rockets kept, 7 in hand" beside "cells for all but the
+    weak monsters again, 139 in hand", the launcher and the rifle at barons from the reserve,
+    one death on E3M4 (a crusher or a floor that hurts); E3M3 from a pistol start, 7 min,
+    after the BFG fix - no ball at a monster that is not tough below 160 cells but beset (one
+    at an imp when the shells and bullets ran out: the game's own switch, nothing else to
+    fire).
   - **Rockets at distant packs.** The user saw good chances to fire rockets into packs of
     monsters far off, the chaingun chosen instead. The idea: with rockets to spare and a pack far
     away, weak or tough, a few rockets sent their way. (Today's group shot, `GroupShot`, is for
