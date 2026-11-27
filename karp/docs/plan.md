@@ -126,6 +126,7 @@ karp/
 | H12 | `src/doom/wi_stuff.c` `WI_drawStats`, crispy's early exit from the tally after ExM8 | `&& !K_HoldsTally()` | In demo mode that tally waits for fire like any other intermission (3.11), not leaving the moment it is counted |
 | H9 | `src/i_video.c` / `i_video.h` (shared by all games) | `I_SetEventFilter(fn)`; call `if (event_filter && event_filter(&sdlevent)) continue;` at the top of the `SDL_PollEvent` loop in `I_GetEvent` (:474); `I_GetWindow()` accessor (`struct SDL_Window;` forward declaration, since i_video.h does not include SDL.h) | Route console events to Karp. Only Doom registers a filter, and only with `-karpconsole`; otherwise it stays NULL. |
 | H13 | `src/i_video.c` / `i_video.h` (shared by all games): `I_SetOverlayDrawer(fn)`; `I_FinishUpdate` calls it after the frame is copied and before `SDL_RenderPresent`, and the screenshot code after its copy of the frame (`struct SDL_Renderer;` forward declaration); `src/doom/d_main.c` after the `-karpdemo` block: `//!` doc block + `if (M_CheckParm("-karpoverlay")) K_EnableOverlay();` | Draw the overlay (3.12) over each frame and over screenshots, in the window's own pixels. Only Doom registers a drawer, and only with `-karpoverlay`; otherwise it stays NULL. |
+| H14 | `src/doom/d_main.c` after the `-karpoverlay` block | `//!` doc block + `if (M_CheckParm("-karpidfa")) K_EnableIdfa();` | Every level begun with IDFA's arsenal (`karp.c` `GiveIdfa`, from H4 and H11): every weapon the game has, a backpack, full ammo, blue armour at 200, no keys (the user, 2026-11-27: to test with, and to watch the bot beat much harder, custom maps) |
 
 `karp.h` is included only by the five doom files above (`d_main.c`, `p_setup.c`, `d_net.c`,
 `g_game.c`, `wi_stuff.c`). H9 and H13 are generic and do not reference Karp. None of the hooks
@@ -4981,6 +4982,75 @@ Who controls the player in a fight (the user's model):
     away, weak or tough, a few rockets sent their way. (Today's group shot, `GroupShot`, is for
     3+ weak shooters within 96 of each other, `GROUP_REACH` 640 at most, nothing of another kind
     awake within 384, 10 or more rockets held.)
+    Why the launcher was so rarely up (a temporary tally, 2026-11-27, demo explorer, salts 443,
+    71, 7, 15 min each; the first rule that kept it down, of the tics with a target and rockets
+    held): E2M6-E2M7 - in use 8%, no rockets at weak monsters while the arsenal goes on 46%,
+    the 12 carried 16%, too near 14%, no room 6%; E3M1-E3M4 - in use 3%, the tough monsters'
+    reserve 45%, the carry 22%, too near 10%. Counting every rule that held, too near 55-57%
+    and no room 69-71%: most fights are close. The 34 switches to the launcher and back in E2
+    came from a cacodemon or a demon at 300-400 closing inside the safe distance during the
+    0.9 s switch (`ROCKET_ROOM` 64 is gone in 0.4-0.7 s) - not fixed here.
+    Done (2026-11-27, the user's design; `k_combat.c`: `VOLLEY_PACK`, `UpdateVolley`,
+    `BeginVolley`, `VolleyDamage`): a volley of rockets at a pack far off. The near group shot
+    stays as it is, "for a good show with gibbing"; "the distant group is to save ammo and damage
+    tough monsters (or gib weak) before they become a threat".
+    - **The pack:** any mix of monsters, lost souls too ("distant lost souls are not a threat. We
+      can lose a rocket at most, but not health"), awake, not fighting another, each within 192
+      of another (chained, as the blast measures it: far packs spread), 3 or more; the rockets go
+      only at those that are a threat - that can come at the player, shoot bullets, stand where
+      the route goes on, or are the boss fought from afar - not merely because the player is
+      comfy (MAP13 with `-karpidfa`: 16 of 28 volleys went at packs behind Downtown's windows and
+      up on its ledges, unable to come, and they were gone from sight before the launcher was
+      up). Within 1024
+      (vanilla's rocket autoaim; the user would go further - "pumping rockets into distant
+      monsters even behind the reach of autoaim" - but beyond 1024 rockets fly level, take 1.5 s
+      and more to arrive, and targets are only picked within 1024 today; the user: start with
+      what is simpler, adjust after real fights). Nothing awake within 512 of the player to
+      begin, the pack itself too, and within 384 to go on: the launcher takes 0.9 s to come up,
+      and in the first E2M6 runs 5 of 6 volleys, begun at packs whose nearest was 394-428 off,
+      were broken off by one of them within 384 before their first rocket - the gun brought back.
+    - **The rockets:** only those to spare - beyond the 12 kept for the levels ahead and, at a
+      pack with no tough monster in it, beyond the tough monsters' reserve; whatever else is kept
+      from the monsters in it (the weak-monster rule). Never with the ammo short for the level's
+      boss, unless it is in the pack. The Cyberdemon and the spider mastermind take no blast.
+    - **How many:** planned once, as it begins, never recalculated ("the pack might spread"): the
+      pack's health over what one rocket at the best member would do - the hit as often as it
+      lands (1/(1 + distance/512)) and the blast on the others that would see the burst - no
+      more than there are to spare. "If I see 5 distant imps, maybe 2-3 rockets. If 30 barons,
+      shoot all 20 rockets." Each rocket goes at the member it would do the most at, picked anew
+      as the one before leaves; the best must catch 2 of the pack, or none is begun.
+    - **A fight:** the route waits while it fires (on the way, with 128 health or less and no
+      armour, no rocket is fired at all - `BlastCouldKill`).
+    - **One of the pack coming** within 384 gets the rockets first, then the rest of the pack
+      again (the user: "if there is a demon from the pack running towards the bot, we can clear it
+      with a rocket (maybe absorbing some damage) and keep pushing rockets into the rest of the
+      pack"): while a volley is on, its pack gets the sturdy burst distance (`SafeBurst`: 120
+      instead of 192, at 50 health and 30 armour or more) as the tough monsters do; the one aimed
+      at keeps the aim while it comes.
+    - **Over** once all are fired; broken off when the pack spreads out (the best rocket would
+      catch 1, or do less than half of what each was planned to - judged as each rocket leaves or
+      the one aimed at dies; one gone from sight only hands the aim on), none of it to fire at for
+      1 s (the launcher alone takes 0.9 s to come up),
+      no rocket fired for 3 s, something awake not of the pack within 384 ("any new threat in the
+      close proximity interrupts the distant attack"), one of the pack too near for any rocket
+      (then fought as any), health CRITICAL, a run for an item, a retreat, or the rockets down to
+      those kept. Out of the way of a projectile it only holds fire. No volley at any of that
+      pack again for 5 s - the last 64 such monsters remembered, not the last pack only (two packs
+      took turns, three volleys in 4.5 s and no rocket).
+    - **Logs:** "rocket volley at a pack of 5 (imp and cacodemon), 610-790 units off, 420 health -
+      3 rockets of 18 to spare, 140 each, 3 caught", "rocket volley over after 4.1 s - 3 of 3
+      fired, 2 killed; all fired", and at the level's end or death "rocket volleys this level: 2,
+      5 rockets fired, 3 killed meanwhile". The status line: "rocket volley at a pack of 5, 1 of 3
+      fired - the imp, 702 units".
+    - **Tests** (2026-11-27/28, demo explorer, salts 443, 71, 7, 15 min): E2M6 on, the first
+      build - 6 volleys, none fired (5 broken off by the pack's own members within 384, hence the
+      512 start). Doom II MAP13 on with `-karpidfa` - 26 and 28 volleys, 8 and 11 rockets fired,
+      2 volleys all fired (one rocket, 3 killed); 14 and 16 lost from sight (packs that could not
+      come, hence the threat rule). With the threat rule: MAP13 1 volley in 7-8 min a run (6 games
+      at once, half speed), E2M6-E2M7 none; no deaths, the levels as before. The user: fine as it
+      is - "we don't need to force shooting at packs", it fires when it can. Salt 7 died twice
+      on MAP13's yellow-key ledge (1478,-2846) in the runs before, standing 11 and 46 s after the
+      key with imps shooting from where they could not come - not the volleys; open.
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 

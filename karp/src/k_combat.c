@@ -63,6 +63,13 @@
 //	invulnerable. A BFG ball's spray leaves from where the player stands
 //	once it has burst: till then its burst is kept in sight (BFG_HOLD).
 //
+//	Rocket volleys (plan, 7.8): at an awake pack far off, any monsters in
+//	it, with nothing near the player, the rockets to spare - beyond those
+//	kept for the levels ahead and, with no tough one in it, for the tough
+//	ones - as many as its health takes, planned as it begins; each at the one
+//	of it the rocket would do the most at then. A fight, the route waiting;
+//	broken off once the pack spreads out or anything awake comes near.
+//
 //	Barrels (plan, 7.3): never set off near the player, by a shot that could
 //	graze one (spread counted, and those behind the target) or a blow; kept
 //	away from in battle. Shot on purpose, from a safe distance, when the
@@ -772,6 +779,63 @@ extern void A_CyberAttack();
 #define BFG_SPRAY 135.0
 #define MAX_GROUP 32
 
+// A volley of rockets at a pack far off (the user, 2026-11-27: the group
+// shot above is for the show, the gibs; "the distant group is to save ammo
+// and damage tough monsters (or gib weak) before they become a threat"):
+// any mix of monsters, lost souls too (far off they are no threat - at worst
+// a rocket is lost), awake, not fighting another, each within VOLLEY_SPREAD
+// of another (chained, as the blast measures it; packs far off spread),
+// VOLLEY_PACK or more, within TARGET_REACH (vanilla's rocket autoaim reaches
+// 1024, P_SpawnPlayerMissile; further, a rocket flies level), nothing awake
+// within VOLLEY_START of the player that could come at it, the pack itself
+// too: the launcher takes 0.9 s to come up, and one of a pack begun at with
+// its nearest 394-428 off was within VOLLEY_CLEAR in 0.1-0.5 s, the volley
+// broken off before its first rocket and the gun brought back (E2M6, 5 of
+// 6 volleys; an imp walks 85 units in that, a demon 160). It spends the
+// rockets to spare only, whatever else is kept from the monsters in it
+// (KeptFrom): those beyond the ones kept for the levels ahead
+// (CARRY_ROCKETS) and, at a pack with no tough monster in it, beyond those
+// kept for the tough ones (RESERVE_SHARE); never with the ammo short for
+// the level's boss, but at a pack it is in (ForBoss). How many is planned
+// as it begins and not looked at again (the user: "if I see 5 distant imps,
+// maybe 2-3 rockets. If 30 barons, shoot all 20 rockets"; "we should not
+// recalculate in the meantime, since the pack might spread"): the pack's
+// health over what a rocket at the best of it would do (VolleyDamage: the
+// hit as often as it lands, 1/(1 + distance/512), and its blast on each
+// other one that would see the burst - none on a Cyberdemon or a spider
+// mastermind), no more than there are to spare. Each rocket goes at the one
+// it would do the most at, picked anew as the one before leaves; the best
+// must catch two of the pack, or none is begun. A volley is a fight, the
+// route waiting: on the way none would be fired with health a blast could
+// take (BlastCouldKill). One of the pack coming within VOLLEY_CLEAR gets
+// the rockets first, the one aimed at kept while it comes, burst as near as
+// for a tough monster with the player sturdy (SafeBurst; the user: "if
+// there is a demon from the pack running towards the bot, we can clear it
+// with a rocket (maybe absorbing some damage) and keep pushing rockets into
+// the rest of the pack"). It is over once all are fired, or broken off (the
+// user: "there must be a way to stop this swarm of rockets if the group
+// spreads too much"; "any new threat in the close proximity interrupts the
+// distant attack"): the pack spread out - the best rocket would catch one,
+// or do less than VOLLEY_SPREAD_SHARE of what each was planned to, judged
+// as each rocket leaves or the one aimed at dies - none of it to fire at
+// for VOLLEY_LOST (the launcher alone takes 0.9 s to come up), no rocket
+// fired for VOLLEY_STALL,
+// something awake but the pack within VOLLEY_CLEAR, one of the pack too
+// near for any rocket (RocketMinTo; fought as any then), health CRITICAL, a
+// run for an item, a retreat, or the rockets down to those kept. None at
+// that pack again for VOLLEY_SKIP. Looked for every VOLLEY_LOOK tics.
+#define VOLLEY_PACK 3
+#define VOLLEY_SPREAD 192.0
+#define VOLLEY_START 512.0
+#define VOLLEY_CLEAR 384.0
+#define VOLLEY_SPREAD_SHARE 0.5
+#define VOLLEY_LOST TICRATE
+#define VOLLEY_STALL (3 * TICRATE)
+#define VOLLEY_SKIP (5 * TICRATE)
+#define VOLLEY_LOOK 8
+#define MAX_VOLLEY 32
+#define MAX_VOLLEY_SKIP 64
+
 // Hopeless (plan 7.3 point 3, fight or avoid; the user, E3M9: the shells
 // spent on the cyberdemon with the shotgun, then the bullets with the
 // pistol, and the red key's room of hitscanners gone into with rockets
@@ -1427,6 +1491,40 @@ static char escape_why[96];
 // (KeptFrom judges the carry by what the weapon's next shot would leave).
 static boolean reserve[NUMAMMO];
 static boolean carry[NUMAMMO];
+static int reserve_rounds[NUMAMMO];     // the rounds those for the tough ones come to
+
+// A volley at a pack far off (VOLLEY_PACK): on or not; the pack as it
+// began, and the member the next rocket goes at (compared, never
+// followed); the rockets planned and fired, what each was to do, and those
+// it leaves; the rockets held last tic; when one of the pack could last be
+// fired at; when it began, and when it began or its last rocket left; the
+// kill count as it began. The pack of the last one, until when it gets none (VOLLEY_SKIP). Per
+// monster this tic, whether a pack looked at holds it. This level's
+// volleys, their rockets and the kills meanwhile, for the summary.
+static boolean volley;
+static const mobj_t *volley_members[MAX_VOLLEY];
+static int volley_count;
+static const mobj_t *volley_aim;
+static const mobj_t *volley_close;      // the last of the pack aimed at as it came
+static int volley_planned;
+static int volley_fired;
+static double volley_each;
+static int volley_floor;
+static int volley_rockets;
+static int volley_seen;
+static int volley_since;
+static int volley_shot;
+static int volley_kills;
+static struct
+{
+    const mobj_t *mo;
+    int until;
+} volley_skip[MAX_VOLLEY_SKIP];
+static boolean *volley_in;
+static int volley_in_capacity;
+static int volleys_made;
+static int volley_rounds;
+static int volley_killed;
 
 // Hopeless monsters (HOPELESS_SHARE): this tic, by place in the list, and per
 // weapon whether it would kill one awake in time (K_Combat_Beats); those
@@ -2355,12 +2453,33 @@ static double RateGain(const player_t *player, double ux, double uy)
 
 static int SpawnHealth(int type);
 
+// Whether the monster is one of the pack of the volley on (VOLLEY_PACK).
+static boolean InVolley(const mobj_t *mo)
+{
+    int k;
+
+    for (k = 0; volley && k < volley_count; ++k)
+    {
+        if (volley_members[k] == mo)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // How far off the player a rocket must burst, as the blast measures it (the
 // larger of the x and y distances): ROCKET_SAFE; sturdy, at a monster that
-// is not weak, STURDY_SAFE.
+// is not weak, or one of a volley's pack (the user: a demon of it running
+// at the player is cleared with a rocket, "maybe absorbing some damage"),
+// STURDY_SAFE.
 static double SafeBurst(const player_t *player, const k_monster_t *monster)
 {
-    return monster != NULL && SpawnHealth(monster->type) > WEAK_HEALTH
+    boolean pack = monster != NULL && monster >= monsters && monster < monsters + num_monsters
+                && InVolley(monster_mobjs[monster - monsters]);
+
+    return monster != NULL && (SpawnHealth(monster->type) > WEAK_HEALTH || pack)
         && player->health >= STURDY_HEALTH && player->armorpoints >= STURDY_ARMOUR
            ? STURDY_SAFE : ROCKET_SAFE;
 }
@@ -3450,6 +3569,10 @@ static void UpdateReserve(const player_t *player)
         held = need > 0.0 && can > 0.0
             && can <= SDL_min(need, player->maxammo[a] * best[a] * RESERVE_SHARE);
         carried = K_Condition_ArsenalGoesOn() && can > 0.0 && count <= keep;
+        reserve_rounds[a] = need > 0.0 && best[a] > 0.0
+                          ? (int) (SDL_min(need, player->maxammo[a] * best[a] * RESERVE_SHARE)
+                                   / best[a])
+                          : 0;
 
         if (held && !reserve[a])
         {
@@ -3744,6 +3867,13 @@ static void ChooseTarget(const player_t *player)
             best_score = score;
             best = i;
         }
+    }
+
+    // A volley on: the one its next rocket goes at (UpdateVolley), far and
+    // dodgeable or not.
+    if (volley && IndexOf(volley_aim) >= 0)
+    {
+        best = IndexOf(volley_aim);
     }
 
     same = best >= 0 && monster_mobjs[best] == target_mo;
@@ -4089,12 +4219,29 @@ static int GroupShot(const player_t *player, const weapon_t *weapon,
     return count;
 }
 
+// What the blast of a rocket bursting at the target does to another
+// monster, as often as the rocket lands there (hit, of 1): BLAST less its
+// distance from the target - the larger of the x and y distances, less its
+// radius - if it would see the burst (P_RadiusAttack); none to a Cyberdemon
+// or a spider mastermind.
+static double BlastOn(double hit, const k_monster_t *target, const k_monster_t *monster)
+{
+    double reach = BLAST - SDL_max(0.0, AxisDistance(monster->at, target->at) - monster->radius);
+
+    if (hit <= 0.0 || reach <= 0.0 || monster->type == MT_CYBORG || monster->type == MT_SPIDER
+     || !K_Sight_Check(target->at.x, target->at.y, target->z + target->height * 0.5,
+                       monster->at.x, monster->at.y, monster->z, monster->z + monster->height))
+    {
+        return 0.0;
+    }
+
+    return hit * reach;
+}
+
 // What a group shot does a tic (Rating for all of them): the shot on the
-// target, and on each other one of the group a rocket's blast less its
-// distance from the target, if it would see the burst there
-// (P_RadiusAttack), as often as the rocket lands (ShotDamage); or BFG_SPRAY
-// of the tracers, whether the ball lands or not; no more than kills each and
-// a half.
+// target, and on each other one of the group a rocket's blast (BlastOn), as
+// often as the rocket lands (ShotDamage); or BFG_SPRAY of the tracers,
+// whether the ball lands or not; no more than kills each and a half.
 static double GroupRating(const player_t *player, const weapon_t *weapon,
                           const k_monster_t *target, boolean in_hand)
 {
@@ -4107,21 +4254,8 @@ static double GroupRating(const player_t *player, const weapon_t *weapon,
     for (k = 1; k < count; ++k)
     {
         const k_monster_t *monster = &monsters[members[k]];
-        double share = BFG_SPRAY;
-
-        if (weapon->weapon == wp_missile)
-        {
-            share = 0.0;
-
-            if (K_Sight_Check(target->at.x, target->at.y, target->z + target->height * 0.5,
-                              monster->at.x, monster->at.y, monster->z,
-                              monster->z + monster->height))
-            {
-                share = direct / weapon->damage
-                      * SDL_max(0.0, BLAST - SDL_max(0.0, AxisDistance(monster->at, target->at)
-                                                          - monster->radius));
-            }
-        }
+        double share = weapon->weapon == wp_missile
+                     ? BlastOn(direct / weapon->damage, target, monster) : BFG_SPRAY;
 
         total += SDL_min(share, monster->health * 1.5);
     }
@@ -4135,6 +4269,535 @@ static boolean Kept(const player_t *player, const weapon_t *weapon,
                     const k_monster_t *monster, boolean in_hand)
 {
     return KeptFrom(player, weapon, monster) && GroupShot(player, weapon, monster, in_hand) == 0;
+}
+
+// Whether the monster can be one of a volley's pack (VOLLEY_PACK): awake,
+// not fighting another, one that counts, within TARGET_REACH.
+static boolean VolleyMember(const k_monster_t *monster)
+{
+    return monster->awake && !monster->infighting && Kind(monster->type)->cost > 0.0
+        && monster->distance <= TARGET_REACH;
+}
+
+// Whether a volley's rocket can go at the monster (by its place in this
+// tic's list): one of a pack (VolleyMember), in the shots' reach, a threat -
+// one that can come at the player, a gunman, one where the route goes on to,
+// one fought from afar (FoughtAsAny, but not for being comfy: with ammo
+// plenty, packs behind Downtown's windows and up on its ledges, unable to
+// come, were begun at and gone from sight before the launcher was up - Doom
+// II MAP13, -karpidfa, 16 of 28 volleys, none of them a rocket's worth) -
+// not given up on (IgnoredTarget), not hopeless (LeftAlone), not about to be
+// telefragged (Spared).
+static boolean VolleyAimable(int index)
+{
+    const k_monster_t *monster = &monsters[index];
+
+    return VolleyMember(monster) && monster->shootable
+        && (monster->hitscan || FoughtFar(monster->type) || OnWay(index) || Reaches(index))
+        && !IgnoredTarget(index) && !LeftAlone(index) && !Spared(index);
+}
+
+// The pack the monster (by its place in the list) is one of: those that can
+// be (VolleyMember), each within VOLLEY_SPREAD of another as the blast
+// measures it, chained; the monster first, up to max. Returns how many.
+static int VolleyPack(int seed, int *members, int max)
+{
+    int count = 1, i, j, k;
+
+    members[0] = seed;
+
+    for (k = 0; k < count; ++k)
+    {
+        const k_monster_t *member = &monsters[members[k]];
+
+        for (i = 0; i < num_monsters && count < max; ++i)
+        {
+            if (!VolleyMember(&monsters[i])
+             || AxisDistance(monsters[i].at, member->at) >= VOLLEY_SPREAD)
+            {
+                continue;
+            }
+
+            for (j = 0; j < count && members[j] != i; ++j)
+            {
+            }
+
+            if (j == count)
+            {
+                members[count++] = i;
+            }
+        }
+    }
+
+    return count;
+}
+
+// What a rocket at one of the pack (aim; members, by their places in the
+// list) would do to it: the hit as often as it lands (ShotDamage;
+// ROCKET_DIRECT against a Cyberdemon or a spider mastermind), and its blast
+// on each other one (BlastOn); no more than kills each and a half. And how
+// many of them it would catch.
+static double VolleyDamage(const player_t *player, int aim, const int *members, int count,
+                           int *caught)
+{
+    const weapon_t *weapon = WeaponOf(wp_missile);
+    const k_monster_t *target = &monsters[aim];
+    double direct = ShotDamage(player, weapon, target->distance, target->radius, target);
+    double hit = direct / weapon->damage, total;
+    int k;
+
+    if (target->type == MT_CYBORG || target->type == MT_SPIDER)
+    {
+        direct = hit * ROCKET_DIRECT;
+    }
+
+    total = SDL_min(direct, target->health * 1.5);
+    *caught = direct > 0.0;
+
+    for (k = 0; k < count; ++k)
+    {
+        const k_monster_t *monster = &monsters[members[k]];
+        double share;
+
+        if (members[k] == aim)
+        {
+            continue;
+        }
+
+        share = BlastOn(hit, target, monster);
+
+        if (share > 0.0)
+        {
+            total += SDL_min(share, monster->health * 1.5);
+            ++*caught;
+        }
+    }
+
+    return total;
+}
+
+// The one of the pack (by places in the list) a rocket would do the most
+// at (VolleyDamage), of those it can go at (VolleyAimable); -1 if none.
+// What it would do, and how many of them it would catch.
+static int VolleyAim(const player_t *player, const int *members, int count, double *damage,
+                     int *caught)
+{
+    int best = -1, k;
+
+    *damage = 0.0;
+    *caught = 0;
+
+    for (k = 0; k < count; ++k)
+    {
+        double done;
+        int got;
+
+        if (!VolleyAimable(members[k]))
+        {
+            continue;
+        }
+
+        done = VolleyDamage(player, members[k], members, count, &got);
+
+        if (best < 0 || done > *damage)
+        {
+            best = members[k];
+            *damage = done;
+            *caught = got;
+        }
+    }
+
+    return best;
+}
+
+// The first monster awake within reach of the player that could come at it
+// - not fighting another, one that counts, in sight or not - but one of the
+// pack of the volley on (InVolley); -1 if none.
+static int VolleyNear(double reach)
+{
+    int i;
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        if (monsters[i].awake && !monsters[i].infighting && Kind(monsters[i].type)->cost > 0.0
+         && monsters[i].distance < reach && !InVolley(monster_mobjs[i]))
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// The rockets a volley leaves: those kept for the levels ahead
+// (CARRY_ROCKETS); at a pack with no tough monster in it, those kept for
+// the tough ones (RESERVE_SHARE) too.
+static int VolleyFloor(boolean tough)
+{
+    int floor = K_Condition_ArsenalGoesOn() ? CARRY_ROCKETS : 0;
+
+    return tough ? floor : SDL_max(floor, reserve_rounds[am_misl]);
+}
+
+// Whether one of the pack (by places in the list) was in a volley's pack
+// within VOLLEY_SKIP of its end - any volley's (MAX_VOLLEY_SKIP), not the
+// last only: two packs took turns, three volleys in 4.5 s and no rocket
+// (MAP13).
+static boolean VolleySkipped(const int *members, int count)
+{
+    int j, k;
+
+    for (k = 0; k < count; ++k)
+    {
+        for (j = 0; j < MAX_VOLLEY_SKIP; ++j)
+        {
+            if (volley_skip[j].mo == monster_mobjs[members[k]] && leveltime < volley_skip[j].until)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// The kinds in the pack (by places in the list), for the log: "imp",
+// "imp and cacodemon", "imp, cacodemon and more".
+static void VolleyKinds(const int *members, int count, char *list, int len)
+{
+    int kinds[3];
+    int num_kinds = 0, j, k;
+
+    list[0] = '\0';
+
+    for (k = 0; k < count && num_kinds < arrlen(kinds); ++k)
+    {
+        for (j = 0; j < num_kinds && kinds[j] != monsters[members[k]].type; ++j)
+        {
+        }
+
+        if (j == num_kinds)
+        {
+            kinds[num_kinds++] = monsters[members[k]].type;
+        }
+    }
+
+    for (j = 0; j < SDL_min(num_kinds, 2); ++j)
+    {
+        M_snprintf(list + strlen(list), len - strlen(list), "%s%s",
+                   j == 0 ? "" : num_kinds > 2 ? ", " : " and ", Kind(kinds[j])->name);
+    }
+
+    if (num_kinds > 2)
+    {
+        M_StringConcat(list, " and more", len);
+    }
+}
+
+// Begun at the pack whose best rocket would do the most (VolleyAim), of
+// those VOLLEY_PACK strong with rockets to spare for them (VolleyFloor),
+// the best catching two at least, not skipped (VOLLEY_SKIP), not short for
+// the level's boss (ForBoss); as many planned as its health takes.
+static void BeginVolley(const player_t *player)
+{
+    int members[MAX_VOLLEY], chosen[MAX_VOLLEY];
+    int num_chosen = 0, best_aim = -1, best_caught = 0, best_planned = 0, best_floor = 0;
+    double best_damage = 0.0, best_health = 0.0, nearest = 0.0, furthest = 0.0;
+    char kinds[64];
+    int i, k;
+
+    if (!CanFire(player, WeaponOf(wp_missile)) || escape || retreating || ducking || bfg_pending
+     || K_Condition_Get()->health == K_NEED_CRITICAL)
+    {
+        return;
+    }
+
+    if (volley_in_capacity < num_monsters)
+    {
+        volley_in_capacity = monster_capacity;
+        volley_in = realloc(volley_in, volley_in_capacity * sizeof(*volley_in));
+    }
+
+    memset(volley_in, 0, num_monsters * sizeof(*volley_in));
+
+    for (i = 0; i < num_monsters; ++i)
+    {
+        boolean tough = false, boss = boss_spare >= 1.0;
+        double health = 0.0, damage;
+        int count, aim, caught, floor;
+
+        if (volley_in[i] || !VolleyAimable(i))
+        {
+            continue;
+        }
+
+        count = VolleyPack(i, members, MAX_VOLLEY);
+
+        for (k = 0; k < count; ++k)
+        {
+            const k_monster_t *monster = &monsters[members[k]];
+
+            volley_in[members[k]] = true;
+            health += monster->health;
+            tough |= SpawnHealth(monster->type) >= TOUGH_HEALTH;
+            boss |= !ForBoss(monster);
+        }
+
+        floor = VolleyFloor(tough);
+
+        if (count < VOLLEY_PACK || !boss || player->ammo[am_misl] <= floor
+         || VolleySkipped(members, count))
+        {
+            continue;
+        }
+
+        aim = VolleyAim(player, members, count, &damage, &caught);
+
+        if (aim < 0 || caught < 2 || damage <= best_damage)
+        {
+            continue;
+        }
+
+        best_aim = aim;
+        best_damage = damage;
+        best_caught = caught;
+        best_health = health;
+        best_floor = floor;
+        best_planned = SDL_min((int) ceil(health / damage), player->ammo[am_misl] - floor);
+        num_chosen = count;
+        memcpy(chosen, members, count * sizeof(*chosen));
+    }
+
+    if (best_aim < 0)
+    {
+        return;
+    }
+
+    volley = true;
+    volley_count = num_chosen;
+    volley_aim = monster_mobjs[best_aim];
+    volley_planned = best_planned;
+    volley_fired = 0;
+    volley_each = best_damage;
+    volley_floor = best_floor;
+    volley_seen = leveltime;
+    volley_since = leveltime;
+    volley_shot = leveltime;
+    volley_kills = player->killcount;
+    ++volleys_made;
+    nearest = furthest = monsters[chosen[0]].distance;
+
+    for (k = 0; k < num_chosen; ++k)
+    {
+        volley_members[k] = monster_mobjs[chosen[k]];
+        nearest = SDL_min(nearest, monsters[chosen[k]].distance);
+        furthest = SDL_max(furthest, monsters[chosen[k]].distance);
+    }
+
+    VolleyKinds(chosen, num_chosen, kinds, sizeof(kinds));
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "rocket volley at a pack of %d (%s), %.0f-%.0f units off, "
+          "%.0f health - %d rockets of %d to spare, %.0f each, %d caught", num_chosen, kinds,
+          nearest, furthest, best_health, best_planned, player->ammo[am_misl] - best_floor,
+          best_damage, best_caught);
+}
+
+// Over, for why: logged, its pack skipped for VOLLEY_SKIP.
+static void EndVolley(const player_t *player, const char *why)
+{
+    int j, k;
+
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "rocket volley over after %.1f s - %d of %d fired, %d "
+          "killed; %s", (double) (leveltime - volley_since) / TICRATE, volley_fired,
+          volley_planned, player->killcount - volley_kills, why);
+    volley_killed += player->killcount - volley_kills;
+
+    // Each of it in the slot ending first (VolleySkipped).
+    for (k = 0; k < volley_count; ++k)
+    {
+        int slot = 0;
+
+        for (j = 1; j < MAX_VOLLEY_SKIP; ++j)
+        {
+            if (volley_skip[j].until < volley_skip[slot].until)
+            {
+                slot = j;
+            }
+        }
+
+        volley_skip[slot].mo = volley_members[k];
+        volley_skip[slot].until = leveltime + VOLLEY_SKIP;
+    }
+
+    volley = false;
+    volley_aim = NULL;
+}
+
+// Each tic, before the target is chosen: the rockets a volley on has fired
+// (its ammo going down with the launcher up), its aim picked anew as each
+// leaves, or as the one aimed at is gone or cannot be fired at; broken off
+// as it should be (VOLLEY_PACK). None on: one looked for every VOLLEY_LOOK.
+static void UpdateVolley(const player_t *player)
+{
+    int rockets = player->ammo[am_misl];
+    boolean fired = volley && rockets < volley_rockets && player->readyweapon == wp_missile;
+    int near = VolleyNear(volley ? VOLLEY_CLEAR : VOLLEY_START);
+    int members[MAX_VOLLEY];
+    int count = 0, close = -1, too_near = -1, aim, best, caught, i, k;
+    double damage;
+    char why[128];
+
+    if (fired)
+    {
+        volley_fired += volley_rockets - rockets;
+        volley_rounds += volley_rockets - rockets;
+        volley_shot = leveltime;
+    }
+
+    volley_rockets = rockets;
+
+    if (!volley)
+    {
+        if (near < 0 && leveltime % VOLLEY_LOOK == 0)
+        {
+            BeginVolley(player);
+        }
+
+        return;
+    }
+
+    // The pack as it is; the nearest of it within VOLLEY_CLEAR a rocket can
+    // go at - the one aimed at already while it is so, or the aim would swing
+    // between two coming - and one there too near for any (RocketMinTo; a
+    // lost soul in sight, within SOUL_CLEAR: no rocket at all then, SoulNear).
+    aim = IndexOf(volley_aim);
+
+    for (k = 0; k < volley_count; ++k)
+    {
+        const k_monster_t *monster;
+
+        i = IndexOf(volley_members[k]);
+
+        if (i < 0)
+        {
+            continue;
+        }
+
+        members[count++] = i;
+        monster = &monsters[i];
+
+        if (!monster->awake || monster->infighting || monster->distance >= VOLLEY_CLEAR)
+        {
+            continue;
+        }
+
+        if (monster->distance - monster->radius - ROCKET_RADIUS < RocketMinTo(player, monster)
+         || (monster->type == MT_SKULL && monster->visible && monster->distance < SOUL_CLEAR))
+        {
+            too_near = i;
+        }
+        else if (VolleyAimable(i)
+              && (close < 0 || (close != aim
+                                && (i == aim || monster->distance < monsters[close].distance))))
+        {
+            close = i;
+        }
+    }
+
+    why[0] = '\0';
+
+    if (aim >= 0 && VolleyAimable(aim))
+    {
+        volley_seen = leveltime;
+    }
+
+    if (volley_fired >= volley_planned)
+    {
+        M_snprintf(why, sizeof(why), "all fired");
+    }
+    else if (count == 0)
+    {
+        M_snprintf(why, sizeof(why), "the pack is dead");
+    }
+    else if (rockets <= volley_floor)
+    {
+        M_snprintf(why, sizeof(why), "down to the %d rockets kept", volley_floor);
+    }
+    else if (near >= 0)
+    {
+        M_snprintf(why, sizeof(why), "the %s came within %.0f units", monsters[near].name,
+                   monsters[near].distance);
+    }
+    else if (too_near >= 0)
+    {
+        M_snprintf(why, sizeof(why), "the %s of the pack came too near for rockets, %.0f units "
+                   "off", monsters[too_near].name, monsters[too_near].distance);
+    }
+    else if (K_Condition_Get()->health == K_NEED_CRITICAL)
+    {
+        M_snprintf(why, sizeof(why), "health CRITICAL");
+    }
+    else if (escape)
+    {
+        M_snprintf(why, sizeof(why), "%s", escape_why);
+    }
+    else if (retreating)
+    {
+        M_snprintf(why, sizeof(why), "retreating");
+    }
+    else if (leveltime - volley_shot >= VOLLEY_STALL)
+    {
+        M_snprintf(why, sizeof(why), "no rocket fired in %d s", VOLLEY_STALL / TICRATE);
+    }
+    else if (close >= 0)
+    {
+        // One of the pack running at the player: cleared first, the rest
+        // after (the user: "clear it with a rocket ... and keep pushing
+        // rockets into the rest of the pack").
+        if (monster_mobjs[close] != volley_close)
+        {
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "the %s of the pack is coming, %.0f units off - the "
+                  "volley's rockets at it first", monsters[close].name, monsters[close].distance);
+        }
+
+        volley_close = monster_mobjs[close];
+        volley_aim = volley_close;
+        volley_seen = leveltime;
+    }
+    else if (aim < 0 || fired || !VolleyAimable(aim))
+    {
+        // Whether the pack is still worth it is judged as a rocket leaves,
+        // or the one aimed at dies: one gone from sight only hands the aim
+        // on (MAP13: the best gone behind a wall, the next best's rocket
+        // judged half as good, the volley over in 0.2 s).
+        boolean judged = aim < 0 || fired;
+
+        best = VolleyAim(player, members, count, &damage, &caught);
+
+        if (best >= 0 && judged && count < 2)
+        {
+            M_snprintf(why, sizeof(why), "one of the pack left");
+        }
+        else if (best >= 0 && judged
+              && (caught < 2 || damage < volley_each * VOLLEY_SPREAD_SHARE))
+        {
+            M_snprintf(why, sizeof(why), "the pack spread out - the best rocket would catch %d, "
+                       "%.0f of the %.0f each was planned to", caught, damage, volley_each);
+        }
+        else if (best >= 0)
+        {
+            volley_aim = monster_mobjs[best];
+            volley_seen = leveltime;
+        }
+        else if (leveltime - volley_seen >= VOLLEY_LOST)
+        {
+            M_snprintf(why, sizeof(why), "none of the pack to fire at");
+        }
+    }
+
+    if (why[0] != '\0')
+    {
+        EndVolley(player, why);
+    }
 }
 
 // Whether the pistol is right for the target: far off with little health
@@ -4513,6 +5176,14 @@ static void ChooseWeapon(const player_t *player)
                     ? SWITCH_TICS : SWITCH_WAIT))))
     {
         current = best;
+    }
+
+    // A volley on, at the one its next rocket goes at: the rocket launcher,
+    // whatever is kept from it or rates better (VOLLEY_PACK).
+    if (volley && target_mo == volley_aim && CanFire(player, WeaponOf(wp_missile)))
+    {
+        current = WeaponOf(wp_missile);
+        can_hurt = true;
     }
 
     if (current != NULL)
@@ -5636,9 +6307,15 @@ static int DodgeWay(const player_t *player, k_vec2_t velocity, boolean sidestep,
 // A target to stop for: one some weapon in hand can hurt, in sight for a
 // while, awake and near enough to matter (asleep ones are targets only when
 // close anyway), and one that can come at the player, a gunman, or comfy.
+// And the one a volley's next rocket goes at, however far (VOLLEY_PACK).
 static boolean WorthFighting(void)
 {
     const k_monster_t *target;
+
+    if (volley && status.target >= 0 && target_mo == volley_aim)
+    {
+        return true;
+    }
 
     if (status.target < 0 || !can_hurt || sighted < SIGHTED_TICS)
     {
@@ -8032,6 +8709,16 @@ void K_Combat_Reset(void)
     escape = false;
     memset(reserve, 0, sizeof(reserve));
     memset(carry, 0, sizeof(carry));
+    memset(reserve_rounds, 0, sizeof(reserve_rounds));
+    volley = false;
+    volley_aim = NULL;
+    volley_close = NULL;
+    volley_count = 0;
+    volley_rockets = 0;
+    memset(volley_skip, 0, sizeof(volley_skip));
+    volleys_made = 0;
+    volley_rounds = 0;
+    volley_killed = 0;
     memset(beats, 0, sizeof(beats));
     needed = -1;
     fight_needed = false;
@@ -8160,6 +8847,11 @@ void K_Combat_Tick(int driving)
         retreating = false;
         peeking = false;
 
+        if (volley)
+        {
+            EndVolley(player, "the player died");
+        }
+
         // Not when the death ended the level (E1M8's exit floor).
         if (!status.died && gameaction != ga_completed)
         {
@@ -8193,6 +8885,7 @@ void K_Combat_Tick(int driving)
         UpdateOutmatched(player);
         UpdateReserve(player);
         UpdateBlocker(me);
+        UpdateVolley(player);
         ChooseTarget(player);
         CountMisses(player);
         ChooseWeapon(player);
@@ -8225,6 +8918,12 @@ void K_Combat_Tick(int driving)
     {
         M_snprintf(status.text, sizeof(status.text), "shooting the barrel at (%.0f,%.0f) - %s",
                    status.barrel_at.x, status.barrel_at.y, barrel_reason);
+    }
+    else if (status.target >= 0 && volley && target_mo == volley_aim)
+    {
+        M_snprintf(status.text, sizeof(status.text), "rocket volley at a pack of %d, %d of %d "
+                   "fired - the %s, %.0f units", volley_count, volley_fired, volley_planned,
+                   monsters[status.target].name, monsters[status.target].distance);
     }
     else if (status.target >= 0)
     {
@@ -8718,7 +9417,13 @@ void K_Combat_Fire(int tic, k_command_t *command)
             command->change = 1;
             command->weapon = WeaponOf(wanted)->slot;
             last_switch = leveltime;
-            if (wanted_group > 0)
+            if (volley && target_mo == volley_aim && wanted == wp_missile)
+            {
+                K_Log(K_LOG_COMBAT, K_LOG_INFO, "bringing up the %s for the %s, %.0f units off - "
+                      "a volley at a pack of %d", WeaponOf(wanted)->name, monster->name,
+                      monster->distance, volley_count);
+            }
+            else if (wanted_group > 0)
             {
                 K_Log(K_LOG_COMBAT, K_LOG_INFO, "bringing up the %s for the %s, %.0f units off - "
                       "a group shot, %d of them", WeaponOf(wanted)->name, monster->name,
@@ -9008,6 +9713,9 @@ void K_Combat_LogSummary(void)
           "seen in time to dodge (%d health, %d foreseen and taken); stepped out of their way "
           "%d times out of fights", status.missile_hits, status.missile_damage,
           status.dodgeable_hits, status.dodgeable_damage, status.foreseen_hits, status.dodges);
+    K_Log(K_LOG_COMBAT, K_LOG_INFO, "rocket volleys this level: %d, %d rockets fired, %d killed "
+          "meanwhile", volleys_made, volley_rounds,
+          volley_killed + (volley ? players[consoleplayer].killcount - volley_kills : 0));
 }
 
 int K_Combat_Move(double *vx, double *vy)

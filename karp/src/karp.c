@@ -1,8 +1,9 @@
 //
 // DESCRIPTION:
 //	Karp glue: the -autoplay / -karpconsole / -quitonexit / -karpsalt /
-//	-karpexit / -karpattitude / -karpdemo / -karpoverlay switches, lifecycle
-//	and the SDL event filter that gives the console its own events.
+//	-karpexit / -karpattitude / -karpdemo / -karpoverlay / -karpidfa
+//	switches, lifecycle and the SDL event filter that gives the console its
+//	own events.
 //
 
 #include <stdlib.h>
@@ -44,6 +45,7 @@ static boolean autoplay_enabled;
 static boolean console_enabled;
 static boolean console_open;
 static boolean overlay_enabled;
+static boolean idfa_enabled;
 static boolean quit_on_exit;
 static boolean level_completed;     // reported for this level
 static int world_tic = -1;          // leveltime Karp last looked at the level
@@ -179,6 +181,53 @@ void K_EnableOverlay(void)
     K_Overlay_Enable();
 }
 
+void K_EnableIdfa(void)
+{
+    InitKarp();
+    idfa_enabled = true;
+
+    K_Log(K_LOG_SYS, K_LOG_INFO, "every level begun with IDFA's arsenal (-karpidfa)");
+}
+
+// What crispy's IDFA gives (st_stuff.c): blue armour at 200, a backpack,
+// every weapon the game has - vanilla's: the super shotgun in Doom II
+// only, the plasma rifle and the BFG not in the shareware - and full ammo.
+// No keys (IDKFA): the bot goes for them as ever.
+static void GiveIdfa(void)
+{
+    player_t *player = &players[consoleplayer];
+    int i;
+
+    player->armorpoints = 200;
+    player->armortype = 2;
+
+    if (!player->backpack)
+    {
+        for (i = 0; i < NUMAMMO; ++i)
+        {
+            player->maxammo[i] *= 2;
+        }
+
+        player->backpack = true;
+    }
+
+    for (i = 0; i < NUMWEAPONS; ++i)
+    {
+        if ((i != wp_supershotgun || gamemode == commercial)
+         && ((i != wp_plasma && i != wp_bfg) || gamemode != shareware))
+        {
+            player->weaponowned[i] = true;
+        }
+    }
+
+    for (i = 0; i < NUMAMMO; ++i)
+    {
+        player->ammo[i] = player->maxammo[i];
+    }
+
+    K_Log(K_LOG_SYS, K_LOG_INFO, "-karpidfa: every weapon, a backpack, full ammo, 200 armour");
+}
+
 boolean K_AutoplayEnabled(void)
 {
     return autoplay_enabled;
@@ -275,6 +324,14 @@ void K_LevelLoaded(void)
     if (!autoplay_enabled && !console_enabled)
     {
         return;
+    }
+
+    // At each level's start - the player as vanilla left it, a pistol start
+    // or a respawn; and from a savegame (demo mode retries a level from the
+    // one saved at its start).
+    if (idfa_enabled && players[consoleplayer].mo != NULL)
+    {
+        GiveIdfa();
     }
 
     // The specials first: the graph's jump search asks where lines send

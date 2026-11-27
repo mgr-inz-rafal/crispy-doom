@@ -40,6 +40,11 @@ void K_EnableDemo(void);
 // the game (k_overlay.h).
 void K_EnableOverlay(void);
 
+// -karpidfa: every level begins with what crispy's IDFA cheat gives - every
+// weapon, a backpack, full ammo, blue armour at 200; no keys. For watching
+// the bot take on maps far beyond a pistol start (custom maps).
+void K_EnableIdfa(void);
+
 // Right after I_InitGraphics: opens the console, sets the overlay up.
 void K_PostVideoInit(void);
 

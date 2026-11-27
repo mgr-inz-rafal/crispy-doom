@@ -2440,6 +2440,19 @@ void D_DoomMain (void)
         K_EnableOverlay(); // [Karp]
     }
 
+    //!
+    // @category game
+    //
+    // [Karp] Every level begins with what the IDFA cheat gives: every
+    // weapon, a backpack, full ammo and blue armour at 200 - no keys. For
+    // watching the bot take on much harder maps (custom ones).
+    //
+
+    if (M_CheckParm("-karpidfa"))
+    {
+        K_EnableIdfa(); // [Karp]
+    }
+
     // Undocumented:
     // Invoked by setup to test the controls.
 
