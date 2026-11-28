@@ -28,7 +28,10 @@
 //	and cells are kept for the tough monsters left (barons, arch-viles,
 //	mancubi, the Cyberdemon, the spider mastermind) while there are no more
 //	than their health takes, and some for the levels ahead: the weaker ones
-//	get the other guns, unless they press the player. Nav
+//	get the other guns, unless they press the player - or, with rockets to
+//	spare and health to spend, the player is daring (DARING_HEALTH): a
+//	little of its own blast taken, the weak ones get rockets too, but one
+//	alone never has the launcher brought up for it. Nav
 //	faces the target wherever it
 //	does not need the facing itself, and the weapon fires once the facing
 //	after a command's turn is on the target.
@@ -61,7 +64,9 @@
 //	is about to move as that cannot tell (ducking, retreating, a run); and
 //	only at tough monsters, or bunched ones, unless the player is
 //	invulnerable. A BFG ball's spray leaves from where the player stands
-//	once it has burst: till then its burst is kept in sight (BFG_HOLD).
+//	once it has burst: from the press till then the player is committed to
+//	it - what the spray would find kept in sight (BFG_HOLD), no duck begun
+//	but from what dodging cannot help or could kill (BFG_SUFFER).
 //
 //	Rocket volleys (plan, 7.8): at an awake pack far off, any monsters in
 //	it, with nothing near the player, the rockets to spare - beyond those
@@ -536,12 +541,14 @@ extern void A_CyberAttack();
 // at the player and meet the rocket halfway. All of it unless invulnerable
 // for INVULN_LEFT tics more at least. And rockets are dear: against a
 // monster with no more than ROCKET_HEALTH left and alone (no other within
-// BUNCHED of it, where the blast would get it too) they rate ROCKET_SHARE
+// BUNCHED of it, where the blast would get it too) - any of the weak tier
+// while daring (DARING_HEALTH) - they rate ROCKET_SHARE
 // of their damage in hand, and are never brought up for one while another
 // gun can fire - no rocket for a zombieman or an imp (the user; E3M3: up
 // for imps 650 to 800 off, the shotgun rating little there, and away again
 // within a second or two, four times in a minute). Nor without room to stay
 // of use (RocketRoom): the target ROCKET_ROOM beyond where rockets stop, and
+// beyond its run at the player over the switch (SWITCH_RAISE), and
 // no other monster that can come at the player that near, which would soon
 // be the target (the user: up for a baron with a demon in the way, the
 // shotgun back at once, the demon biting all the while). The
@@ -575,6 +582,33 @@ extern void A_CyberAttack();
 #define INVULN_LEFT 70
 #define ROCKET_HEALTH 100
 
+// The room counts the target's own run at the player over the switch, while
+// it closes in (Track): SWITCH_RAISE tics - the gun in hand lowered and the
+// launcher raised, 16 tics each (A_Lower, A_Raise), and the 8 before the
+// rocket leaves - at its kind's chase speed (E2, a tally: 34 switches to the
+// launcher and back, nearly all for a cacodemon or a demon 300-400 off that
+// was inside the safe distance by the time the launcher was up).
+#define SWITCH_RAISE 40
+
+// Daring with rockets (the user, 2026-11-28: "I'm tempted to use rockets due
+// to their damage as long as I have reserve ... I have health OR I know
+// there is a health to collect on the map"; "let's be more bold but try to
+// stay safe ... to just see more rockets used in the run, not the runs
+// being dominated by rockets"): while more rockets are held than are kept
+// (VolleyFloor: for the levels ahead, for the tough monsters left) and
+// health is OK - or LOW, the health lying in reach, less what its guards
+// would cost, bringing it to DARING_HEALTH (the OK mark) - never CRITICAL.
+// Then the weak monsters get rockets too (KeptFrom) - but one alone, any of
+// the weak tier, never has the launcher brought up for it, only finished
+// with it in hand ("if I have rocket launcher selected ... and there is just
+// a single zombieman left, we can finish it with rocket no problem. but do
+// not select rocket launcher explicitly for a single zombieman/imp") - and
+// every rocket may burst as near as at a tough monster with the player
+// sturdy, the armour not needed (STURDY_SAFE: "just 24" of its own blast).
+// Never one whose blast could kill (BlastCouldKill), nor with a lost soul
+// near (SoulNear).
+#define DARING_HEALTH 85
+
 // The BFG (the user, Doom II MAP15: a ball fired at a baron in the tower
 // room, then the bot turned for a pain elemental): its 40 tracers leave from
 // where the player stands 16 tics after the ball has burst (A_BFGSpray, on
@@ -591,10 +625,32 @@ extern void A_CyberAttack();
 // the ball's path clear (BallClear; MAP10: through a window at the
 // Cyberdemon, the ball burst on its frame 39 to 55 units off, the spray
 // finding nothing).
+// From the press to the spray the player is committed to it (the user,
+// 2026-11-28: "they shoot BFG and try to keep the eye-contact with monsters
+// until the ball explodes and rays do the damage. So instead of hiding
+// humans usually try to dance and avoid the bullets"; Doom II MAP13 with
+// -karpidfa: a ball at a pack of revenants, a duck from a revenant missile
+// behind a wall, the spray finding nothing; a press with a duck due, the
+// ball left into the wall ducked behind, 28 off): no duck is begun - the
+// fight steps out of the way of what flies at it instead - but from an
+// arch-vile's flame, which no step escapes, from the spider mastermind's
+// bullets beyond BFG_SUFFER ("from a distance, we'll be getting serious
+// damage for a couple of seconds. But if the shot is from a moderately
+// close distance it's better to suck the damage and let the traces hit"),
+// and from a blow whose worst hit, the armour's share taken, could kill
+// (DuckDespiteBfg); the ball is not pressed while one of those is due
+// within its wind-up, nor while ducking, retreating or running for an item.
+// And a fight step scores BFG_HOLD less by the share of what the spray
+// would find it loses sight of: where the ball bursts, and the monsters in
+// sight within the tracers' cone now (BfgKept).
+// Not done, an idea for later (the user): the ball fired into a wall close
+// by, the player stepping out of cover for the spray only.
 #define BFG_CONE (40.0 * K_PI / 180.0)
 #define BFG_REACH 960.0
 #define BFG_HOLD 3.0
 #define BFG_NEAR 32.0
+#define BFG_SUFFER 512.0
+#define MAX_BFG_CONE 16
 
 // Invulnerable for INVULN_BOLD more at least (the user: plan to have it for
 // the fight), the target is fought as far as TARGET_REACH, far and
@@ -1570,6 +1626,7 @@ static const mobj_t *bfg_logged;
 // on (HARD_LINGER), and when the player was last beset or crowded
 // (BESET_LINGER, CARRY_CROWD).
 static boolean bold;
+static boolean daring;                  // with rockets (DARING_HEALTH), this tic
 static int hard_seen;
 static int beset_seen;
 static int crowd_seen;
@@ -1676,6 +1733,8 @@ static int hold_shut_until;
 // it is come into, and from which cell.
 static boolean ducking;
 static boolean duck_soon;
+static boolean bfg_duck_soon;           // within a BFG ball's wind-up (DuckDespiteBfg)
+static const mobj_t *bfg_stay_from;     // the blow last not ducked from for it, logged
 static k_vec2_t duck_points[DUCK_POINTS];
 static int duck_num_points;
 static int duck_next;
@@ -2473,14 +2532,16 @@ static boolean InVolley(const mobj_t *mo)
 // larger of the x and y distances): ROCKET_SAFE; sturdy, at a monster that
 // is not weak, or one of a volley's pack (the user: a demon of it running
 // at the player is cleared with a rocket, "maybe absorbing some damage"),
+// or at any while daring (DARING_HEALTH, the armour not needed then),
 // STURDY_SAFE.
 static double SafeBurst(const player_t *player, const k_monster_t *monster)
 {
     boolean pack = monster != NULL && monster >= monsters && monster < monsters + num_monsters
                 && InVolley(monster_mobjs[monster - monsters]);
 
-    return monster != NULL && (SpawnHealth(monster->type) > WEAK_HEALTH || pack)
-        && player->health >= STURDY_HEALTH && player->armorpoints >= STURDY_ARMOUR
+    return monster != NULL && (SpawnHealth(monster->type) > WEAK_HEALTH || pack || daring)
+        && player->health >= STURDY_HEALTH
+        && (player->armorpoints >= STURDY_ARMOUR || daring)
            ? STURDY_SAFE : ROCKET_SAFE;
 }
 
@@ -2696,6 +2757,59 @@ static boolean BfgSees(k_vec2_t from, double gun)
         && (Distance(from, at) < BFG_NEAR
             || fabs(Wrap(atan2(at.y - from.y, at.x - from.x) - bfg_angle)) <= BFG_CONE)
         && K_Sight_Aim(from.x, from.y, gun, at.x, at.y, bottom, top);
+}
+
+// The monsters the spray of the BFG ball pending would find from where the
+// player is now: in the shots' reach, within BFG_CONE of the ball's way and
+// BFG_REACH; by their places in the list, up to max. None when none is
+// pending.
+static int BfgCone(k_vec2_t me, int *cone, int max)
+{
+    int count = 0, i;
+
+    for (i = 0; bfg_pending && i < num_monsters && count < max; ++i)
+    {
+        const k_monster_t *monster = &monsters[i];
+
+        if (monster->shootable && Kind(monster->type)->cost > 0.0
+         && monster->distance <= BFG_REACH
+         && fabs(Wrap(atan2(monster->at.y - me.y, monster->at.x - me.x) - bfg_angle))
+            <= BFG_CONE)
+        {
+            cone[count++] = i;
+        }
+    }
+
+    return count;
+}
+
+// The share of what the spray of the BFG ball pending would find that a
+// player at `from`, its gun at `gun`, would keep in sight: where the ball
+// bursts (BfgSees), and each of those in the cone now (BfgCone) still in it
+// from there. 1 when none is pending.
+static double BfgKept(k_vec2_t from, double gun, const int *cone, int count)
+{
+    int seen, k;
+
+    if (!bfg_pending)
+    {
+        return 1.0;
+    }
+
+    seen = BfgSees(from, gun);
+
+    for (k = 0; k < count; ++k)
+    {
+        const k_monster_t *monster = &monsters[cone[k]];
+
+        seen += Distance(from, monster->at) <= BFG_REACH
+             && fabs(Wrap(atan2(monster->at.y - from.y, monster->at.x - from.x) - bfg_angle))
+                <= BFG_CONE
+             && K_Sight_Aim(from.x, from.y, gun, monster->at.x, monster->at.y, monster->z,
+                            monster->z + monster->height);
+    }
+
+    return (double) seen / (count + 1);
 }
 
 // The tic before a spray: what it will find, logged.
@@ -4103,7 +4217,8 @@ static boolean SpareGun(const player_t *player)
 // has ammo to spare (SpareGun), but for a fight the player is pressed in
 // (UnderPressure). The carry counts what the next shot would leave: a BFG
 // ball's 40 cells took 134 down to 94 (E3M3, at a lone cacodemon), so the
-// BFG is kept below 160.
+// BFG is kept below 160. Daring (DARING_HEALTH), rockets are kept from the
+// weak monsters no more.
 static boolean KeptFrom(const player_t *player, const weapon_t *weapon,
                         const k_monster_t *monster)
 {
@@ -4111,7 +4226,7 @@ static boolean KeptFrom(const player_t *player, const weapon_t *weapon,
     int spawn = SpawnHealth(monster->type);
     boolean carried = K_Condition_ArsenalGoesOn()
                    && (player->ammo[ammo] - weapon->shot < CarryOf(ammo)
-                       || spawn <= WEAK_HEALTH);
+                       || (spawn <= WEAK_HEALTH && !(ammo == am_misl && daring)));
 
     return Reserved(weapon) && (spawn < TOUGH_HEALTH || ForBoss(monster))
         && ((reserve[ammo] && !Beset() && LowGun(player, spawn <= WEAK_HEALTH))
@@ -4800,6 +4915,44 @@ static void UpdateVolley(const player_t *player)
     }
 }
 
+// Each tic: whether daring with rockets (DARING_HEALTH) - the health lying in
+// reach counted while health is LOW: each health item the player may go
+// out of its way for (k_items.h: reach), what it would give less what its
+// guards would cost; logged as it begins and ends.
+static void UpdateDaring(const player_t *player)
+{
+    const k_conditionstatus_t *condition = K_Condition_Get();
+    int floor = VolleyFloor(false);
+    double lying = 0.0;
+    boolean was = daring;
+    int i;
+
+    if (condition->health == K_NEED_LOW)
+    {
+        for (i = 0; i < K_Items_Count(); ++i)
+        {
+            const k_item_t *item = K_Items_Get(i);
+
+            if (item->kind == K_ITEM_HEALTH && item->present && item->reach > 0.0)
+            {
+                lying += SDL_max(0.0, item->worth - item->danger);
+            }
+        }
+    }
+
+    daring = player->weaponowned[wp_missile] && player->ammo[am_misl] > floor
+          && (condition->health == K_NEED_OK
+              || (condition->health == K_NEED_LOW && player->health + lying >= DARING_HEALTH));
+
+    if (daring != was && player->weaponowned[wp_missile])
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s with rockets - %d in hand, %d kept; health %s (%d), "
+              "%.0f more lying in reach", daring ? "daring" : "no longer daring",
+              player->ammo[am_misl], floor, K_Condition_NeedName(condition->health),
+              player->health, lying);
+    }
+}
+
 // Whether the pistol is right for the target: far off with little health
 // left, not closing in, the area clear a while; or nothing better can hurt
 // it - rockets and cells kept from it aside.
@@ -4986,13 +5139,24 @@ static boolean RocketsFor(const k_monster_t *monster)
     return monster->type != MT_SKULL && (monster->health > ROCKET_HEALTH || Bunched(monster));
 }
 
+// How fast a kind runs at its chase, in map units a tic: its speed each
+// A_Chase (P_Move), one a step of its see state.
+static double ChaseSpeed(int type)
+{
+    const mobjinfo_t *info = &mobjinfo[type];
+    int tics = info->seestate > S_NULL ? states[info->seestate].tics : 0;
+
+    return tics > 0 ? (double) info->speed / tics : 0.0;
+}
+
 // Whether the rocket launcher has room to stay of use against the target if
 // brought up (ROCKET_ROOM): the target that far beyond where rockets stop
-// (ShotDamage), and no other awake monster that can come at the player
-// within that of where they stop.
+// (ShotDamage) - and the more by its run at the player over the switch
+// while it closes in (SWITCH_RAISE) - and no other awake monster that can
+// come at the player within that of where they stop.
 static boolean RocketRoom(const player_t *player, const k_monster_t *target)
 {
-    double gain = 1.0;
+    double gain = 1.0, run = 0.0;
     int i;
 
     if (target->distance > 1e-6)
@@ -5001,7 +5165,12 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
                         (target->at.y - ToMap(player->mo->y)) / target->distance);
     }
 
-    if (target->distance - target->radius - ROCKET_RADIUS
+    if (status.target >= 0 && target == &monsters[status.target] && target->awake && closing)
+    {
+        run = ChaseSpeed(target->type) * SWITCH_RAISE;
+    }
+
+    if (target->distance - target->radius - ROCKET_RADIUS - run
         < RocketMinTo(player, target) / gain + ROCKET_ROOM)
     {
         return false;
@@ -5025,7 +5194,8 @@ static boolean RocketRoom(const player_t *player, const k_monster_t *target)
 
 // Rating, less for the last resorts: the pistol where it is not right, the
 // bare fist always, any melee against a tough monster, rockets at one weak
-// monster alone (none to bring them up while another gun can fire); none
+// monster alone - any of the weak tier while daring (DARING_HEALTH) - none
+// to bring them up while another gun can fire; none
 // for rockets at a lost soul, nor to bring them up without room while
 // another gun can fire (RocketRoom), nor for melee where it is not worth it
 // (MeleeWorth), nor for rockets and cells kept for the tough monsters
@@ -5083,8 +5253,9 @@ static double Preference(const player_t *player, const weapon_t *weapon,
     {
         rating = 0.0;
     }
-    else if (weapon->weapon == wp_missile && monster->health <= ROCKET_HEALTH
-          && !Bunched(monster) && !group)
+    else if (weapon->weapon == wp_missile && !Bunched(monster) && !group
+          && (monster->health <= ROCKET_HEALTH
+              || (daring && SpawnHealth(monster->type) <= WEAK_HEALTH)))
     {
         rating *= in_hand || !OtherGun(player, true) ? ROCKET_SHARE : 0.0;
     }
@@ -5969,6 +6140,8 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
     int k, i, s;
     k_vec2_t was = { 0.0, 0.0 };
     double was_speed = sqrt(move.x * move.x + move.y * move.y);
+    int bfg_cone[MAX_BFG_CONE];
+    int num_bfg_cone = BfgCone(me, bfg_cone, MAX_BFG_CONE);
 
     // The way taken the tic before (MOVE_KEEP).
     if (moved_tic == leveltime - 1 && was_speed > 1e-6)
@@ -6110,11 +6283,9 @@ static void ChooseMove(const player_t *player, int round, boolean standoff)
             score -= 1.5;
         }
 
-        // The BFG's spray to come, whatever the target now.
-        if (!BfgSees(far, gun))
-        {
-            score -= BFG_HOLD;
-        }
+        // The BFG's spray to come, whatever the target now: by the share of
+        // what it would find lost from there.
+        score -= BFG_HOLD * (1.0 - BfgKept(far, gun, bfg_cone, num_bfg_cone));
 
         if (chase)
         {
@@ -8305,6 +8476,34 @@ static boolean FindDuckSpot(const player_t *player, const duckfrom_t *from, k_ve
     return best < 1e30 || CoverByCells(player, from, points, num_points, spot_tics);
 }
 
+// Whether the blow is ducked from with the BFG's spray to come (BFG_SUFFER):
+// an arch-vile's flame; the spider mastermind's bullets from beyond
+// BFG_SUFFER; one whose worst hit - a missile's 8 times its damage, a
+// Cyberdemon's rocket with its burst, the spider's three bullets - less the
+// armour's share, could kill.
+static boolean DuckDespiteBfg(const player_t *player, const duckfrom_t *from)
+{
+    k_vec2_t me = { ToMap(player->mo->x), ToMap(player->mo->y) };
+    int type = from->mo->type;
+    double worst = from->missile ? 8.0 * mobjinfo[type].damage
+                 : type == MT_BABY ? 8.0 * mobjinfo[MT_ARACHPLAZ].damage
+                 : type == MT_CYBORG ? 8.0 * mobjinfo[MT_ROCKET].damage + BLAST
+                 : type == MT_SPIDER ? 3.0 * 15.0 : 0.0;
+
+    if (type == MT_VILE || (type == MT_SPIDER && Distance(me, from->at) > BFG_SUFFER))
+    {
+        return true;
+    }
+
+    if (player->armortype)
+    {
+        worst -= SDL_min(floor(worst / (player->armortype == 1 ? 3.0 : 2.0)),
+                         (double) player->armorpoints);
+    }
+
+    return worst >= player->health;
+}
+
 static void StopDuck(const char *why)
 {
     if (!ducking)
@@ -8336,6 +8535,7 @@ static void UpdateDuck(const player_t *player)
     int num_points, tics;
 
     duck_soon = false;
+    bfg_duck_soon = false;
 
     if (!coming)
     {
@@ -8369,6 +8569,17 @@ static void UpdateDuck(const player_t *player)
             M_StringCopy(duck_what, from.name, sizeof(duck_what));
         }
     }
+    else if (coming && bfg_pending && !DuckDespiteBfg(player, &from))
+    {
+        // Committed to the BFG's spray (BFG_SUFFER): the fight steps out of
+        // the way of it instead.
+        if (from.mo != bfg_stay_from)
+        {
+            bfg_stay_from = from.mo;
+            K_Log(K_LOG_COMBAT, K_LOG_INFO, "the BFG's spray to come - not ducking from the %s "
+                  "(%s in %d tics), dodging instead", from.name, from.blow, from.tics);
+        }
+    }
     else if (coming && (K_Nav_CanPause() || battle || holding))
     {
         if (from.mo != plan_from || leveltime - plan_tic >= DUCK_REPLAN)
@@ -8379,9 +8590,13 @@ static void UpdateDuck(const player_t *player)
         }
 
         // No rocket pressed now leaves before the duck takes the player
-        // behind the wall it would meet (K_Combat_Fire).
+        // behind the wall it would meet (K_Combat_Fire); nor a BFG ball, with
+        // a duck due within its wind-up that its spray would not hold off
+        // (DuckDespiteBfg).
         duck_soon = plan_found
                  && from.tics <= plan_tics + DUCK_SLACK + WeaponOf(wp_missile)->lead;
+        bfg_duck_soon = plan_found && from.tics <= plan_tics + DUCK_SLACK + WeaponOf(wp_bfg)->lead
+                     && DuckDespiteBfg(player, &from);
 
         // Shooting on till the time left is the time to get there; then
         // from here (the fight has moved the player since).
@@ -8602,6 +8817,13 @@ static void UpdatePeek(const player_t *player)
         return;
     }
 
+    // The BFG's spray to come (BFG_SUFFER): the spot fought from stays as it
+    // is (MAP13: a new one 224 off, run to, the burst lost from sight).
+    if (bfg_pending)
+    {
+        return;
+    }
+
     target = &monsters[status.target];
     mo = monster_mobjs[status.target];
 
@@ -8747,6 +8969,7 @@ void K_Combat_Reset(void)
     }
 
     bold = false;
+    daring = false;
     hard_seen = -HARD_LINGER - 1;
     beset_seen = -BESET_LINGER - 1;
     crowd_seen = -BESET_LINGER - 1;
@@ -8794,6 +9017,8 @@ void K_Combat_Reset(void)
     hold_shut_area = -1;
     status.hold_area = -1;
     ducking = false;
+    bfg_duck_soon = false;
+    bfg_stay_from = NULL;
     duck_from = NULL;
     duck_none_from = NULL;
     plan_from = NULL;
@@ -8884,6 +9109,7 @@ void K_Combat_Tick(int driving)
         UpdateOnWay(me);
         UpdateOutmatched(player);
         UpdateReserve(player);
+        UpdateDaring(player);
         UpdateBlocker(me);
         UpdateVolley(player);
         ChooseTarget(player);
@@ -9462,6 +9688,15 @@ void K_Combat_Fire(int tic, k_command_t *command)
     }
 
     if ((weapon->weapon == wp_missile || weapon->weapon == wp_bfg) && !WeaponReady(player))
+    {
+        return;
+    }
+
+    // A BFG ball only where its spray can be stayed for (BFG_SUFFER): not
+    // while ducking, with a duck due within its wind-up that the spray would
+    // not hold off, retreating or running for an item (MAP13: pressed with a
+    // duck due, the ball left into the wall ducked behind, 28 off).
+    if (weapon->weapon == wp_bfg && (ducking || bfg_duck_soon || retreating || escape))
     {
         return;
     }

@@ -5051,6 +5051,68 @@ Who controls the player in a fight (the user's model):
       is - "we don't need to force shooting at packs", it fires when it can. Salt 7 died twice
       on MAP13's yellow-key ledge (1478,-2846) in the runs before, standing 11 and 46 s after the
       key with imps shooting from where they could not come - not the volleys; open.
+  - **Daring with rockets** (the user, 2026-11-28, from playing: "I'm tempted to use rockets due
+    to their damage as long as I have reserve ... I have health OR I know there is a health to
+    collect on the map ... I'm happily shooting rockets around, even if I get hurt"; for the bot
+    "more bold but try to stay safe ... to just see more rockets used in the run, not the runs
+    being dominated by rockets"). Done (`k_combat.c`: `DARING_HEALTH`, `UpdateDaring`,
+    `SWITCH_RAISE`, `ChaseSpeed`):
+    - **When:** more rockets held than are kept (the 12 for the levels ahead, the tough
+      monsters' reserve: the user's "plenty means above reserve"), and health OK - or LOW with
+      the health lying in reach (each health item the bot may go out of its way for, what it
+      would give less what its guards would cost) bringing it to 85, the OK mark; never
+      CRITICAL. Logged as it begins and ends: "daring with rockets - 31 in hand, 12 kept; health
+      OK (100), 0 more lying in reach".
+    - **What changes:** the weak monsters get rockets too (the weak-monster rule of the carry is
+      lifted for rockets); but one alone - the whole weak tier now, demons and spectres too, not
+      only those with 100 health or less - never has the launcher brought up for it, only
+      finished with it in hand at a quarter of its rating ("if I have rocket launcher selected
+      ... and there is just a single zombieman left, we can finish it with rocket no problem. but
+      do not select rocket launcher explicitly for a single zombieman/imp"); and every rocket may
+      burst at the sturdy distance, 120 instead of 192 - up to 24 of its own blast ("just 24. 48
+      is probably too much for a bot") - at 50 health, the armour not needed. Never a blast that
+      could kill, never with a lost soul near.
+    - **The switch-and-back, for all:** the room to bring the launcher up now counts the target's
+      run at the player over the switch while it closes in - 40 tics (16 down, 16 up, 8 before
+      the rocket leaves) at its kind's chase speed: about 107 units for an imp, a cacodemon or a
+      baron, 200 for a demon.
+    - Not done, to try on its own: leading projectiles by their flight time (rockets are aimed
+      where the target is as fire is pressed; at 700-1000 units a walking imp moves 100-140 in
+      the flight).
+  - **The BFG's spray, stayed for** (the user, 2026-11-28, watching MAP13 with `-karpidfa`: a
+    ball at a pack of revenants, then the bot hid behind a wall and the tracers were wasted;
+    "they shoot BFG and try to keep the eye-contact with monsters until the ball explodes and
+    rays do the damage. So instead of hiding humans usually try to dance and avoid the
+    bullets"). The 40 tracers leave from where the player stands 16 tics after the burst,
+    within 45 degrees of the way the ball flew, whatever the facing; press to spray is about
+    1.8 s (30 tics' wind-up, the flight, 16). What overrode the old hold (the burst kept in
+    sight, fight steps losing it scored less): ducks set the move themselves (0:51.9, a duck from
+    a revenant missile, the spray at 875 found nothing), and the BFG was pressed with a duck due
+    (1:22.8: the ball left 30 tics later into the wall ducked behind, burst 28 off). Done
+    (`k_combat.c`: `BFG_SUFFER`, `DuckDespiteBfg`, `BfgCone`, `BfgKept`):
+    - **Committed from the press to the spray:** no duck is begun - the fight steps out of the
+      way instead ("we need to run from the homing rockets") - but from an arch-vile's flame
+      (no step escapes it), from the spider mastermind's bullets beyond 512 (the user: "from a
+      distance, we'll be getting serious damage for a couple of seconds. But if the shot is from
+      a moderately close distance it's better to suck the damage and let the traces hit"), and
+      from a blow whose worst hit, the armour's share taken, could kill (a revenant missile's
+      80, an arachnotron ball's 40, a Cyberdemon rocket's 160 and its burst, the spider's 45).
+      Logged: "the BFG's spray to come - not ducking from the revenant missile (hit in 29 tics),
+      dodging instead".
+    - **Not pressed where it cannot be stayed for:** ducking, one of those ducks due within the
+      wind-up, retreating, running for an item.
+    - **What is kept in sight:** a fight step scores the hold less by the share of what the
+      spray would find it loses - the burst, and each monster in the tracers' cone in sight now.
+      And the spot fought from beside cover is not moved meanwhile (a new one 224 off was run to,
+      the burst lost from sight).
+    - **Test** (MAP13 on with `-karpidfa`, salts 443, 71, 7, 15 min, before the cover-spot
+      freeze): 23 ducks skipped for a ball; sprays that found something 28 of 58, 51 monsters in
+      all (the build before: 25 of 52, 34; the one before that 37 of 79, 74) - about half find
+      nothing in every build, many of them balls that killed their only target. Deaths 2, neither
+      the commitment's: an arch-vile's flame with no cover in reach (MAP14), the yellow-key ledge
+      (MAP13, as before).
+    - Idea for later (the user): the ball fired into a wall close by, the player stepping out of
+      cover for the spray only.
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
