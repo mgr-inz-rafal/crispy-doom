@@ -1324,8 +1324,15 @@ extern void A_CyberAttack();
 // BLOW_NOWHERE: on a ledge 64 wide over an imp the shots could not find,
 // stepping away and the route took turns every few tics, the route back to
 // the edge each time, until the imp clawed the bot from 155 to death (E3M3,
-// sector 114). The route's way down meets it level, where they do.
+// sector 114). The route's way down meets it level, where they do. So too
+// with no way that gets BLOW_GAIN further from it, and once stepping away
+// has gone on for BLOW_MOST: on a ledge too small to get BLOW_SAFE off it,
+// the step away never ended, the route waiting for ever (Doom II MAP13, the
+// yellow key's ledge: an imp below 50 to 70 off; the bot stood there 11 to
+// 46 s, its fellows' fireballs undodged, until killed - 6 runs of 15).
 #define BLOW_NOWHERE (2 * TICRATE)
+#define BLOW_GAIN 8.0
+#define BLOW_MOST (3 * TICRATE)
 
 // A spot to step to keeps EDGE_MARGIN from any edge the player could slip
 // off; stepping away from a blast or blows, no less than the player is
@@ -1681,6 +1688,7 @@ static k_vec2_t blocking_at;
 static boolean dodging;
 static boolean dodging_blow;
 static const mobj_t *blow_mo;
+static int blow_since;              // when stepping away from it began (BLOW_MOST)
 static int nowhere_until;           // blows left to the route (BLOW_NOWHERE)
 static boolean dodging_primed;
 static const mobj_t *primed_mo;     // the primed barrel stepped away from last
@@ -7484,6 +7492,19 @@ static void UpdateDodge(const player_t *player)
         return;
     }
 
+    // A blow: no way further from it, or stepped away from long enough.
+    if (blast < 0 && (best < Distance(me, from) + BLOW_GAIN
+                      || (dodging && dodging_blow && leveltime - blow_since >= BLOW_MOST)))
+    {
+        K_Log(K_LOG_COMBAT, K_LOG_INFO, "%s the %s, %.0f units off - on along the route for %.0f s",
+              best < Distance(me, from) + BLOW_GAIN ? "no way further from"
+                                                    : "stepped away long enough from",
+              monsters[blow].name, monsters[blow].distance, (double) BLOW_NOWHERE / TICRATE);
+        nowhere_until = leveltime + BLOW_NOWHERE;
+        StopDodge();
+        return;
+    }
+
     if (!dodging || dodging_missile || dodging_blow != (blast < 0)
      || dodging_primed != (primed >= 0))
     {
@@ -7510,6 +7531,7 @@ static void UpdateDodge(const player_t *player)
         dodging_blow = blast < 0;
         dodging_primed = primed >= 0;
         dodging_missile = false;
+        blow_since = leveltime;
         K_Nav_Pause(1);
     }
 

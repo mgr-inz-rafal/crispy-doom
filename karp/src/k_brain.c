@@ -121,14 +121,20 @@
 // (Doom II MAP02: stuck by a barrel for 8 s, the blue key was given up for
 // good, then the exit, and the bot stood idle). While it waits so, with
 // nothing else to do, a goal that failed is tried again after IDLE_TICS,
-// twice that after failing again, and so on up to 8 times (the user, Doom
+// twice that after failing again, and no more than that (the user, Doom
 // II MAP14: every goal failed at once from the spot of a shotgun picked up,
-// a moving floor in the way, and the bot stood idle for 30 s).
+// a moving floor in the way, and the bot stood idle for 30 s; up to 8 times
+// IDLE_TICS, its goals failed at once again and again as doors that shut
+// again were missed in fights, it stood 40 s - "it looked like it didn't
+// know what to do, stayed still, then fought a monster after it approached,
+// then stayed still again"). And lines are worked again then however many
+// times they were (LineWorks).
 #define FAIL_TICS (30 * TICRATE)
 #define MAX_FAIL_TICS (240 * TICRATE)
 #define TRIED_TICS (30 * TICRATE)
 #define LINE_USES_TICS (30 * TICRATE)
 #define IDLE_TICS (5 * TICRATE)
+#define IDLE_DOUBLINGS 1
 
 // The exit wanted (-karpexit, k_brain.h): GO TO EXIT goes for exits of that
 // kind only - a floor that ends the level is a normal one - and no route
@@ -915,7 +921,8 @@ static boolean IsFailed(goal_type_t type, int param)
 
     return entry != NULL
         && leveltime < (idling ? SDL_min(entry->until, entry->since + (IDLE_TICS
-                                         << SDL_min(SDL_max(entry->count - 1, 0), 3)))
+                                         << SDL_min(SDL_max(entry->count - 1, 0),
+                                                    IDLE_DOUBLINGS)))
                                : entry->until);
 }
 
@@ -964,11 +971,15 @@ static int LineUses(int line)
 }
 
 // Whether a line can still be worked: it has its special (one-shot lines
-// lose it once used) and has not been worked MAX_TRIGGERS times lately.
+// lose it once used) and has not been worked MAX_TRIGGERS times lately -
+// but while idling, with nothing else to do (IDLE_TICS), working it again
+// beats standing (Doom II MAP14: the walk-over lines of two doors that shut
+// again, worked three times between fights, kept from every goal through
+// them; all failed at once, and the bot stood 40 s).
 static boolean LineWorks(int line)
 {
     return K_Specials_MoverTrigger(K_Specials_LineSpecial(line)) != K_TRIGGER_NONE
-        && LineUses(line) < MAX_TRIGGERS;
+        && (LineUses(line) < MAX_TRIGGERS || idling);
 }
 
 // Whether a line still works and moves its sectors one of the ways wanted

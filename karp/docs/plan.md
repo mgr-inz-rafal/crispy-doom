@@ -5113,6 +5113,31 @@ Who controls the player in a fight (the user's model):
       (MAP13, as before).
     - Idea for later (the user): the ball fired into a wall close by, the player stepping out of
       cover for the spray only.
+  - **Stalls in the MAP13-MAP15 test runs** (2026-11-28; the user: "if we have a known stall, we
+    need to fix it" - only the known ones, no regression run to look for more):
+    - **MAP13, the yellow key's ledge** (1478,-2846; 6 deaths in 15 runs of salts 7 and 71): the
+      ledge is jumped to from the top of lift 20; on landing an imp below, 50-70 off, could claw
+      up where the shots could not find it, and the bot stepped away from its blows - the route
+      waiting - but a step away goes on until the monster is 160 off (`BLOW_SAFE`), which the
+      ledge does not allow. It never ended: the bot stood 11 to 46 s, its fellows' fireballs
+      undodged (the step away keeps the missile dodge out), until killed. Now a step away goes
+      on only while some way gets 8 further from it (`BLOW_GAIN`), for 3 s at the most
+      (`BLOW_MOST`); else the route goes on for 2 s, as with no way at all (`BLOW_NOWHERE`):
+      "no way further from the imp, 58 units off - on along the route for 2 s".
+    - **MAP14, The Inmost Dens (the user saw it)**: doors 329 and 123 open from walk-over
+      lines and shut again; with fights on the way the bot missed them again and again, and at
+      1:11 every goal through them failed at once - the lines worked 3 times lately
+      (`MAX_TRIGGERS`) were no fix any more - and the idle retry, doubling up to 8 times 5 s,
+      waited 40 s ("it looked like it didn't know what to do, stayed still, then fought a monster
+      after it approached, then stayed still again"); at 1:51 the same lines opened the way at
+      once. Now while idling the lines are worked however many times they were (`LineWorks`),
+      and the idle retry doubles once at most (`IDLE_DOUBLINGS`): 5 s, then 10.
+    - **Tests** (`-karpidfa`, 15 min): MAP13 salts 7 and 71 - salt 7 met the very spot ("no way
+      further from the imp, 50 units off - on along the route for 2 s", the key picked up 0.2 s
+      later), both finished MAP13 and MAP14, no deaths; MAP14 salt 443 - the doors missed in
+      fights as before, every goal failed at once at 0:24.1, planned again at 0:29.1; the level
+      finished in 236 s (the run that stood 40 s: 308 s). No stretch without a brain or nav line
+      outside fights longer than 20 s in either.
 - Left out for now: sound (what a shot wakes, for sneaking past), provoking infighting, BFG
   tricks, predicting where monsters walk beyond a few tics.
 
